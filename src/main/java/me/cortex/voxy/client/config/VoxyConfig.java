@@ -34,6 +34,13 @@ public class VoxyConfig {
     public float subDivisionSize = 64;
     public boolean useEnvironmentalFog = true;
     public boolean dontUseSodiumBuilderThreads = false;
+    /** "opengl" (default) or "vulkan". Vulkan additionally requires a capable device and no active Iris shaderpack. */
+    public String renderBackend = "opengl";
+
+    public boolean wantsVulkanBackend() {
+        return "vulkan".equalsIgnoreCase(this.renderBackend);
+    }
+
     public String ssaoMode;
 
     public SSAO.SSAOMode getSSAOMode() {

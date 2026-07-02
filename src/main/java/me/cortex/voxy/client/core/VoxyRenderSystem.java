@@ -73,6 +73,10 @@ public class VoxyRenderSystem {
     private final RenderProperties properties;
 
     private static AbstractSectionRenderer.Factory<?,? extends IGeometryData> getRenderBackendFactory() {
+        if (me.cortex.voxy.client.core.vk.VulkanBackend.shouldUseVulkan(
+                me.cortex.voxy.client.config.VoxyConfig.CONFIG.wantsVulkanBackend())) {
+            return me.cortex.voxy.client.core.rendering.section.backend.vulkan.VulkanSectionRenderer.FACTORY;
+        }
         //TODO: need todo a thing where selects optimal section render based on if supports the pipeline and geometry data type
         return MDICSectionRenderer.FACTORY;
     }

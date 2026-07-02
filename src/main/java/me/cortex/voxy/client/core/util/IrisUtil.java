@@ -30,6 +30,15 @@ public class IrisUtil {
         return ShadowRenderer.ACTIVE;
     }
 
+    public static boolean irisShaderpackActiveSafe() {
+        if (!IRIS_INSTALLED) return false;
+        try {
+            return net.irisshaders.iris.api.v0.IrisApi.getInstance().isShaderPackInUse();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     public static boolean irisShadowActive() {
         return IRIS_INSTALLED && irisShadowActive0();
     }

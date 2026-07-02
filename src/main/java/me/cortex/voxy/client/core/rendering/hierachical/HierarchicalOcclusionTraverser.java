@@ -212,7 +212,7 @@ public class HierarchicalOcclusionTraverser {
 
         setFrustum(viewport, ptr); ptr += 4*4*6;
 
-        MemoryUtil.memPutInt(ptr, (int) (viewport.getRenderList().size()/4-1)); ptr += 4;
+        MemoryUtil.memPutInt(ptr, (int) (viewport.getRenderList().sizeBytes()/4-1)); ptr += 4;
 
         //VisibilityId
         MemoryUtil.memPutInt(ptr, this.nodeCleaner.visibilityId); ptr += 4;
@@ -237,7 +237,7 @@ public class HierarchicalOcclusionTraverser {
         //Bind the hiz buffer
         glBindTextureUnit(0, viewport.hiZBuffer.getHizTextureId());
         glBindSampler(0, this.hizSampler);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, RENDER_QUEUE_BINDING, viewport.getRenderList().id);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, RENDER_QUEUE_BINDING, viewport.getRenderList().glId());
     }
 
     public void doTraversal(Viewport<?> viewport) {
@@ -257,7 +257,7 @@ public class HierarchicalOcclusionTraverser {
         }
 
         //Clear the render output counter
-        nglClearNamedBufferSubData(viewport.getRenderList().id, GL_R32UI, 0, 4, GL_RED_INTEGER, GL_UNSIGNED_INT, 0);
+        nglClearNamedBufferSubData(viewport.getRenderList().glId(), GL_R32UI, 0, 4, GL_RED_INTEGER, GL_UNSIGNED_INT, 0);
 
         //Traverse
         this.traverseInternal();

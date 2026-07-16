@@ -1,49 +1,59 @@
-# Voxy Vulkan Backend (branch: vulkan-backend, base: 2622 / MC 26.2)
+# Voxy Vulkan Backend — branch `vulkan-backend`, rebased on dev @ MC 26.2
 
-## Model (DH-style backend swap)
-MC 26.2 is a GL client, so "fully Vulkan" for a mod means: Voxy owns a private
-VkInstance/VkDevice and renders LODs offscreen; resources cross the API boundary
-via VK_KHR_external_memory + GL_EXT_memory_object and exported semaphores; GL
-composites the result into MC's framebuffer. Toggle: `renderBackend` in the Voxy
-config ("opengl" default | "vulkan"). VK engages ONLY if a device with the interop
-extensions exists AND no Iris shaderpack is active; otherwise silent GL fallback.
+## Grounded context (verified July 2026)
+Vanilla MC Java 26.2 ("Chaos Cubed") ships an experimental Vulkan renderer:
+opt-in Graphics API setting (Default / Prefer Vulkan / Prefer OpenGL), requires
+Vulkan 1.2 + dynamic rendering + push descriptors, auto-fallback ladder to GL,
+prefers discrete GPUs, and runs on macOS through MoltenVK officially. Iris is
+GL-only (its VK successor "Aperture" is in development); Sodium is GL-only.
+Therefore gating Iris/Sodium OFF on the VK path is correct, not a limitation.
 
-## Phase-1 hybrid split (deliberate)
-- GL, unchanged & bit-exact: hierarchical traversal, prep/cull(raster occlusion vs
-  MC depth)/prefixsum/cmdgen compute, Sodium/Iris integration.
-- VK: opaque terrain via vkCmdDrawIndexedIndirectCountKHR over shared draw buffers,
-  into shared RGBA8/D32 targets. Same GLSL sources, shaderc->SPIR-V at runtime with
-  VOXY_VULKAN defined.
-- The raster occlusion cull tests against MC's GL depth buffer -> it must stay GL
-  until/unless MC depth itself is shared; this is why phase-1 is a hybrid, not a
-  design shortcut.
+## Two VK modes
+1. HYBRID (Windows/Linux, MC on OpenGL): GL keeps traversal/culling/cmdgen
+   compute bit-exact; buffers are VK-allocated + GL-imported
+   (VK_KHR_external_memory <-> GL_EXT_memory_object); VK does the draws;
+   GL composites. IMPLEMENTED (guarded off until geometry-SSBO sharing lands).
+   IMPOSSIBLE ON macOS: MoltenVK has no external_memory_fd and Apple GL is 4.1.
+2. PURE-VK / HOST MODE (all OSes incl. macOS, MC on "Prefer Vulkan"): Voxy
+   adopts Minecraft's own VkDevice/queue/frame via the IVkHost seam and records
+   LOD passes into MC's frame; no OpenGL anywhere. This is THE Mac path and the
+   end-state on every platform. ARCHITECTURE LANDED; adapter mixin pending.
 
-## Status — read this before flipping the toggle
-| Piece | State |
+## macOS blockers — status after this commit set
+| Blocker | Status |
 |---|---|
-| Seam (IRenderList, 8-line diff, MDIC untouched via covariant returns) | done, needs compile |
-| Config toggle + capability gate + Iris gate + GL default | done, needs compile |
-| VK context/device/queue + interop ext selection (win32/fd) | done, UNTESTED on hardware |
-| SharedBuffer/SharedImage/SharedSemaphore interop | done, UNTESTED on hardware |
-| shaderc GLSL->SPIR-V bridge | done; Voxy's GLSL will need set/binding fixups for Vulkan semantics — expect iteration |
-| VK opaque draw pass (mirrors MDIC offsets/strides/clamps) | recorded+submitted, but **guarded OFF**: geometry/metadata/ModelStore SSBOs are plain GlBuffers; until they allocate via SharedBuffer when VK is active, renderOpaque logs once and draws nothing rather than corrupt |
-| GL composite of shared color/depth into MC framebuffer | NOT YET (next step with geometry sharing) |
-| Translucent / temporal / SSAO on VK | deferred, stubbed no-op |
-| Descriptor sets binding shared SSBOs to the VK pipeline | pipeline layout is a placeholder pending geometry sharing |
+| VK_KHR_portability_enumeration missing at instance creation (MoltenVK loader hides devices without it) | FIXED |
+| VK_KHR_portability_subset must be enabled when exposed | FIXED |
+| drawIndirectCount incorrectly inferred from apiVersion (MoltenVK reports 1.2 WITHOUT this feature) | FIXED — proper VkPhysicalDeviceVulkan12Features query |
+| Hard dependency on draw-indirect-count | FIXED — fixed-count vkCmdDrawIndexedIndirect fallback (cmdgen zero-fills unused slots; instanceCount=0 draws are no-ops) |
+| GL-interop unavailable on Metal | BY DESIGN — pure-VK host mode is the Mac path; gate refuses hybrid on macOS with a clear log |
+| shaderc natives | already bundled (macos + macos-arm64) |
+| Residual risk | MoltenVK SSBO/vertex-pulling perf & any portability-subset gaps in Voxy's shaders — only measurable on Apple hardware |
 
-## Next steps, in order
-1. Compile (`./gradlew build`) — this tree was authored in an offline sandbox
-   (maven blocked): expect LWJGL VK binding signature fixups.
-2. Thread SharedBuffer allocation through BasicSectionGeometryManager + ModelStore
-   behind `VulkanBackend.shouldUseVulkan(...)`; build the descriptor set layout;
-   flip `geometryShared = true`.
-3. GL composite pass (fullscreen quad sampling shared color+depth, writes
-   gl_FragDepth, depth-tested vs MC) + glDone/vkDone signal points around cmdgen.
-4. Validate on NVIDIA Linux/Windows first (best GL_EXT_memory_object support);
-   run scripts/check_voxy_shader_contracts.sh (not in this repo — external) on the
-   unchanged GL shaders to confirm bit-exactness.
-5. Then translucents, temporal, and a VK-native traversal (phase-2, drops hybrid).
+## What is REAL in code vs what REMAINS
+Done (unverified — this sandbox cannot compile [maven blocked] or render [no GPU]):
+seam/IRenderList; config toggle + capability + Iris + macOS gates (GL default);
+private-device VK context w/ portability + discrete-GPU preference; interop
+primitives; shaderc bridge; VK opaque pipeline + indirect draws + fallback;
+IVkHost + MinecraftVkHost registry; VkComputePipeline for the compute ports.
 
-## Invariants preserved
-GL/MDIC path byte-identical in behavior (seam is type-plumbing only); GL remains
-default; Iris+Sodium untouched on GL and explicitly gated on VK.
+Remaining for "complete, identical-experience" VK (in order):
+1. `./gradlew build` fixups (authored offline against LWJGL 3.4.1 VK bindings).
+2. Blaze3D-VK adapter mixin implementing IVkHost — REQUIRES the real 26.2
+   mappings/jar; targets deliberately not guessed. Note MC's VK renderer runs on
+   a dedicated render thread: the adapter must hand Voxy a command buffer at a
+   defined sync point, this is the trickiest integration detail.
+3. IDeviceBuffer abstraction under GlBuffer so geometry/metadata/ModelStore
+   allocate VkBuffers natively in host mode (kills the last GL dependency).
+4. Compute ports via VkComputePipeline (prep/cull/prefix/cmdgen, then the
+   hierarchical traversal); occlusion vs MC's VK depth via IVkHost views.
+   Switch graphics pipeline to dynamic rendering (host requires the ext anyway).
+5. Translucents, temporal, SSAO parity; then perf work (persistent descriptor
+   sets, device-generated-commands/metal ICBs where available).
+6. Validation matrix: NVIDIA+AMD Windows/Linux (hybrid + host), Apple Silicon
+   (host only). Parity = pixel-compare vs GL on same seed/camera; perf = frame
+   times at 64/128/256 render distance.
+
+## Invariants
+GL/MDIC untouched and default; VK strictly behind config + capability gates;
+Iris/Sodium gated out on VK, untouched on GL.

@@ -38,6 +38,13 @@ public final class VulkanBackend {
             Logger.info("Voxy: Vulkan requested but Iris shaderpack active -> staying on OpenGL");
             return false;
         }
+        if (org.lwjgl.system.Platform.get() == org.lwjgl.system.Platform.MACOSX
+                && !MinecraftVkHost.isMinecraftOnVulkan()) {
+            //macOS has no GL-interop (MoltenVK lacks external_memory_fd; Apple GL is 4.1),
+            //so the only viable VK path is riding Minecraft's own 26.2 Vulkan backend.
+            Logger.info("Voxy: Vulkan on macOS requires Minecraft's Graphics API set to 'Prefer Vulkan' -> staying on OpenGL");
+            return false;
+        }
         return isSupported();
     }
 

@@ -45,14 +45,36 @@ public final class VulkanContext {
                 : new String[]{"VK_KHR_external_memory_fd", "VK_KHR_external_semaphore_fd"};
     }
 
-    public VulkanContext() {
+    /** True when this context must support the GL-interop hybrid mode (Windows/Linux only). */
+    public final boolean glInterop;
+    /** True when running on a portability (MoltenVK/Metal) implementation. */
+    public boolean isPortability;
+
+    public VulkanContext() { this(Platform.get() != Platform.MACOSX); }
+
+    public VulkanContext(boolean glInterop) {
+        this.glInterop = glInterop;
         try (MemoryStack stack = stackPush()) {
             var appInfo = VkApplicationInfo.calloc(stack)
                     .sType$Default()
                     .pApplicationName(stack.UTF8("voxy"))
                     .pEngineName(stack.UTF8("voxy-vk"))
                     .apiVersion(VK_API_VERSION_1_2);
+            //MoltenVK (macOS): the loader only lists portability devices when
+            //VK_KHR_portability_enumeration is enabled with the ENUMERATE_PORTABILITY flag.
+            boolean portability = Platform.get() == Platform.MACOSX;
+            PointerBuffer instExts = null;
+            if (portability) {
+                instExts = stack.mallocPointer(2);
+                instExts.put(stack.UTF8("VK_KHR_portability_enumeration"));
+                instExts.put(stack.UTF8("VK_KHR_get_physical_device_properties2"));
+                instExts.flip();
+            }
             var ici = VkInstanceCreateInfo.calloc(stack).sType$Default().pApplicationInfo(appInfo);
+            if (portability) {
+                ici.flags(0x00000001 /*VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR*/)
+                   .ppEnabledExtensionNames(instExts);
+            }
             PointerBuffer pInstance = stack.mallocPointer(1);
             check(vkCreateInstance(ici, null, pInstance), "vkCreateInstance");
             this.instance = new VkInstance(pInstance.get(0), ici);
@@ -63,24 +85,41 @@ public final class VulkanContext {
             PointerBuffer devices = stack.mallocPointer(count.get(0));
             check(vkEnumeratePhysicalDevices(this.instance, count, devices), "enumerate devices");
 
-            VkPhysicalDevice chosen = null; int chosenFamily = -1; boolean chosenDic = false; String chosenName = null;
-            for (int i = 0; i < devices.capacity() && chosen == null; i++) {
+            boolean requireGlInterop = this.glInterop;
+            VkPhysicalDevice chosen = null; int chosenFamily = -1; boolean chosenDic = false;
+            boolean chosenPortability = false; boolean chosenDiscrete = false; String chosenName = null;
+            for (int i = 0; i < devices.capacity(); i++) {
                 var pd = new VkPhysicalDevice(devices.get(i), this.instance);
                 Set<String> exts = deviceExtensions(pd, stack);
-                if (!hasAll(exts, REQUIRED_DEVICE_EXTS_COMMON) || !hasAll(exts, platformInteropExts())) continue;
+                if (requireGlInterop && (!hasAll(exts, REQUIRED_DEVICE_EXTS_COMMON) || !hasAll(exts, platformInteropExts()))) continue;
                 int family = findGraphicsQueueFamily(pd, stack);
                 if (family < 0) continue;
                 var props = VkPhysicalDeviceProperties.calloc(stack);
                 vkGetPhysicalDeviceProperties(pd, props);
-                chosen = pd; chosenFamily = family; chosenName = props.deviceNameString();
-                chosenDic = exts.contains("VK_KHR_draw_indirect_count") || props.apiVersion() >= VK_API_VERSION_1_2;
+                boolean discrete = props.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+                if (chosen != null && (chosenDiscrete || !discrete)) continue;//prefer discrete, like vanilla 26.2
+                chosen = pd; chosenFamily = family; chosenName = props.deviceNameString(); chosenDiscrete = discrete;
+                //NOTE: drawIndirectCount is a FEATURE in core 1.2, not implied by apiVersion —
+                //MoltenVK reports 1.2 without it. Must query VkPhysicalDeviceVulkan12Features.
+                var f12q = VkPhysicalDeviceVulkan12Features.calloc(stack).sType$Default();
+                var f2 = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default().pNext(f12q);
+                VK11.vkGetPhysicalDeviceFeatures2(pd, f2);
+                chosenDic = f12q.drawIndirectCount() || exts.contains("VK_KHR_draw_indirect_count");
+                chosenPortability = exts.contains("VK_KHR_portability_subset");
             }
-            if (chosen == null) throw new IllegalStateException("No VK device with GL-interop extensions");
+            if (chosen == null) throw new IllegalStateException(requireGlInterop
+                    ? "No VK device with GL-interop extensions (hybrid mode; unavailable on macOS by design)"
+                    : "No suitable VK device");
             this.physicalDevice = chosen; this.queueFamily = chosenFamily;
             this.hasDrawIndirectCount = chosenDic; this.deviceName = chosenName;
+            this.isPortability = chosenPortability;
 
-            List<String> devExts = new ArrayList<>(List.of(REQUIRED_DEVICE_EXTS_COMMON));
-            devExts.addAll(List.of(platformInteropExts()));
+            List<String> devExts = new ArrayList<>();
+            if (requireGlInterop) {
+                devExts.addAll(List.of(REQUIRED_DEVICE_EXTS_COMMON));
+                devExts.addAll(List.of(platformInteropExts()));
+            }
+            if (chosenPortability) devExts.add("VK_KHR_portability_subset");//spec: must enable if supported
             if (chosenDic) devExts.add("VK_KHR_draw_indirect_count");
             PointerBuffer pExts = stack.mallocPointer(devExts.size());
             for (String e : devExts) pExts.put(stack.UTF8(e));

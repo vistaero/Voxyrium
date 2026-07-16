@@ -19,6 +19,7 @@ import java.util.List;
 import static me.cortex.voxy.client.core.vk.VkUtil.check;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.KHRDrawIndirectCount.vkCmdDrawIndexedIndirectCountKHR;
+import static org.lwjgl.vulkan.VK12.vkCmdDrawIndexedIndirectCount;
 import static org.lwjgl.vulkan.VK10.*;
 
 /**
@@ -216,10 +217,17 @@ public class VulkanSectionRenderer extends AbstractSectionRenderer<VulkanViewpor
             //Mirror of MDIC renderOpaque: offset 0, count at byte 12, same max-draw clamp, stride 20.
             int maxDraw = Math.min((int) (this.geometryManager.getSectionCount() * 4.4 + 128),
                     me.cortex.voxy.client.core.rendering.section.backend.mdic.MDICSectionRenderer.OPAQUE_DRAW_COUNT);
-            vkCmdDrawIndexedIndirectCountKHR(this.cmd,
-                    viewport.drawCallBuffer.vkBuffer, 0,
-                    viewport.drawCountCallBuffer.vkBuffer, 4 * 3,
-                    maxDraw, 5 * 4);
+            if (this.ctx.hasDrawIndirectCount) {
+                vkCmdDrawIndexedIndirectCount(this.cmd,
+                        viewport.drawCallBuffer.vkBuffer, 0,
+                        viewport.drawCountCallBuffer.vkBuffer, 4 * 3,
+                        maxDraw, 5 * 4);
+            } else {
+                //MoltenVK/macOS fallback: no GPU-sourced draw count. The cmdgen compute
+                //zero-fills unused command slots (instanceCount=0 draws are no-ops), so a
+                //fixed-count multi-draw over the clamped max is correct, just less tight.
+                vkCmdDrawIndexedIndirect(this.cmd, viewport.drawCallBuffer.vkBuffer, 0, maxDraw, 5 * 4);
+            }
             vkCmdEndRenderPass(this.cmd);
             check(vkEndCommandBuffer(this.cmd), "vkEndCommandBuffer");
 

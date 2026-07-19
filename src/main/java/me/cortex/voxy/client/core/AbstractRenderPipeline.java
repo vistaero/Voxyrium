@@ -14,7 +14,6 @@ import me.cortex.voxy.client.core.rendering.section.backend.AbstractSectionRende
 import me.cortex.voxy.client.core.rendering.util.DepthFramebuffer;
 import me.cortex.voxy.client.core.rendering.util.AbstractDownloadStream;
 import me.cortex.voxy.client.core.util.GPUTiming;
-import me.cortex.voxy.common.CmpLog;
 import me.cortex.voxy.common.util.TrackedObject;
 import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL30;
@@ -77,7 +76,6 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
     }
 
     protected AbstractRenderPipeline(RenderProperties properties, AsyncNodeManager nodeManager, NodeCleaner nodeCleaner, HierarchicalOcclusionTraverser traversal, BooleanSupplier frexSupplier, boolean deferTranslucency) {
-        CmpLog.backend = "opengl";
         this.properties = properties;
         this.frexStillHasWork = frexSupplier;
         this.nodeManager = nodeManager;
@@ -223,7 +221,6 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
             glMemoryBarrier(GL_FRAMEBUFFER_BARRIER_BIT | GL_PIXEL_BUFFER_BARRIER_BIT);
 
-            this.nodeManager.logCompareStats();
             TimingStatistics.F.start();
             this.traversal.doTraversal(viewport);
             TimingStatistics.F.stop();

@@ -21,7 +21,6 @@ import me.cortex.voxy.client.core.vk.VkDownloadStream;
 import me.cortex.voxy.client.core.vk.VkFrameCtx;
 import me.cortex.voxy.client.core.vk.VkUploadStream;
 import me.cortex.voxy.client.core.vk.VulkanBackend;
-import me.cortex.voxy.common.CmpLog;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.thread.ServiceManager;
 import me.cortex.voxy.common.world.WorldEngine;
@@ -61,13 +60,11 @@ public class VkRenderCore {
     private final VkBoundRenderer boundRenderer;
     private final StreamedBoundStore visibleSectionStream;
     private boolean shutDown = false;
-    private boolean firstFrameLogged = false;
     private final RenderDistanceTracker renderDistanceTracker;
     private final ViewportSelector<VkViewport> viewportSelector;
 
     public VkRenderCore(WorldEngine world, ServiceManager sm) {
         world.acquireRef();
-        CmpLog.backend = "vulkan";
         Logger.info("Creating Voxy pure-Vulkan render core");
         try {
             this.worldIn = world;
@@ -127,12 +124,6 @@ public class VkRenderCore {
 
             this.frameCtx.flushImmediate();
             Logger.info("Voxy pure-Vulkan render core created with " + this.geometryData.getMaxCapacity() + " geometry capacity");
-            Logger.info("Voxy VK diagnostics: isZero2One=" + this.properties.isZero2One()
-                    + " isReverseZ=" + this.properties.isReverseZ()
-                    + " clearDepth=" + this.properties.clearDepth()
-                    + " inverseClearDepth=" + this.properties.inverseClearDepth()
-                    + " drawIndirectCount=" + vctx.hasDrawIndirectCount
-                    + " device=" + vctx.deviceName);
         } catch (RuntimeException e) {
             world.releaseRef();
             throw e;
@@ -163,15 +154,6 @@ public class VkRenderCore {
         }
         var crs = Minecraft.getInstance().gameRenderer.gameRenderState().levelRenderState.cameraRenderState;
         if (crs == null || !crs.initialized) return;
-
-        if (!this.firstFrameLogged) {
-            this.firstFrameLogged = true;
-            Logger.info("Voxy VK first frame: target=" + target.width + "x" + target.height
-                    + " colorFormat=" + VkFrameHost.vkFormat(target.getColorTextureView())
-                    + " depthFormat=" + VkFrameHost.vkFormat(target.getDepthTextureView())
-                    + " sectionCount=" + this.geometryData.getSectionCount()
-                    + " hasMatrices=" + (matrices != null));
-        }
 
         this.frameCtx.flushImmediate();
         this.frameCtx.beginFrame(frameCmd);
@@ -220,7 +202,6 @@ public class VkRenderCore {
             this.downloadStream.tick();
             this.nodeManager.tick(this.traversal.getNodeBuffer(), this.nodeCleaner);
             this.nodeCleaner.tick(this.traversal.getNodeBuffer());
-            this.nodeManager.logCompareStats();
             this.traversal.doTraversal(viewport);
 
             //4. build the draw commands for this frame (prep, raster cull, cmdgen, translucency sort)

@@ -14,7 +14,6 @@ import me.cortex.voxy.client.core.rendering.building.RenderGenerationService;
 import me.cortex.voxy.client.core.rendering.util.AbstractDownloadStream;
 import me.cortex.voxy.client.core.rendering.util.PrintfDebugUtil;
 import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
-import me.cortex.voxy.common.CmpLog;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.world.WorldEngine;
@@ -372,8 +371,6 @@ public class HierarchicalOcclusionTraverser {
         //if (count > REQUEST_QUEUE_SIZE) {
         //    Logger.warn("Count larger than 'maxRequestCount', overflow captured. Overflowed by " + (count-REQUEST_QUEUE_SIZE));
         //}
-        CmpLog.rec("traversal", "requestCount", count);
-        CmpLog.rec("traversal", "topNodeCount", this.topNodeCount);
         if (count != 0) {
             var buffer = new MemoryBuffer(count*8L+8).cpyFrom(ptr-8);
             //Write back the exact count into the new memory buffer (not the download stream buffer)

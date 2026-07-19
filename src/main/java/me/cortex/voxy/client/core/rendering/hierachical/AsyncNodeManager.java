@@ -17,7 +17,6 @@ import me.cortex.voxy.client.core.rendering.section.geometry.BasicSectionGeometr
 import me.cortex.voxy.client.core.rendering.section.geometry.IBasicGeometryData;
 import me.cortex.voxy.client.core.rendering.section.geometry.IGeometryData;
 import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
-import me.cortex.voxy.common.CmpLog;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.AllocationArena;
 import me.cortex.voxy.common.util.MemoryBuffer;
@@ -740,19 +739,6 @@ public class AsyncNodeManager {
 
         this.gpuOps.free();
         this.geometryCache.free();
-    }
-
-    //Emit the per-frame "same scene?" gate metrics for A/B log comparison. The
-    // OpenGL and Vulkan paths log byte-identical values by construction — if
-    // they don't match, the two captures weren't the same viewpoint/world state
-    // and any downstream (GPU-computed) comparison is moot. Also advances
-    // CmpLog's frame counter (call once per rendered frame).
-    public void logCompareStats() {
-        if (!CmpLog.ENABLED) return;
-        CmpLog.nextFrame();
-        CmpLog.rec("nodeManager", "sectionCount", this.geometryData.getSectionCount());
-        CmpLog.rec("nodeManager", "usedGeometry", this.getUsedGeometryCapacity());
-        CmpLog.rec("nodeManager", "geometryCapacity", this.getGeometryCapacity());
     }
 
     public void addDebug(List<String> debug) {

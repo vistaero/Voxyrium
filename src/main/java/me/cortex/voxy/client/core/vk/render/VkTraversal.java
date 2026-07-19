@@ -13,7 +13,6 @@ import me.cortex.voxy.client.core.vk.VkFrameCtx;
 import me.cortex.voxy.client.core.vk.VkShaderPipeline;
 import me.cortex.voxy.client.core.vk.VkShaderSource;
 import me.cortex.voxy.client.core.vk.VkUploadStream;
-import me.cortex.voxy.common.CmpLog;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.world.WorldEngine;
@@ -261,8 +260,6 @@ public class VkTraversal {
         if (count > (this.requestBuffer.size() >> 3) - 1) {
             count = (int) ((this.requestBuffer.size() >> 3) - 1);
         }
-        CmpLog.rec("traversal", "requestCount", count);
-        CmpLog.rec("traversal", "topNodeCount", this.topNodeCount);
         if (count != 0) {
             var buffer = new MemoryBuffer(count * 8L + 8).cpyFrom(ptr - 8);
             MemoryUtil.memPutInt(buffer.address, count);

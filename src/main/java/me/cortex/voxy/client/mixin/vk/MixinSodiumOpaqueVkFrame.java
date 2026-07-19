@@ -26,7 +26,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 // holds vanilla terrain — exactly the state Voxy's VK frame needs.
 @Mixin(value = SodiumWorldRenderer.class, remap = false)
 public class MixinSodiumOpaqueVkFrame {
-    private static boolean voxy$loggedFirstFrame = false;
 
     @Inject(method = "drawChunkLayer", at = @At("TAIL"), remap = false)
     private void voxy$renderVkFrame(ChunkSectionLayerGroup group, ChunkRenderMatrices matrices,
@@ -37,10 +36,6 @@ public class MixinSodiumOpaqueVkFrame {
         var renderer = IVoxyRenderSystemHolder.getNullable();
         if (renderer == null || renderer.vkCore == null) return;
 
-        if (!voxy$loggedFirstFrame) {
-            voxy$loggedFirstFrame = true;
-            Logger.info("Voxy VK frame hook fired (SodiumWorldRenderer.drawChunkLayer OPAQUE TAIL) - rendering LODs");
-        }
         try {
             renderer.vkCore.renderFrame(group.outputTarget(), adapter, matrices, x, y, z);
         } catch (Throwable t) {

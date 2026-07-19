@@ -8,7 +8,6 @@ import me.cortex.voxy.client.core.vk.VkImage2D;
 import me.cortex.voxy.client.core.vk.VkShaderPipeline;
 import me.cortex.voxy.client.core.vk.VkShaderSource;
 import me.cortex.voxy.client.core.vk.VkUploadStream;
-import me.cortex.voxy.common.Logger;
 import org.joml.Matrix4f;
 import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties;
 
@@ -51,7 +50,6 @@ public class VkSSAO {
             case BEST -> 24;
             default -> 0;
         };
-        Logger.info("Voxy VK SSAO mode: " + mode);
 
         var defs = VkShaderSource.defs().props(properties);
         if (this.isBetterSSAO) {

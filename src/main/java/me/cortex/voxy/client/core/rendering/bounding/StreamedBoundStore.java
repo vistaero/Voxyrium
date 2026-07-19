@@ -1,34 +1,41 @@
 package me.cortex.voxy.client.core.rendering.bounding;
 
-import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.rendering.Viewport;
-import me.cortex.voxy.client.core.rendering.util.UploadStream;
+import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
+import me.cortex.voxy.client.core.rendering.util.IDeviceBuffer;
 import me.cortex.voxy.common.util.UnsafeUtil;
 
 import java.util.Arrays;
+import java.util.function.LongFunction;
 
 //This is a render subsystem, its very simple in what it does
 // it renders an AABB around loaded chunks, thats it
+//Backend-neutral: the device buffer comes from the injected allocator
+// (GlBuffer::new on the GL path, VkBuffer on the VK path) so the Sodium
+// visibility mixins can feed this store on both backends.
 public final class StreamedBoundStore implements IBoundStore {
     private static final int INIT_MAX_CHUNK_COUNT = 1<<12;
-    private GlBuffer chunkPosBuffer = new GlBuffer(INIT_MAX_CHUNK_COUNT*8);//Stored as ivec2
+    private final LongFunction<IDeviceBuffer> allocator;
+    private IDeviceBuffer chunkPosBuffer;//Stored as ivec2
     private int count;//NOTE: count here is in INTS, not LONGS (i.e. 1 pos is 2 ints)
     private boolean didChange = false;
     private int[] visibleSections = new int[INIT_MAX_CHUNK_COUNT*2];
-    public StreamedBoundStore() {
+    public StreamedBoundStore(LongFunction<IDeviceBuffer> allocator) {
+        this.allocator = allocator;
+        this.chunkPosBuffer = allocator.apply(INIT_MAX_CHUNK_COUNT*8);
     }
 
     //Bind and render, changing as little gl state as possible so that the caller may configure how it wants to render
     @Override
     public void preRender(Viewport<?> viewport) {
         if (this.count == 0 || !this.didChange) return;
-        if (this.count*4L>this.chunkPosBuffer.size()) {
+        if (this.count*4L>this.chunkPosBuffer.sizeBytes()) {
             this.chunkPosBuffer.free();
-            this.chunkPosBuffer = new GlBuffer(((long) Math.ceil(this.count*1.25))*4);
+            this.chunkPosBuffer = this.allocator.apply(((long) Math.ceil(this.count*1.25))*4);
         }
-        long addr = UploadStream.INSTANCE.upload(this.chunkPosBuffer, 0, this.count*4);
+        long addr = AbstractUploadStream.INSTANCE().upload(this.chunkPosBuffer, 0, this.count*4);
         UnsafeUtil.memcpy(this.visibleSections, this.count, addr);
-        UploadStream.INSTANCE.commit();
+        AbstractUploadStream.INSTANCE().commit();
         this.didChange = false;
     }
 
@@ -51,7 +58,7 @@ public final class StreamedBoundStore implements IBoundStore {
     }
 
     @Override
-    public GlBuffer getBuffer() {
+    public IDeviceBuffer getBuffer() {
         return this.chunkPosBuffer;
     }
 

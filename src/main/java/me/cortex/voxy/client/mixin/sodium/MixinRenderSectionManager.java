@@ -44,7 +44,7 @@ public class MixinRenderSectionManager {
     private void voxy$injectReset1(Viewport viewport, FogParameters fogParameters, CallbackInfo ci) {
         var vrs = IVoxyRenderSystemHolder.getNullable();
         if (vrs != null && !IrisUtil.irisShadowActive()) {
-            vrs.visbleSectionStream.reset();
+            if (vrs.visbleSectionStream != null) vrs.visbleSectionStream.reset();
         }
     }
 
@@ -52,7 +52,7 @@ public class MixinRenderSectionManager {
     private void voxy$injectReset2(Viewport viewport, FogParameters fogParameters, CallbackInfo ci) {
         var vrs = IVoxyRenderSystemHolder.getNullable();
         if (vrs != null && !IrisUtil.irisShadowActive()) {
-            vrs.visbleSectionStream.reset();
+            if (vrs.visbleSectionStream != null) vrs.visbleSectionStream.reset();
         }
     }
 

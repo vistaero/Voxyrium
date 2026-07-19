@@ -4,7 +4,7 @@ import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.rendering.Viewport;
-import me.cortex.voxy.client.core.rendering.util.UploadStream;
+import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
 import me.cortex.voxy.common.Logger;
 import org.lwjgl.system.MemoryUtil;
 
@@ -52,7 +52,7 @@ public class ChunkBoundStore implements IBoundStore {
         if (!this.addQueue.isEmpty()) {
             this.addQueue.forEach(this::_addPos);//TODO: REPLACE WITH SCATTER COMPUTE
             this.addQueue.clear();
-            UploadStream.INSTANCE.commit();
+            AbstractUploadStream.INSTANCE().commit();
         }
     }
 
@@ -98,7 +98,7 @@ public class ChunkBoundStore implements IBoundStore {
     private void ensureSize1() {
         if (this.chunk2idx.size() < this.idx2chunk.length) return;
         //Commit any copies, ensures is synced to new buffer
-        UploadStream.INSTANCE.commit();
+        AbstractUploadStream.INSTANCE().commit();
 
         int size = (int) (this.idx2chunk.length*1.5);
         Logger.info("Resizing chunk position buffer to: " + size);
@@ -113,7 +113,7 @@ public class ChunkBoundStore implements IBoundStore {
     }
 
     private void put(int idx, long pos) {
-        long ptr2 = UploadStream.INSTANCE.upload(this.chunkPosBuffer, 8L*idx, 8);
+        long ptr2 = AbstractUploadStream.INSTANCE().upload(this.chunkPosBuffer, 8L*idx, 8);
         //Need to do it in 2 parts because ivec2 is 2 parts
         putPos(ptr2, pos);
     }

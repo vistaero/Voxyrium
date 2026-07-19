@@ -9,8 +9,13 @@
 #extension GL_NV_fragment_shader_barycentric: require
 #endif
 
+#ifdef VOXY_VULKAN
+layout(binding = 8) uniform sampler2D blockModelAtlas;
+layout(binding = 10) uniform sampler2D depthTex;
+#else
 layout(binding = 0) uniform sampler2D blockModelAtlas;
 layout(binding = 2) uniform sampler2D depthTex;
+#endif
 
 //#define DEBUG_RENDER
 

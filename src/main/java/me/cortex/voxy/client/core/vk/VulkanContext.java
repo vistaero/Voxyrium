@@ -1,29 +1,29 @@
 package me.cortex.voxy.client.core.vk;
 
 import me.cortex.voxy.common.Logger;
-import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.Platform;
-import org.lwjgl.vulkan.*;
-
-import java.nio.IntBuffer;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import org.lwjgl.vulkan.VK11;
+import org.lwjgl.vulkan.VkCommandPoolCreateInfo;
+import org.lwjgl.vulkan.VkDevice;
+import org.lwjgl.vulkan.VkInstance;
+import org.lwjgl.vulkan.VkPhysicalDevice;
+import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
+import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties;
+import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
+import org.lwjgl.vulkan.VkPhysicalDeviceSubgroupProperties;
+import org.lwjgl.vulkan.VkPhysicalDeviceVulkan12Features;
+import org.lwjgl.vulkan.VkQueue;
 
 import static me.cortex.voxy.client.core.vk.VkUtil.check;
 import static org.lwjgl.system.MemoryStack.stackPush;
-import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.vulkan.VK10.*;
-import static org.lwjgl.vulkan.VK12.VK_API_VERSION_1_2;
+import static org.lwjgl.vulkan.VK11.*;
 
-/**
- * Owns Voxy's private VkInstance/VkDevice. Voxy does NOT take over Minecraft's
- * swapchain: the interop model is VK renders LODs offscreen into images whose
- * memory is exported (VK_KHR_external_memory) and imported into the game's GL
- * context (GL_EXT_memory_object), synchronized with exported semaphores.
- */
+//Wraps the Vulkan device Voxy renders on. Voxy never creates its own device:
+// when MC 26.2 runs on its native Vulkan backend, Voxy ADOPTS the game's
+// VkInstance/VkDevice/queue via IVkHost and allocates only its own command pool.
+// MC owns (and destroys) the device/instance, so destroy() tears down only the
+// command pool Voxy created here.
 public final class VulkanContext {
     public final VkInstance instance;
     public final VkPhysicalDevice physicalDevice;
@@ -31,163 +31,102 @@ public final class VulkanContext {
     public final VkQueue queue;
     public final int queueFamily;
     public final boolean hasDrawIndirectCount;
+    public final boolean subgroupArithmetic;
+    public final int subgroupSize;
     public final String deviceName;
     public final long commandPool;
+    private VkPhysicalDeviceSubgroupProperties subgroupProps;
 
-    private static final String[] REQUIRED_DEVICE_EXTS_COMMON = {
-            "VK_KHR_external_memory",
-            "VK_KHR_external_semaphore",
-    };
+    public static VulkanContext adopt(IVkHost host) { return new VulkanContext(host); }
 
-    public static String[] platformInteropExts() {
-        return Platform.get() == Platform.WINDOWS
-                ? new String[]{"VK_KHR_external_memory_win32", "VK_KHR_external_semaphore_win32"}
-                : new String[]{"VK_KHR_external_memory_fd", "VK_KHR_external_semaphore_fd"};
-    }
-
-    /** True when this context must support the GL-interop hybrid mode (Windows/Linux only). */
-    public final boolean glInterop;
-    /** True when running on a portability (MoltenVK/Metal) implementation. */
-    public boolean isPortability;
-
-    public VulkanContext() { this(Platform.get() != Platform.MACOSX); }
-
-    public VulkanContext(boolean glInterop) {
-        this.glInterop = glInterop;
+    private VulkanContext(IVkHost host) {
+        this.instance = host.instance();
+        this.physicalDevice = host.physicalDevice();
+        this.device = host.device();
+        this.queue = host.graphicsQueue();
+        this.queueFamily = host.graphicsQueueFamily();
+        this.hasDrawIndirectCount = queryDrawIndirectCount(this.physicalDevice);
+        var subgroup = querySubgroupProperties(this.physicalDevice);
+        this.subgroupProps = subgroup;
+        this.subgroupArithmetic = subgroup != null && (subgroup.supportedOperations() & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT) != 0;
+        this.subgroupSize = subgroup != null ? subgroup.subgroupSize() : 1;
+        String name;
         try (MemoryStack stack = stackPush()) {
-            var appInfo = VkApplicationInfo.calloc(stack)
-                    .sType$Default()
-                    .pApplicationName(stack.UTF8("voxy"))
-                    .pEngineName(stack.UTF8("voxy-vk"))
-                    .apiVersion(VK_API_VERSION_1_2);
-            //MoltenVK (macOS): the loader only lists portability devices when
-            //VK_KHR_portability_enumeration is enabled with the ENUMERATE_PORTABILITY flag.
-            boolean portability = Platform.get() == Platform.MACOSX;
-            PointerBuffer instExts = null;
-            if (portability) {
-                instExts = stack.mallocPointer(2);
-                instExts.put(stack.UTF8("VK_KHR_portability_enumeration"));
-                instExts.put(stack.UTF8("VK_KHR_get_physical_device_properties2"));
-                instExts.flip();
-            }
-            var ici = VkInstanceCreateInfo.calloc(stack).sType$Default().pApplicationInfo(appInfo);
-            if (portability) {
-                ici.flags(0x00000001 /*VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR*/)
-                   .ppEnabledExtensionNames(instExts);
-            }
-            PointerBuffer pInstance = stack.mallocPointer(1);
-            check(vkCreateInstance(ici, null, pInstance), "vkCreateInstance");
-            this.instance = new VkInstance(pInstance.get(0), ici);
-
-            IntBuffer count = stack.mallocInt(1);
-            check(vkEnumeratePhysicalDevices(this.instance, count, null), "enumerate devices (count)");
-            if (count.get(0) == 0) throw new IllegalStateException("No Vulkan physical devices");
-            PointerBuffer devices = stack.mallocPointer(count.get(0));
-            check(vkEnumeratePhysicalDevices(this.instance, count, devices), "enumerate devices");
-
-            boolean requireGlInterop = this.glInterop;
-            VkPhysicalDevice chosen = null; int chosenFamily = -1; boolean chosenDic = false;
-            boolean chosenPortability = false; boolean chosenDiscrete = false; String chosenName = null;
-            for (int i = 0; i < devices.capacity(); i++) {
-                var pd = new VkPhysicalDevice(devices.get(i), this.instance);
-                Set<String> exts = deviceExtensions(pd, stack);
-                if (requireGlInterop && (!hasAll(exts, REQUIRED_DEVICE_EXTS_COMMON) || !hasAll(exts, platformInteropExts()))) continue;
-                int family = findGraphicsQueueFamily(pd, stack);
-                if (family < 0) continue;
-                var props = VkPhysicalDeviceProperties.calloc(stack);
-                vkGetPhysicalDeviceProperties(pd, props);
-                boolean discrete = props.deviceType() == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
-                if (chosen != null && (chosenDiscrete || !discrete)) continue;//prefer discrete, like vanilla 26.2
-                chosen = pd; chosenFamily = family; chosenName = props.deviceNameString(); chosenDiscrete = discrete;
-                //NOTE: drawIndirectCount is a FEATURE in core 1.2, not implied by apiVersion —
-                //MoltenVK reports 1.2 without it. Must query VkPhysicalDeviceVulkan12Features.
-                var f12q = VkPhysicalDeviceVulkan12Features.calloc(stack).sType$Default();
-                var f2 = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default().pNext(f12q);
-                VK11.vkGetPhysicalDeviceFeatures2(pd, f2);
-                chosenDic = f12q.drawIndirectCount() || exts.contains("VK_KHR_draw_indirect_count");
-                chosenPortability = exts.contains("VK_KHR_portability_subset");
-            }
-            if (chosen == null) throw new IllegalStateException(requireGlInterop
-                    ? "No VK device with GL-interop extensions (hybrid mode; unavailable on macOS by design)"
-                    : "No suitable VK device");
-            this.physicalDevice = chosen; this.queueFamily = chosenFamily;
-            this.hasDrawIndirectCount = chosenDic; this.deviceName = chosenName;
-            this.isPortability = chosenPortability;
-
-            List<String> devExts = new ArrayList<>();
-            if (requireGlInterop) {
-                devExts.addAll(List.of(REQUIRED_DEVICE_EXTS_COMMON));
-                devExts.addAll(List.of(platformInteropExts()));
-            }
-            if (chosenPortability) devExts.add("VK_KHR_portability_subset");//spec: must enable if supported
-            if (chosenDic) devExts.add("VK_KHR_draw_indirect_count");
-            PointerBuffer pExts = stack.mallocPointer(devExts.size());
-            for (String e : devExts) pExts.put(stack.UTF8(e));
-            pExts.flip();
-
-            var queueCI = VkDeviceQueueCreateInfo.calloc(1, stack).sType$Default()
-                    .queueFamilyIndex(this.queueFamily)
-                    .pQueuePriorities(stack.floats(1.0f));
-            var features12 = VkPhysicalDeviceVulkan12Features.calloc(stack).sType$Default()
-                    .drawIndirectCount(chosenDic);
-            var features = VkPhysicalDeviceFeatures.calloc(stack).multiDrawIndirect(true);
-            var dci = VkDeviceCreateInfo.calloc(stack).sType$Default()
-                    .pNext(features12)
-                    .pQueueCreateInfos(queueCI)
-                    .ppEnabledExtensionNames(pExts)
-                    .pEnabledFeatures(features);
-            PointerBuffer pDevice = stack.mallocPointer(1);
-            check(vkCreateDevice(this.physicalDevice, dci, null, pDevice), "vkCreateDevice");
-            this.device = new VkDevice(pDevice.get(0), this.physicalDevice, dci);
-
-            PointerBuffer pQueue = stack.mallocPointer(1);
-            vkGetDeviceQueue(this.device, this.queueFamily, 0, pQueue);
-            this.queue = new VkQueue(pQueue.get(0), this.device);
-
+            var props = VkPhysicalDeviceProperties.calloc(stack);
+            vkGetPhysicalDeviceProperties(this.physicalDevice, props);
+            name = props.deviceNameString();
             var cpci = VkCommandPoolCreateInfo.calloc(stack).sType$Default()
                     .flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT)
                     .queueFamilyIndex(this.queueFamily);
             var pPool = stack.mallocLong(1);
-            check(vkCreateCommandPool(this.device, cpci, null, pPool), "vkCreateCommandPool");
+            check(vkCreateCommandPool(this.device, cpci, null, pPool), "vkCreateCommandPool(adopted)");
             this.commandPool = pPool.get(0);
-            Logger.info("Voxy Vulkan context created on device: " + this.deviceName
-                    + " (drawIndirectCount=" + this.hasDrawIndirectCount + ")");
         }
+        this.deviceName = name + " (MC host)";
+        Logger.info("Voxy Vulkan context adopted Minecraft device: " + this.deviceName
+                + " (drawIndirectCount=" + this.hasDrawIndirectCount
+                + ", subgroupArithmetic=" + this.subgroupArithmetic
+                + ", subgroupSize=" + this.subgroupSize + ")");
     }
 
-    private static Set<String> deviceExtensions(VkPhysicalDevice pd, MemoryStack stack) {
-        IntBuffer c = stack.mallocInt(1);
-        vkEnumerateDeviceExtensionProperties(pd, (String) null, c, null);
-        var props = VkExtensionProperties.calloc(c.get(0), stack);
-        vkEnumerateDeviceExtensionProperties(pd, (String) null, c, props);
-        Set<String> out = new HashSet<>();
-        for (int i = 0; i < props.capacity(); i++) out.add(props.get(i).extensionNameString());
-        return out;
-    }
-
-    private static boolean hasAll(Set<String> have, String[] want) {
-        for (String w : want) if (!have.contains(w)) return false;
-        return true;
-    }
-
-    private static int findGraphicsQueueFamily(VkPhysicalDevice pd, MemoryStack stack) {
-        IntBuffer c = stack.mallocInt(1);
-        vkGetPhysicalDeviceQueueFamilyProperties(pd, c, null);
-        var fams = VkQueueFamilyProperties.calloc(c.get(0), stack);
-        vkGetPhysicalDeviceQueueFamilyProperties(pd, c, fams);
-        for (int i = 0; i < fams.capacity(); i++) {
-            if ((fams.get(i).queueFlags() & VK_QUEUE_GRAPHICS_BIT) != 0) return i;
-        }
-        return -1;
-    }
-
-    public int findMemoryType(int typeBits, int required) {
+    private static boolean queryDrawIndirectCount(VkPhysicalDevice pd) {
         try (MemoryStack stack = stackPush()) {
-            var mem = VkPhysicalDeviceMemoryProperties.calloc(stack);
-            vkGetPhysicalDeviceMemoryProperties(this.physicalDevice, mem);
-            for (int i = 0; i < mem.memoryTypeCount(); i++) {
-                if ((typeBits & (1 << i)) != 0 && (mem.memoryTypes(i).propertyFlags() & required) == required) return i;
+            var f12q = VkPhysicalDeviceVulkan12Features.calloc(stack).sType$Default();
+            var f2 = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default().pNext(f12q);
+            VK11.vkGetPhysicalDeviceFeatures2(pd, f2);
+            return f12q.drawIndirectCount();
+        }
+    }
+
+    private static VkPhysicalDeviceSubgroupProperties querySubgroupProperties(VkPhysicalDevice pd) {
+        try (MemoryStack stack = stackPush()) {
+            var sg = VkPhysicalDeviceSubgroupProperties.calloc(stack).sType$Default();
+            var f2 = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default().pNext(sg.address());
+            VK11.vkGetPhysicalDeviceFeatures2(pd, f2);
+            // Return a malloc'd copy so the caller can read it past the stack frame.
+            var copy = VkPhysicalDeviceSubgroupProperties.malloc();
+            copy.set(sg);
+            return copy;
+        }
+    }
+
+    private long storageAlign = -1;
+    /** minStorageBufferOffsetAlignment of the physical device. */
+    public long storageBufferOffsetAlignment() {
+        if (this.storageAlign == -1) {
+            try (MemoryStack stack = stackPush()) {
+                var props = VkPhysicalDeviceProperties.calloc(stack);
+                vkGetPhysicalDeviceProperties(this.physicalDevice, props);
+                this.storageAlign = props.limits().minStorageBufferOffsetAlignment();
             }
+        }
+        return this.storageAlign;
+    }
+
+    private long uniformAlign = -1;
+    /** minUniformBufferOffsetAlignment of the physical device. */
+    public long uniformBufferOffsetAlignment() {
+        if (this.uniformAlign == -1) {
+            try (MemoryStack stack = stackPush()) {
+                var props = VkPhysicalDeviceProperties.calloc(stack);
+                vkGetPhysicalDeviceProperties(this.physicalDevice, props);
+                this.uniformAlign = props.limits().minUniformBufferOffsetAlignment();
+            }
+        }
+        return this.uniformAlign;
+    }
+
+    //Device memory properties are immutable for the device lifetime; cache them
+    // instead of re-querying the driver per allocation. Freed in destroy().
+    private VkPhysicalDeviceMemoryProperties memoryProperties;
+    public int findMemoryType(int typeBits, int required) {
+        if (this.memoryProperties == null) {
+            this.memoryProperties = VkPhysicalDeviceMemoryProperties.malloc();
+            vkGetPhysicalDeviceMemoryProperties(this.physicalDevice, this.memoryProperties);
+        }
+        var mem = this.memoryProperties;
+        for (int i = 0; i < mem.memoryTypeCount(); i++) {
+            if ((typeBits & (1 << i)) != 0 && (mem.memoryTypes(i).propertyFlags() & required) == required) return i;
         }
         throw new IllegalStateException("No suitable VK memory type");
     }
@@ -195,7 +134,14 @@ public final class VulkanContext {
     public void destroy() {
         vkDeviceWaitIdle(this.device);
         vkDestroyCommandPool(this.device, this.commandPool, null);
-        vkDestroyDevice(this.device, null);
-        vkDestroyInstance(this.instance, null);
+        if (this.subgroupProps != null) {
+            this.subgroupProps.free();
+            this.subgroupProps = null;
+        }
+        if (this.memoryProperties != null) {
+            this.memoryProperties.free();
+            this.memoryProperties = null;
+        }
+        //Host mode: MC owns the device/instance — only the command pool above was ours.
     }
 }

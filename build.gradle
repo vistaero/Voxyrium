@@ -326,7 +326,10 @@ tasks.register('makeExcludedRocksDB', Zip) {
     exclude {
         def file = it.name
         if (file.endsWith(".jnilib")) {
-            return true
+            //Keep macOS arm64 native so RocksDB works on Apple Silicon (VK/MoltenVK
+            // target); drop x86_64. Without this, world load crashes on M-series Macs
+            // with "librocksdbjni-osx-arm64.jnilib was not found inside JAR".
+            return !file.contains("osx-arm64")
         }
         if (!file.endsWith(".so")) {
             return false
@@ -392,6 +395,12 @@ dependencies {
     include(runtimeOnly "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-windows")
     include(runtimeOnly "org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-linux")
     include(runtimeOnly "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-linux")
+    //macOS natives: required for the MoltenVK/Vulkan path so Voxy's section
+    // storage (zstd compression + lmdb index) can load on Apple Silicon.
+    include(runtimeOnly "org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-macos")
+    include(runtimeOnly "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-macos")
+    include(runtimeOnly "org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-macos-arm64")
+    include(runtimeOnly "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-macos-arm64")
     if (INCLUDE_OTHER_ARCHS) {
         runtimeOnly "org.lwjgl:lwjgl:$lwjglVersion:natives-linux-arm64"
         include(runtimeOnly "org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-linux-arm64")

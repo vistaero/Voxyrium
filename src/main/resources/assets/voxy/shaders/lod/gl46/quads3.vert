@@ -14,7 +14,15 @@
 #define MODEL_BUFFER_BINDING 3
 #define MODEL_COLOUR_BUFFER_BINDING 4
 #define POSITION_SCRATCH_BINDING 5
+#ifdef VOXY_VULKAN
+#define LIGHTING_SAMPLER_BINDING 9
+#define VERT_ID gl_VertexIndex
+#define BASE_INSTANCE gl_InstanceIndex
+#else
 #define LIGHTING_SAMPLER_BINDING 1
+#define VERT_ID gl_VertexID
+#define BASE_INSTANCE gl_BaseInstance
+#endif
 
 #ifdef USE_SINGLE_TRI
 #define USE_NV_BARRY
@@ -51,10 +59,10 @@ void main() {
     taaOffset = taaShift();
 
     QuadData quad;
-    uvec2 pos = positionBuffer[gl_BaseInstance];
-    setupQuad(quad, quadData[uint(gl_VertexID)>>2], pos, (gl_VertexID&3) == 1);
+    uvec2 pos = positionBuffer[BASE_INSTANCE];
+    setupQuad(quad, quadData[uint(VERT_ID)>>2], pos, (VERT_ID&3) == 1);
 
-    uint cornerId = gl_VertexID&3;
+    uint cornerId = VERT_ID&3;
 
     gl_Position =
     #ifdef USE_NV_JANK
@@ -75,7 +83,7 @@ void main() {
 
     #ifdef DEBUG_RENDER
     //quadDebug = uint(extractDetail(pos));
-    quadDebug = uint(gl_VertexID)>>2;
+    quadDebug = uint(VERT_ID)>>2;
     #endif
 }
 

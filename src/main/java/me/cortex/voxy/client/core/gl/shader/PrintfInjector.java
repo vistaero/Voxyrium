@@ -1,7 +1,7 @@
 package me.cortex.voxy.client.core.gl.shader;
 
 import me.cortex.voxy.client.core.gl.GlBuffer;
-import me.cortex.voxy.client.core.rendering.util.DownloadStream;
+import me.cortex.voxy.client.core.rendering.util.AbstractDownloadStream;
 import org.lwjgl.system.MemoryUtil;
 
 import java.util.ArrayList;
@@ -226,7 +226,7 @@ public class PrintfInjector implements IShaderProcessor {
     }
 
     public void download() {
-        DownloadStream.INSTANCE.download(this.textBuffer, this::processResult);
+        AbstractDownloadStream.INSTANCE().download(this.textBuffer, this::processResult);
         nglClearNamedBufferSubData(this.textBuffer.id, GL_R32UI, 0, 4, GL_RED_INTEGER, GL_UNSIGNED_INT, 0);
     }
 

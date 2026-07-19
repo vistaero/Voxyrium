@@ -25,14 +25,4 @@ public interface IVkHost {
 
     /** Command buffer currently recording for this frame's world rendering, at the LOD injection point. */
     VkCommandBuffer frameCommandBuffer();
-
-    /** The game's depth attachment view for the current frame (for occlusion tests + depth-correct LOD compositing). */
-    long frameDepthImageView();
-    /** The game's color attachment view for the current frame. */
-    long frameColorImageView();
-    int frameWidth();
-    int frameHeight();
-    /** Formats of the above, VkFormat values, needed for pipeline rendering-info. */
-    int frameColorFormat();
-    int frameDepthFormat();
 }

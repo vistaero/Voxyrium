@@ -7,6 +7,26 @@ layout(binding = 2) uniform sampler2D depthTex;
 
 #import <voxy:util/depthutils.glsl>
 
+#ifdef VOXY_VULKAN
+//Default-block uniforms are unavailable in Vulkan GLSL: the matrices live in a
+// UBO (binding 4; 0..3 are the image + samplers in the unified namespace)
+#ifdef BETTER_SSAO
+layout(binding = 3) uniform sampler2D sourceDepthTex;
+layout(binding = 4, std140) uniform SSAOParams {
+    mat4 Proj;
+    mat4 invProj;
+    mat4 MV;
+    mat4 sourceInvProj;
+};
+#else
+layout(binding = 4, std140) uniform SSAOParams {
+    mat4 MVP;
+    mat4 invMVP;
+    mat4 pad0;
+    mat4 pad1;
+};
+#endif
+#else
 #ifdef BETTER_SSAO
 layout(binding = 3) uniform sampler2D sourceDepthTex;
 layout(location = 4) uniform mat4 Proj;
@@ -16,6 +36,7 @@ layout(location = 7) uniform mat4 sourceInvProj;
 #else
 layout(location = 3) uniform mat4 MVP;
 layout(location = 4) uniform mat4 invMVP;
+#endif
 #endif
 
 vec3 rev3d(mat4 matrix, vec3 clip) {

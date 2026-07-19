@@ -1,59 +1,106 @@
-# Voxy Vulkan Backend — branch `vulkan-backend`, rebased on dev @ MC 26.2
+# Voxy Vulkan Backend
 
-## Grounded context (verified July 2026)
-Vanilla MC Java 26.2 ("Chaos Cubed") ships an experimental Vulkan renderer:
-opt-in Graphics API setting (Default / Prefer Vulkan / Prefer OpenGL), requires
-Vulkan 1.2 + dynamic rendering + push descriptors, auto-fallback ladder to GL,
-prefers discrete GPUs, and runs on macOS through MoltenVK officially. Iris is
-GL-only (its VK successor "Aperture" is in development); Sodium is GL-only.
-Therefore gating Iris/Sodium OFF on the VK path is correct, not a limitation.
+Voxy follows Minecraft's own graphics API: when MC 26.2 runs on its Vulkan
+backend, Voxy renders through Vulkan; when MC is on OpenGL, Voxy uses its
+OpenGL (MDIC) backend. There is no user-facing toggle and no fallback either
+way — a GL context cannot exist in a MC-on-Vulkan process, so "falling back to
+OpenGL" is impossible, and forcing a cross-API split is incoherent with the
+identical-experience goal.
 
-## Two VK modes
-1. HYBRID (Windows/Linux, MC on OpenGL): GL keeps traversal/culling/cmdgen
-   compute bit-exact; buffers are VK-allocated + GL-imported
-   (VK_KHR_external_memory <-> GL_EXT_memory_object); VK does the draws;
-   GL composites. IMPLEMENTED (guarded off until geometry-SSBO sharing lands).
-   IMPOSSIBLE ON macOS: MoltenVK has no external_memory_fd and Apple GL is 4.1.
-2. PURE-VK / HOST MODE (all OSes incl. macOS, MC on "Prefer Vulkan"): Voxy
-   adopts Minecraft's own VkDevice/queue/frame via the IVkHost seam and records
-   LOD passes into MC's frame; no OpenGL anywhere. This is THE Mac path and the
-   end-state on every platform. ARCHITECTURE LANDED; adapter mixin pending.
+## Architecture
 
-## macOS blockers — status after this commit set
-| Blocker | Status |
-|---|---|
-| VK_KHR_portability_enumeration missing at instance creation (MoltenVK loader hides devices without it) | FIXED |
-| VK_KHR_portability_subset must be enabled when exposed | FIXED |
-| drawIndirectCount incorrectly inferred from apiVersion (MoltenVK reports 1.2 WITHOUT this feature) | FIXED — proper VkPhysicalDeviceVulkan12Features query |
-| Hard dependency on draw-indirect-count | FIXED — fixed-count vkCmdDrawIndexedIndirect fallback (cmdgen zero-fills unused slots; instanceCount=0 draws are no-ops) |
-| GL-interop unavailable on Metal | BY DESIGN — pure-VK host mode is the Mac path; gate refuses hybrid on macOS with a clear log |
-| shaderc natives | already bundled (macos + macos-arm64) |
-| Residual risk | MoltenVK SSBO/vertex-pulling perf & any portability-subset gaps in Voxy's shaders — only measurable on Apple hardware |
+When MC is on Vulkan, Voxy adopts MC's own `VkDevice`/queue via the Blaze3D
+adapter mixin (`MixinVulkanDevice` registers a `MinecraftVkHostAdapter` at
+device init) and records all of its GPU work into MC's frame command buffer
+from `MixinSodiumOpaqueVkFrame` (TAIL of `SodiumWorldRenderer.drawChunkLayer`
+for the OPAQUE group) — right after Sodium's opaque terrain, render pass
+closed, frame command buffer recording. Per frame:
 
-## What is REAL in code vs what REMAINS
-Done (unverified — this sandbox cannot compile [maven blocked] or render [no GPU]):
-seam/IRenderList; config toggle + capability + Iris + macOS gates (GL default);
-private-device VK context w/ portability + discrete-GPU preference; interop
-primitives; shaderc bridge; VK opaque pipeline + indirect draws + fallback;
-IVkHost + MinecraftVkHost registry; VkComputePipeline for the compute ports.
+1. **SETUP** (`VkCompositor`): clear Voxy's offscreen colour + D32S8
+   depth-stencil (stencil=1); fullscreen pass copies MC's depth in
+   (projection-transformed) writing stencil=0 where vanilla terrain exists.
+2. **Opaque LOD terrain**: `vkCmdDrawIndexedIndirectCount`, stencil==1 test
+   (draw calls generated last frame — same latency model as GL).
+3. **HiZ pyramid** (`VkHiZ`, R32F mips, conservative REDUCTION) +
+   `AsyncNodeManager` sync (`VkNodeGpuOps` scatter/multi-memcpy computes) +
+   `VkNodeCleaner` + hierarchical traversal (`VkTraversal`: 12 flip-flop indirect
+   dispatches, HiZ-tested, request readback via `VkDownloadStream`).
+4. **Draw-call build** (`VkTerrainRenderer`): prep -> raster box cull
+   (depth-only, early-fragment-test visibility writes) -> cmdgen (indirect
+   dispatch) -> translucency prefix-sort + build.
+5. Temporal + translucent draws.
+6. **COMPOSITE**: alpha-blend into MC's colour/depth attachments (dynamic
+   rendering, LOAD/STORE), fragment emits vanilla-space depth + env fog (fog
+   params sourced from MC's `CameraRenderState.fogData`).
+7. Streams tick (staging recycled on VkEvent frame retirement), model bakery
+   tick (atlas mips via `vkCmdCopyBufferToImage`), render-distance tracking.
 
-Remaining for "complete, identical-experience" VK (in order):
-1. `./gradlew build` fixups (authored offline against LWJGL 3.4.1 VK bindings).
-2. Blaze3D-VK adapter mixin implementing IVkHost — REQUIRES the real 26.2
-   mappings/jar; targets deliberately not guessed. Note MC's VK renderer runs on
-   a dedicated render thread: the adapter must hand Voxy a command buffer at a
-   defined sync point, this is the trickiest integration detail.
-3. IDeviceBuffer abstraction under GlBuffer so geometry/metadata/ModelStore
-   allocate VkBuffers natively in host mode (kills the last GL dependency).
-4. Compute ports via VkComputePipeline (prep/cull/prefix/cmdgen, then the
-   hierarchical traversal); occlusion vs MC's VK depth via IVkHost views.
-   Switch graphics pipeline to dynamic rendering (host requires the ext anyway).
-5. Translucents, temporal, SSAO parity; then perf work (persistent descriptor
-   sets, device-generated-commands/metal ICBs where available).
-6. Validation matrix: NVIDIA+AMD Windows/Linux (hybrid + host), Apple Silicon
-   (host only). Parity = pixel-compare vs GL on same seed/camera; perf = frame
-   times at 64/128/256 render distance.
+Shared with GL (zero duplication): `NodeManager`/`AsyncNodeManager`, mesh
+generation, model bakery CPU pipeline, render-distance tracker, viewport
+math, and all shader sources — the GLSL is single-source with
+`#ifdef VOXY_VULKAN` guards (push constants replace default-block uniforms,
+sampler bindings remapped to the unified VK namespace,
+`gl_VertexID`/`gl_InstanceID`/`gl_BaseInstance` aliased, u16 cube indices
+replace u8). Seams: `IDeviceBuffer`, `AbstractUploadStream`/
+`AbstractDownloadStream` (backend-settable singletons), `INodeGpuOps`,
+`INodeCleaner`, `IBasicGeometryData`, `IModelStore`, `IAtlasTextureReader`.
+
+## MoltenVK / macOS
+
+- `drawIndirectCount` is a 1.2 *feature*, not implied by `apiVersion` —
+  MoltenVK reports 1.2 without it. `VulkanContext.hasDrawIndirectCount` is
+  queried and `VkTerrainRenderer.renderTerrain` branches on it: the
+  fixed-count fallback issues `vkCmdDrawIndexedIndirect` with a clamped
+  `maxDrawCount` and zeroes the three `drawCallBuffer` slices (opaque /
+  temporal / translucent) before cmdgen so stale trailing slots never read as
+  ghost draws.
+- The fixed-count budget tracks the last-read real per-pass draw count (async
+  readback via `VkDownloadStream`, no stall), so looking at the sky actually
+  reduces encoded Metal draws (MoltenVK emulates multi-draw-indirect as one
+  Metal draw per slot — a view-independent cap encoded ~sectionCount*6.4
+  no-op draws per frame and hid all culling wins).
+- `VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT` + a `VkImageFormatListCreateInfo` is
+  used on the D32S8 offscreen depth so a depth-only aspect view can alias the
+  packed image (without it MoltenVK may synthesise a separate staging texture
+  for depth-only sampling).
+- macOS natives for `lwjgl-lmdb` and `lwjgl-zstd` must be bundled or section
+  storage throws `UnsatisfiedLinkError` on save and no geometry is persisted
+  (the bound-renderer AABBs leak through as the only visible geometry).
 
 ## Invariants
-GL/MDIC untouched and default; VK strictly behind config + capability gates;
-Iris/Sodium gated out on VK, untouched on GL.
+
+- GL/MDIC byte-identical when MC is on GL (seam refactors are lazy-init only).
+- VK strictly follows MC's own API; never falls back to GL under
+  MC-on-Vulkan; gates no mod off as "GL-only".
+- No GL classloads can occur on the VK path — `VoxyClient.initVoxyClient`
+  branches on `MinecraftVkHost.isMinecraftOnVulkan()` before the first GL
+  touch (`Capabilities`'s `<clinit>` runs `GL.getCapabilities()` and throws
+  with no GL context). The streams, the shared index buffer, and the atlas
+  readback are lazily backend-selected, so their GL implementations never
+  classload on the VK path.
+- `VkRenderCore.shutdown()` is idempotent and device-alive-gated
+  (`MinecraftVkHost.get() != null` skips GPU teardown if MC already tore its
+  device down on full-game exit). CPU stop (node/gen thread joins, callback
+  detach, world `releaseRef`) always runs. `modelService.shutdown()` owns the
+  `VkModelStore` lifetime (single `vkDestroySampler`) and runs after
+  `frameCtx.waitIdleRetireAll()`.
+
+## Feature parity
+
+VK visual output matches GL: depth-space transform in setup/composite,
+stencil mask correctness, fog ramp, lightmap sampling (vertex-stage), model
+atlas mips, SSAO (`VkSSAO`), depth-bound culling (`VkBoundRenderer`), and
+view-bob tracking (the frame hook feeds Sodium's bobbed `ChunkRenderMatrices`
++ camera offset into `renderFrame`).
+
+No-op by design on the VK path: FREX integration, shader printf debugging,
+GPU-timing markers (all GL-debug-only paths).
+
+## A/B comparison logging
+
+`-Dvoxy.cmplog=<path>` makes both backends emit the same per-frame semantic
+quantities (section/geometry counts, traversal request counts) as
+tab-separated records via `CmpLog`. For a stationary camera the values
+converge to identical integers when the VK translation is faithful, so a
+script can flag any divergence without the rounding noise of a pixel diff.
+Every method is a no-op when the property is unset.

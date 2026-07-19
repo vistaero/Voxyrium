@@ -9,7 +9,7 @@ import me.cortex.voxy.client.core.rendering.hierachical.NodeCleaner;
 import me.cortex.voxy.client.core.rendering.post.FullscreenBlit;
 import me.cortex.voxy.client.core.rendering.section.backend.AbstractSectionRenderer;
 import me.cortex.voxy.client.core.rendering.util.DepthFramebuffer;
-import me.cortex.voxy.client.core.rendering.util.UploadStream;
+import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
 import me.cortex.voxy.client.iris.IrisVoxyRenderPipelineData;
 import net.irisshaders.iris.shaderpack.materialmap.WorldRenderingSettings;
 import org.joml.Matrix4f;
@@ -110,9 +110,9 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
         super.preSetup(viewport);
         if (this.shaderUniforms != null) {
             //Update the uniforms
-            long ptr = UploadStream.INSTANCE.uploadTo(this.shaderUniforms);
+            long ptr = AbstractUploadStream.INSTANCE().uploadTo(this.shaderUniforms);
             this.data.getUniforms().updater().accept(ptr);
-            UploadStream.INSTANCE.commit();
+            AbstractUploadStream.INSTANCE().commit();
         }
     }
 

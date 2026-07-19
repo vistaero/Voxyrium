@@ -10,7 +10,7 @@ import me.cortex.voxy.client.core.gl.shader.ShaderLoader;
 import me.cortex.voxy.client.core.gl.shader.ShaderType;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.client.core.rendering.util.SharedIndexBuffer;
-import me.cortex.voxy.client.core.rendering.util.UploadStream;
+import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
 import net.minecraft.client.Minecraft;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
@@ -63,7 +63,7 @@ public class BoundRenderer {
             viewport.depthBoundingBuffer.clear(this.properties.inverseClearDepth());
             return;
         }
-        ((AutoBindingShader)this.rasterShader).ssbo(1, store.getBuffer());
+        ((AutoBindingShader)this.rasterShader).ssbo(1, (GlBuffer) store.getBuffer());
         final float renderDistance = Minecraft.getInstance().options.getEffectiveRenderDistance()*16;//In blocks
         this.renderInner(viewport, renderDistance, count);
         store.postRender(viewport);
@@ -75,7 +75,7 @@ public class BoundRenderer {
             return;
         }
 
-        long ptr = UploadStream.INSTANCE.upload(this.uniformBuffer, 0, 128);
+        long ptr = AbstractUploadStream.INSTANCE().upload(this.uniformBuffer, 0, 128);
         long matPtr = ptr; ptr += 4*4*4;
 
         {//This is recomputed to be in chunk section space not worldsection
@@ -96,7 +96,7 @@ public class BoundRenderer {
             viewport.MVP.translate(negInnerBlock.negate(), new Matrix4f()).getToAddress(matPtr);
             MemoryUtil.memPutFloat(ptr, renderDistanceBlocks); ptr += 4;
         }
-        UploadStream.INSTANCE.commit();
+        AbstractUploadStream.INSTANCE().commit();
 
 
         {
@@ -113,7 +113,7 @@ public class BoundRenderer {
         glBindVertexArray(GlVertexArray.STATIC_VAO);
         viewport.depthBoundingBuffer.bind();
         this.rasterShader.bind();
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, SharedIndexBuffer.INSTANCE_BB_BYTE.id());
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, SharedIndexBuffer.INSTANCE_BB_BYTE().id());
         if (this.pipeline != null) this.pipeline.bindUniforms();//shader TAA
 
         //Batch the draws into groups of size 32

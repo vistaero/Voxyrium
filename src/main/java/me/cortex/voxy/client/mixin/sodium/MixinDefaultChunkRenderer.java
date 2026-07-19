@@ -60,6 +60,15 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
         if (renderPass == DefaultTerrainRenderPasses.CUTOUT) {
             var renderer = IVoxyRenderSystemHolder.getNullable();
             if (renderer != null) {
+                if (renderer.isVulkanBackend()) {
+                    //Vulkan backend: Voxy renders via its own frame hook
+                    // (MixinSodiumOpaqueVkFrame). Sodium 0.9.1 also renders through MC's
+                    // Vulkan device, so target.get*TextureView() returns a
+                    // VulkanGpuTextureView with no glId() — the GL-interop path below
+                    // must not run (the cast would ClassCastException before
+                    // renderOpaque's own VK early-return is reached).
+                    return;
+                }
                 Viewport<?> viewport = null;
                 var target = renderPass.getTarget();
                 if (IrisUtil.irisShaderPackEnabled()) {

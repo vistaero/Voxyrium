@@ -43,7 +43,7 @@ public class BufferArena {
         if (addr == -1) {
             return -1;
         }
-        long uploadPtr = UploadStream.INSTANCE.upload(this.buffer, addr * this.elementSize, buffer.size);
+        long uploadPtr = AbstractUploadStream.INSTANCE().upload(this.buffer, addr * this.elementSize, buffer.size);
         UnsafeUtil.memcpy(buffer.address, uploadPtr, buffer.size);
         this.used += size;
         return addr;
@@ -73,6 +73,6 @@ public class BufferArena {
     public void downloadRemove(long allocation, Consumer<MemoryBuffer> consumer) {
         int size = this.allocationMap.free(allocation);
         this.used -= size;
-        DownloadStream.INSTANCE.download(this.buffer, allocation*this.elementSize, (long) size *this.elementSize, consumer);
+        AbstractDownloadStream.INSTANCE().download(this.buffer, allocation*this.elementSize, (long) size *this.elementSize, consumer);
     }
 }

@@ -34,11 +34,14 @@ public class VoxyConfig {
     public float subDivisionSize = 64;
     public boolean useEnvironmentalFog = true;
     public boolean dontUseSodiumBuilderThreads = false;
-    /** "opengl" (default) or "vulkan". Vulkan additionally requires a capable device and no active Iris shaderpack. */
-    public String renderBackend = "opengl";
-
+    //Voxy's rendering API is not user-selectable: it follows whichever graphics
+    // API MC itself is running on. When MC resolves to Vulkan, Voxy renders
+    // through Vulkan (host mode, adopting MC's own device); otherwise OpenGL.
+    // A manual override is deliberately absent: Voxy cannot run OpenGL while MC
+    // runs Vulkan (no GL context exists in that case), and forcing a cross-API
+    // split is incoherent with the goal of an identical experience.
     public boolean wantsVulkanBackend() {
-        return "vulkan".equalsIgnoreCase(this.renderBackend);
+        return me.cortex.voxy.client.core.vk.MinecraftVkHost.isMinecraftOnVulkan();
     }
 
     public String ssaoMode;

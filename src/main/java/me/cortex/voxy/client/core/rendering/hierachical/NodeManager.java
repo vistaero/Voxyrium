@@ -10,7 +10,7 @@ import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.rendering.ISectionWatcher;
 import me.cortex.voxy.client.core.rendering.building.BuiltSection;
 import me.cortex.voxy.client.core.rendering.section.geometry.IGeometryManager;
-import me.cortex.voxy.client.core.rendering.util.UploadStream;
+import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
 import me.cortex.voxy.client.core.util.ExpandingObjectAllocationList;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.MemoryBuffer;
@@ -1354,13 +1354,13 @@ public class NodeManager {
     }
 
     //==================================================================================================================
-    public boolean writeChanges(GlBuffer nodeBuffer) {
+    public boolean writeChanges(me.cortex.voxy.client.core.rendering.util.IDeviceBuffer nodeBuffer) {
         //TODO: use like compute based copy system or something
         // since microcopies are bad
         if (this.nodeUpdates.isEmpty()) {
             return false;
         }
-        this.nodeUpdates.forEach((int i) -> this.nodeData.writeNode(UploadStream.INSTANCE.upload(nodeBuffer, i*16L, 16L), i));
+        this.nodeUpdates.forEach((int i) -> this.nodeData.writeNode(AbstractUploadStream.INSTANCE().upload(nodeBuffer, i*16L, 16L), i));
         this.nodeUpdates.clear();
         return true;
     }

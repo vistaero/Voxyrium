@@ -1,12 +1,13 @@
 package me.cortex.voxy.client.core.rendering.bounding;
 
-import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.rendering.Viewport;
+import me.cortex.voxy.client.core.rendering.util.IDeviceBuffer;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import net.minecraft.core.SectionPos;
 
 public interface IBoundStore {
-    GlBuffer getBuffer();
+    //Backend-neutral; the GL-only stores narrow the return to GlBuffer covariantly
+    IDeviceBuffer getBuffer();
     int getCount();
 
     default void preRender(Viewport<?> viewport) {};

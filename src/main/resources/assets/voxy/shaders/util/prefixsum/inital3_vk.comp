@@ -1,0 +1,79 @@
+#version 460
+
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+//Clean VK port of inital3.comp (the GL subgroup prefix sum), with the GL-era
+// IS_INTEL/IS_WINDOWS driver-jank branches removed. On Vulkan the subgroup
+// intrinsics (subgroupExclusiveAdd, gl_SubgroupID, gl_SubgroupInvocationID,
+// gl_SubgroupSize) are reliable across MoltenVK/Metal, NVIDIA, AMD and Intel;
+// the jank existed only for GL driver bugs that do not affect the VK path.
+//
+//Each thread loads one uvec4 from ioCount[gid] and produces the exclusive
+// prefix sum across the workgroup's 256 uvec4 elements. The uvec4 is scanned
+// internally (count.yzw = dat.xyz; count.z += count.y; count.w += count.z;
+// sum = count.w + dat.w), so each thread contributes 4 sequential outputs
+// with a single subgroup scan over `sum`. The cross-subgroup prefix is
+// accumulated in a tiny shared array (one slot per subgroup) and scanned
+// with one more subgroupExclusiveAdd over the first thread of each subgroup.
+
+#define WORK_SIZE 256
+layout(local_size_x = WORK_SIZE) in;
+
+layout(binding = IO_BUFFER, std430) buffer InputBuffer {
+    uvec4[] ioCount;
+};
+
+shared uint subgroupSums[8]; // WORK_SIZE / minSubgroupSize(32) = 8 slots max
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint localId = gl_LocalInvocationID.x;
+    uint subgroupId = gl_SubgroupID;
+    uint subInv = gl_SubgroupInvocationID;
+    uint subSize = gl_SubgroupSize;
+    uint numSubgroups = gl_NumSubgroups;
+
+    uvec4 count = uvec4(0);
+    uint sum = 0;
+    {
+        uvec4 dat = ioCount[gid];
+        count.yzw = dat.xyz;
+        count.z += count.y;
+        count.w += count.z;
+        sum = count.w + dat.w;
+    }
+    subgroupBarrier(); //ensure all threads in the subgroup have read the buffer
+
+    //Exclusive prefix sum of `sum` across the subgroup (1 subgroup op).
+    uint subgroupExclusive = subgroupExclusiveAdd(sum);
+
+    //Last invocation of each subgroup writes its total into the shared array.
+    if (subInv == subSize - 1u) {
+        subgroupSums[subgroupId] = subgroupExclusive + sum;
+    }
+
+    memoryBarrierShared();
+    barrier();
+
+    //Cross-subgroup prefix sum: the first thread of each subgroup (subInv == 0)
+    // reads the per-subgroup totals and scans them in one subgroup dispatch.
+    // numSubgroups <= 8 <= subgroupSize, so all subgroup totals fit in one
+    // subgroup scan; the result is the prefix of subgroup totals before
+    // `subgroupId`, which every thread in subgroup subgroupId adds to its
+    // count.
+    uint subgroupPrefix = 0;
+    if (subInv < numSubgroups) {
+        uint val = subgroupSums[subInv];
+        subgroupBarrier();
+        subgroupSums[subInv] = subgroupExclusiveAdd(val);
+    }
+    memoryBarrierShared();
+    barrier();
+
+    subgroupPrefix = subgroupSums[subgroupId];
+
+    //Combine: subgroup-exclusive + cross-subgroup-prefix + intra-uvec4 scan.
+    count += subgroupExclusive + subgroupPrefix;
+    ioCount[gid] = count;
+}

@@ -10,7 +10,7 @@ import static org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE;
 import static org.lwjgl.opengl.GL15.glDeleteBuffers;
 import static org.lwjgl.opengl.GL45C.*;
 
-public class GlBuffer extends TrackedObject implements me.cortex.voxy.client.core.rendering.IRenderList {
+public class GlBuffer extends TrackedObject implements me.cortex.voxy.client.core.rendering.IRenderList, me.cortex.voxy.client.core.rendering.util.IDeviceBuffer {
     public final int id;
     private final long size;
     private final int flags;

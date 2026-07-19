@@ -1,28 +1,47 @@
 package me.cortex.voxy.client.core.vk;
 
-import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.Logger;
 
-/**
- * Capability detection + lifecycle for the optional Vulkan backend.
- * GL remains the default; VK is only used when (a) the config toggle asks for it,
- * (b) a suitable device with GL-interop extensions exists, and (c) an Iris
- * shaderpack is NOT active (Iris patches Voxy's GLSL fragment path, which the
- * phase-1 VK backend cannot honor, so it is explicitly gated out).
- */
+//Capability detection + lifecycle for the Vulkan backend.
+//Voxy follows Minecraft's own graphics API: when MC runs on its 26.2 Vulkan
+// backend every rendering mod draws through Blaze3D on Vulkan (no GL context
+// exists in the process), so Voxy adopts MC's VkDevice/queue via IVkHost instead
+// of creating its own. When MC is on OpenGL Voxy uses its OpenGL (MDIC) backend.
+//There is no fallback either way: a GL context cannot exist while MC is on Vulkan.
 public final class VulkanBackend {
     private static Boolean supported;
     private static VulkanContext context;
     private static String unsupportedReason = "not probed";
 
+
+    //True when MC is on Vulkan AND the host adapter is registered AND the LWJGL
+    // Vulkan bindings + MC's device could be adopted.
+    public static boolean shouldUseVulkan() {
+        if (!MinecraftVkHost.isMinecraftOnVulkan()) {
+            return false;//MC is on OpenGL -> Voxy follows it onto OpenGL
+        }
+        if (MinecraftVkHost.get() == null) {
+            //MC reports Vulkan but the Blaze3D-VK adapter has not registered a host yet
+            Logger.info("Voxy: Minecraft on Vulkan but host adapter not yet registered");
+            return false;
+        }
+        return isSupported();
+    }
+
     public static synchronized boolean isSupported() {
         if (supported == null) {
             try {
                 Class.forName("org.lwjgl.vulkan.VK10");
-                var probe = new VulkanContext();
-                context = probe;
-                supported = true;
-                unsupportedReason = null;
+                var host = MinecraftVkHost.get();
+                if (host == null) {
+                    supported = false;
+                    unsupportedReason = "no Minecraft Vulkan host adapter";
+                } else {
+                    context = VulkanContext.adopt(host);
+                    supported = true;
+                    unsupportedReason = null;
+                    Logger.info("Voxy Vulkan backend adopting Minecraft's device: " + context.deviceName);
+                }
             } catch (Throwable t) {
                 supported = false;
                 unsupportedReason = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
@@ -32,22 +51,6 @@ public final class VulkanBackend {
         return supported;
     }
 
-    public static boolean shouldUseVulkan(boolean configWantsVulkan) {
-        if (!configWantsVulkan) return false;
-        if (IrisUtil.IRIS_INSTALLED && IrisUtil.irisShaderpackActiveSafe()) {
-            Logger.info("Voxy: Vulkan requested but Iris shaderpack active -> staying on OpenGL");
-            return false;
-        }
-        if (org.lwjgl.system.Platform.get() == org.lwjgl.system.Platform.MACOSX
-                && !MinecraftVkHost.isMinecraftOnVulkan()) {
-            //macOS has no GL-interop (MoltenVK lacks external_memory_fd; Apple GL is 4.1),
-            //so the only viable VK path is riding Minecraft's own 26.2 Vulkan backend.
-            Logger.info("Voxy: Vulkan on macOS requires Minecraft's Graphics API set to 'Prefer Vulkan' -> staying on OpenGL");
-            return false;
-        }
-        return isSupported();
-    }
-
     public static synchronized VulkanContext context() {
         if (!isSupported()) throw new IllegalStateException("Vulkan not supported: " + unsupportedReason);
         return context;
@@ -55,11 +58,13 @@ public final class VulkanBackend {
 
     public static String statusLine() {
         if (supported == null) return "vk: unprobed";
-        return supported ? ("vk: " + context.deviceName) : ("vk: unavailable (" + unsupportedReason + ")");
+        return supported ? ("vk: host(" + context.deviceName + ")") : ("vk: unavailable (" + unsupportedReason + ")");
     }
 
     public static synchronized void shutdown() {
-        if (context != null) { context.destroy(); context = null; supported = null; }
+        //Host-adopted: do not destroy MC's device (VulkanContext.destroy handles this)
+        if (context != null) { context.destroy(); context = null; }
+        supported = null;
     }
 
     private VulkanBackend() {}

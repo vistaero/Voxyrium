@@ -2,6 +2,8 @@ package me.cortex.voxy.client;
 
 import me.cortex.voxy.client.core.gl.Capabilities;
 import me.cortex.voxy.client.core.rendering.util.SharedIndexBuffer;
+import me.cortex.voxy.client.core.vk.MinecraftVkHost;
+import me.cortex.voxy.client.core.vk.VulkanBackend;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import net.fabricmc.api.ClientModInitializer;
@@ -21,6 +23,16 @@ public class VoxyClient implements ClientModInitializer {
     private static final HashSet<String> FREX = new HashSet<>();
     private static FileLock EXCLUSIVE_LOCK;
     public static void initVoxyClient() {
+        //When MC itself presents through its 26.2 Vulkan backend there is no GL
+        // context on the render thread. Nothing GL-backed may be touched here —
+        // above all not Capabilities, whose <clinit> calls GL.getCapabilities()
+        // and throws. Everything below this branch classloads or queries GL and
+        // is only valid when MC is on OpenGL.
+        if (MinecraftVkHost.isMinecraftOnVulkan()) {
+            initVoxyClientVulkan();
+            return;
+        }
+
         Capabilities.init();//Ensure clinit is called
 
         if (Capabilities.INSTANCE.hasBrokenDepthSampler) {
@@ -33,25 +45,14 @@ public class VoxyClient implements ClientModInitializer {
         }
 
         if (systemSupported && System.getProperty("voxy.exclusiveLock", "false").equalsIgnoreCase("true")) {
-            //Try acquire the lock file
-            var vf = Minecraft.getInstance().gameDirectory.toPath().resolve(".voxy");
-            if (!vf.toFile().isDirectory()) {
-                vf.toFile().mkdir();
-            }
-            try {
-                FileOutputStream fis = new FileOutputStream(vf.resolve("voxy.lock").toFile());
-                EXCLUSIVE_LOCK = fis.getChannel().lock(0, Long.MAX_VALUE, false);
-            } catch (NonWritableChannelException | IOException e) {
-                //If some error write to log and unsupport
-                Logger.error("Failed to acquire exclusive voxy lock file, mod will be disabled");
+            if (!acquireExclusiveLock()) {
                 systemSupported = false;
             }
-
         }
 
         if (systemSupported) {
 
-            SharedIndexBuffer.INSTANCE.id();
+            SharedIndexBuffer.INSTANCE().id();
 
             VoxyCommon.setInstanceFactory(VoxyClientInstance::new);
 
@@ -59,6 +60,44 @@ public class VoxyClient implements ClientModInitializer {
                 Logger.warn("GPU does not support subgroup operations, expect some performance degradation");
             }
 
+        }
+    }
+
+    //Vulkan init: MC is presenting through its own Vulkan backend, so Voxy adopts
+    // that device (VulkanBackend) and never runs the GL capability probes. This
+    // method — and everything it reaches — must stay free of any GL classload.
+    // If VK cannot be adopted (host adapter not registered, missing bindings)
+    // Voxy disables itself: falling back to GL is impossible (no GL context).
+    private static void initVoxyClientVulkan() {
+        if (!VulkanBackend.shouldUseVulkan()) {
+            Logger.error("Voxy is unsupported on your system. Minecraft is on Vulkan but the Voxy Vulkan backend could not be used (" + VulkanBackend.statusLine() + ")");
+            return;
+        }
+
+        if (System.getProperty("voxy.exclusiveLock", "false").equalsIgnoreCase("true")) {
+            if (!acquireExclusiveLock()) {
+                return;
+            }
+        }
+
+        VoxyCommon.setInstanceFactory(VoxyClientInstance::new);
+        Logger.info("Voxy initialised on the Vulkan backend (" + VulkanBackend.statusLine() + ")");
+    }
+
+    //Acquire the cross-process exclusive lock file. Backend-agnostic (pure file
+    // IO, no GPU work). Returns false and logs on failure so callers can disable Voxy.
+    private static boolean acquireExclusiveLock() {
+        var vf = Minecraft.getInstance().gameDirectory.toPath().resolve(".voxy");
+        if (!vf.toFile().isDirectory()) {
+            vf.toFile().mkdir();
+        }
+        try {
+            FileOutputStream fis = new FileOutputStream(vf.resolve("voxy.lock").toFile());
+            EXCLUSIVE_LOCK = fis.getChannel().lock(0, Long.MAX_VALUE, false);
+            return true;
+        } catch (NonWritableChannelException | IOException e) {
+            Logger.error("Failed to acquire exclusive voxy lock file, mod will be disabled");
+            return false;
         }
     }
 

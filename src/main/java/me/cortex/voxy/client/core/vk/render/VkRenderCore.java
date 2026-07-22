@@ -96,7 +96,7 @@ public class VkRenderCore {
             this.nodeCleaner = new VkNodeCleaner(this.frameCtx, this.uploadStream, this.downloadStream, this.nodeManager);
             this.traversal = new VkTraversal(this.frameCtx, this.uploadStream, this.downloadStream,
                     this.properties, this.nodeManager, this.nodeCleaner, this.renderGen);
-            this.terrainRenderer = new VkTerrainRenderer(this.frameCtx, this.uploadStream, this.downloadStream,
+            this.terrainRenderer = new VkTerrainRenderer(this.frameCtx, this.uploadStream,
                     this.properties, this.geometryData, this.modelStore);
             this.compositor = new VkCompositor(this.frameCtx, this.uploadStream, this.properties,
                     VoxyConfig.CONFIG.useEnvironmentalFog);

@@ -4,7 +4,6 @@ import me.cortex.voxy.client.core.RenderProperties;
 import me.cortex.voxy.client.core.rendering.util.SharedIndexBuffer;
 import me.cortex.voxy.client.core.vk.VkBuffer;
 import me.cortex.voxy.client.core.vk.VkCmd;
-import me.cortex.voxy.client.core.vk.VkDownloadStream;
 import me.cortex.voxy.client.core.vk.VkFrameCtx;
 import me.cortex.voxy.client.core.vk.VkImage2D;
 import me.cortex.voxy.client.core.vk.VkShaderPipeline;
@@ -27,37 +26,19 @@ import static org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR;
 import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK12.vkCmdDrawIndexedIndirectCount;
 
-//Pure-VK mirror of MDICSectionRenderer: the same six GPU passes (prep,
-// raster-cull, command generation, translucency prefix sort + build, then
-// opaque / temporal / translucent indexed-indirect-count draws) against the
-// same buffer layouts, recorded into MC's frame command buffer with dynamic
-// rendering over Voxy's offscreen colour + depth-stencil targets.
+//Pure-VK mirror of MDICSectionRenderer.
 public class VkTerrainRenderer {
-    //Draw-command offsets shared with the cmdgen/translucent shader defines.
+    //Draw-command offsets shared with cmdgen/translucent shaders.
     private static final int TRANSLUCENT_OFFSET = VkViewport.OPAQUE_DRAW_COUNT;
     private static final int TEMPORAL_OFFSET = TRANSLUCENT_OFFSET + VkViewport.TRANSLUCENT_DRAW_COUNT;
 
     private final VkFrameCtx ctx;
     private final VkUploadStream uploadStream;
-    private final VkDownloadStream downloadStream;
     private final RenderProperties properties;
     private final VkSectionGeometryData geometry;
     private final VkModelStore modelStore;
 
-    //MoltenVK fixed-count fallback state: the last-known REAL per-pass draw counts,
-    // read back from drawCountCallBuffer each frame. On desktop the GPU sources
-    // these counts itself via vkCmdDrawIndexedIndirectCount. Initialised to 0 and
-    // gated by hasAnyReadback: before the first async readback lands, fixedCountBudget
-    // returns 0 — no draws at all — so renderOpaque (which runs BEFORE buildDrawCalls
-    // and uses last frame's commands) skips entirely on the first frame with geometry.
-    // Without this, the headroom floor (1024/256/256) would issue 1024+ no-op Metal
-    // draws/frame from the zeroed drawCallBuffer, causing the "2D floating blocks"
-    // loading glitch on macOS. Once the first readback lands, hasAnyReadback flips
-    // true and fixedCountBudget operates normally (lastKnown*1.5 + headroom).
-    private int fbOpaqueDraws = 0;
-    private int fbTranslucentDraws = 0;
-    private int fbTemporalDraws = 0;
-    private boolean hasAnyReadback = false;
+    //MoltenVK fallback: uses fixed drawCount with zeroed trailing slots as no-ops.
 
     private final VkBuffer uniform;
     private final VkBuffer distanceCountBuffer;
@@ -74,11 +55,10 @@ public class VkTerrainRenderer {
     private VkShaderPipeline terrainTranslucent;
     private int pipelineColorFormat = -1, pipelineDepthFormat = -1;
 
-    public VkTerrainRenderer(VkFrameCtx ctx, VkUploadStream uploadStream, VkDownloadStream downloadStream,
+    public VkTerrainRenderer(VkFrameCtx ctx, VkUploadStream uploadStream,
                              RenderProperties properties, VkSectionGeometryData geometry, VkModelStore modelStore) {
         this.ctx = ctx;
         this.uploadStream = uploadStream;
-        this.downloadStream = downloadStream;
         this.properties = properties;
         this.geometry = geometry;
         this.modelStore = modelStore;
@@ -86,7 +66,7 @@ public class VkTerrainRenderer {
         this.uniform = new VkBuffer(ctx, 1024).zero();
         this.distanceCountBuffer = new VkBuffer(ctx, 1024L * 4 + VkViewport.TRANSLUCENT_DRAW_COUNT * 4L).zero();
 
-        //Shared index buffer: u16 quad pattern + u16 cube indices at CUBE_INDEX_OFFSET
+        //Shared index buffer: u16 quad + cube indices.
         this.indexBuffer = new VkBuffer(ctx, SharedIndexBuffer.CUBE_INDEX_OFFSET + 6 * 2 * 3 * 2L);
         {
             var quads = SharedIndexBuffer.generateQuadIndicesShort(16380);
@@ -100,7 +80,7 @@ public class VkTerrainRenderer {
         this.depthBoundSampler = VkImage2D.createSampler(ctx.vk(), false, false);
         this.lightmapSampler = VkImage2D.createSampler(ctx.vk(), false, true);
 
-        //================= compute pipelines =================
+        //Compute pipelines.
         this.prep = new VkShaderPipeline(ctx, "prep.comp",
                 VkShaderSource.load("voxy:lod/gl46/prep.comp", VkShaderSource.defs().build()),
                 0, List.of(VkShaderPipeline.ubo(0), VkShaderPipeline.ssbo(1), VkShaderPipeline.ssbo(2)));
@@ -115,9 +95,7 @@ public class VkTerrainRenderer {
                         VkShaderPipeline.ssbo(3), VkShaderPipeline.ssbo(4), VkShaderPipeline.ssbo(5),
                         VkShaderPipeline.ssbo(6), VkShaderPipeline.ssbo(7)));
 
-        //Subgroup prefix sum on VK when the device advertises subgroup arithmetic
-        // (MoltenVK/Metal simdgroups, NVIDIA, AMD, Intel — virtually every VK 1.1+
-        // device). Falls back to the shared-memory Hillis-Steele scan otherwise.
+        //Subgroup prefix sum if available, else shared-memory fallback.
         boolean useSubgroup = ctx.vk().subgroupArithmetic;
         this.prefixSum = new VkShaderPipeline(ctx, "prefixsum.comp",
                 VkShaderSource.load(useSubgroup ? "voxy:util/prefixsum/inital3_vk.comp" : "voxy:util/prefixsum/simple.comp",
@@ -133,7 +111,7 @@ public class VkTerrainRenderer {
                 0, List.of(VkShaderPipeline.ubo(0), VkShaderPipeline.ssbo(1), VkShaderPipeline.ssbo(2),
                         VkShaderPipeline.ssbo(3), VkShaderPipeline.ssbo(4), VkShaderPipeline.ssbo(5)));
 
-        //================= raster cull pipeline (depth-only, no writes) =================
+        //Raster cull pipeline (depth-only).
         var cullDesc = new VkShaderPipeline.GfxDesc();
         cullDesc.name = "cullraster";
         cullDesc.vertGlsl = VkShaderSource.load("voxy:lod/gl46/cull/raster.vert", VkShaderSource.defs().props(properties).build());
@@ -182,7 +160,7 @@ public class VkTerrainRenderer {
         opaque.depthWrite = true;
         opaque.depthCompare = VkCmd.closerEqual(this.properties);
         opaque.blend = false;
-        opaque.stencilTestEqual1 = true;//only render where vanilla terrain is absent
+        opaque.stencilTestEqual1 = true;
         opaque.bindings = bindings;
         this.terrainOpaque = new VkShaderPipeline(this.ctx, opaque);
 
@@ -206,7 +184,7 @@ public class VkTerrainRenderer {
         this.pipelineDepthFormat = df;
     }
 
-    //==================================================================================
+    //---
 
     private final Matrix4f uniformScratch = new Matrix4f();
     public void uploadUniform(VkViewport viewport) {
@@ -224,27 +202,21 @@ public class VkTerrainRenderer {
         this.uploadStream.commit();
     }
 
-    /** Mirrors MDIC buildDrawCalls: prep -> raster cull -> cmdgen -> translucency sort. */
+    /** Mirrors MDIC buildDrawCalls. */
     public void buildDrawCalls(VkViewport viewport) {
         if (this.geometry.getSectionCount() == 0) return;
         var cmd = this.ctx.cmd();
         this.uploadUniform(viewport);
 
         if (!this.ctx.vk().hasDrawIndirectCount) {
-            //Fixed-count fallback (MoltenVK): renderTerrain issues
-            // vkCmdDrawIndexedIndirect with maxDrawCount rather than a GPU-sourced
-            // count, so trailing slots past the actual command count would be read
-            // as stale draw commands from the previous frame. Zero the three
-            // drawCallBuffer slices (opaque / temporal / translucent) here so any
-            // un-overwritten slot reads as instanceCount=0 (a no-op draw). The
-            // cmdgen compute below then writes the real commands on top; the fill
-            // completes (with a barrier) before the cmdgen dispatch reads the buffer.
-            // Gated to the fallback path only — the tight-count path (desktop Vulkan)
-            // never reads past the actual count, so it pays nothing here.
+            //MoltenVK fallback: zero trailing slots so stale draws read as no-ops.
             long stride = 5L * 4;
-            vkCmdFillBuffer(cmd, viewport.drawCallBuffer.buffer, 0L, VkViewport.OPAQUE_DRAW_COUNT * stride, 0);
-            vkCmdFillBuffer(cmd, viewport.drawCallBuffer.buffer, TEMPORAL_OFFSET * stride, VkViewport.TEMPORAL_DRAW_COUNT * stride, 0);
-            vkCmdFillBuffer(cmd, viewport.drawCallBuffer.buffer, TRANSLUCENT_OFFSET * stride, VkViewport.TRANSLUCENT_DRAW_COUNT * stride, 0);
+            int opaqueCap = Math.min((int) (this.geometry.getSectionCount() * 4.4 + 128), VkViewport.OPAQUE_DRAW_COUNT);
+            int temporalCap = Math.min(this.geometry.getSectionCount(), VkViewport.TEMPORAL_DRAW_COUNT);
+            int translucentCap = Math.min(this.geometry.getSectionCount(), VkViewport.TRANSLUCENT_DRAW_COUNT);
+            vkCmdFillBuffer(cmd, viewport.drawCallBuffer.buffer, 0L, opaqueCap * stride, 0);
+            vkCmdFillBuffer(cmd, viewport.drawCallBuffer.buffer, TEMPORAL_OFFSET * stride, temporalCap * stride, 0);
+            vkCmdFillBuffer(cmd, viewport.drawCallBuffer.buffer, TRANSLUCENT_OFFSET * stride, translucentCap * stride, 0);
             this.ctx.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT);
         }
@@ -258,25 +230,15 @@ public class VkTerrainRenderer {
                         .push(cmd);
             }
             vkCmdDispatch(cmd, 1, 1, 1);
-            //prep (compute) wrote drawCountCallBuffer, which has TWO consumers:
-            // the raster-cull draw below reads cullDrawIndirectCommand (@24) from
-            // DRAW_INDIRECT, and cmdgen atomicAdds opaque/translucent/temporal
-            // DrawCount (@12/@16/@20) from COMPUTE. computeToDrawBarrier() scopes
-            // the destination to DRAW_INDIRECT|VERTEX only, so prep -> cmdgen had
-            // no memory dependency at all: cmdgen's atomics could observe the
-            // PREVIOUS frame's counters instead of prep's zeroes, placing draw
-            // commands past their pass region with a baseInstance that no longer
-            // matches the positionBuffer slot written for that section. Desktop
-            // drivers happened to make the writes visible anyway; MoltenVK does
-            // not. Include COMPUTE (read+write, the atomics are RMW) in the dst.
+            //prep -> cmdgen: include COMPUTE in dst barrier (atomics need it on MoltenVK).
             this.ctx.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT
                             | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
         }
 
-        {//raster occlusion test into the visibility buffer (depth-tested box draw, no writes)
-            this.beginRendering(cmd, viewport, 0L, true);//depth-only
+        {//raster occlusion cull (depth-only)
+            this.beginRendering(cmd, viewport, 0L, true);
             this.cullRaster.bind(cmd);
             VkCmd.setViewportScissor(cmd, viewport.width, viewport.height);
             try (var b = this.cullRaster.binder()) {
@@ -289,16 +251,13 @@ public class VkTerrainRenderer {
             vkCmdBindIndexBuffer(cmd, this.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT16);
             vkCmdDrawIndexedIndirect(cmd, viewport.drawCountCallBuffer.buffer, 6 * 4, 1, 20);
             vkCmdEndRenderingKHR(cmd);
-            //The raster-cull draw wrote visibilityData (SSBO) from the fragment
-            // shader; the consumer is the cmdgen compute. Scope to those stages
-            // instead of the previous fullBarrier (ALL_COMMANDS -> ALL_COMMANDS)
-            // which forced a full pipeline stall on every frame.
+            //Cull fragment -> cmdgen compute: scoped barrier.
             this.ctx.barrier(VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                     VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         }
 
-        {//command generation (indirect dispatch sized by prep)
+        {//command generation
             vkCmdFillBuffer(cmd, this.distanceCountBuffer.buffer, 0, 1024L * 4, 0);
             this.ctx.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
@@ -315,8 +274,7 @@ public class VkTerrainRenderer {
                         .push(cmd);
             }
             vkCmdDispatchIndirect(cmd, viewport.drawCountCallBuffer.buffer, 0);
-            //cmdgen -> prefixsum: both compute. The draw that consumes these
-            // indirect commands is guarded by renderTerrain's own barrier.
+            //cmdgen -> prefixsum: compute barrier.
             this.ctx.computeToComputeBarrier();
         }
 
@@ -326,7 +284,7 @@ public class VkTerrainRenderer {
                 b.ssbo(0, this.distanceCountBuffer).push(cmd);
             }
             vkCmdDispatch(cmd, 1, 1, 1);
-            //prefixsum -> translucentGen: both compute.
+            //prefixsum -> translucentGen: compute barrier.
             this.ctx.computeToComputeBarrier();
 
             this.translucentGen.bind(cmd);
@@ -340,84 +298,32 @@ public class VkTerrainRenderer {
                         .push(cmd);
             }
             vkCmdDispatchIndirect(cmd, viewport.drawCountCallBuffer.buffer, 0);
-            //No trailing barrier here: the translucent commands written into
-            // drawCallBuffer are read by renderTranslucent's renderTerrain, which
-            // issues its own COMPUTE|TRANSFER -> DRAW_INDIRECT|VERTEX|FRAGMENT
-            // barrier (line ~355) before drawing. The previous computeToAllBarrier
-            // here was redundant with that draw barrier and serialised the GPU.
+            //No trailing barrier: renderTerrain issues its own.
         }
 
-        if (!this.ctx.vk().hasDrawIndirectCount) {
-            //Read the three real per-pass draw counts back to the CPU so next frame's
-            // fixed-count multi-draws track them instead of the worst-case section
-            // cap (see fixedCountBudget). The counts live at opaque@12 / translucent@16
-            // / temporal@20 in drawCountCallBuffer; download those 12 bytes on the same
-            // async, event-retired path the traversal request readback already uses
-            // (commit() scopes its own COMPUTE->TRANSFER->HOST barriers). The callback
-            // runs on the render thread from pollRetired, so the plain field writes are
-            // race-free. Desktop (drawIndirectCount) neither needs nor issues this.
-            this.downloadStream.download(viewport.drawCountCallBuffer, 12, 12, (ptr, size) -> {
-                this.fbOpaqueDraws = clampCount(MemoryUtil.memGetInt(ptr), VkViewport.OPAQUE_DRAW_COUNT);
-                this.fbTranslucentDraws = clampCount(MemoryUtil.memGetInt(ptr + 4), VkViewport.TRANSLUCENT_DRAW_COUNT);
-                this.fbTemporalDraws = clampCount(MemoryUtil.memGetInt(ptr + 8), VkViewport.TEMPORAL_DRAW_COUNT);
-                this.hasAnyReadback = true;
-            });
-        }
-    }
-
-    private static int clampCount(int value, int cap) {
-        return value < 0 ? 0 : Math.min(value, cap);
-    }
-
-    /**
-     * Draw-count upper bound for one terrain pass. On desktop Vulkan the GPU sources
-     * the real count from drawCountCallBuffer (vkCmdDrawIndexedIndirectCount), so the
-     * section-derived {@code cap} is only a ceiling and is returned unchanged. On
-     * MoltenVK — which lacks drawIndirectCount — the fixed-count multi-draw instead
-     * iterates whatever count it is handed, encoding one Metal draw per slot; handing
-     * it the section-count ceiling means tens of thousands of no-op draws every frame,
-     * invariant to where the camera looks (this is why sky/occlusion culling produced
-     * no Mac speed-up). Bounding it to the last-known real count plus headroom lets the
-     * culling actually reduce Mac draw cost. The full drawCallBuffer is still zeroed per
-     * frame, so every slot within the ceiling reads either a real command or a no-op —
-     * a transient under-estimate during fast camera motion only drops a few LOD draws
-     * for a frame or two, never reads stale geometry.
-     */
-    private int fixedCountBudget(int lastKnownCount, int headroom, int cap) {
-        if (this.ctx.vk().hasDrawIndirectCount) return cap;
-        if (!this.hasAnyReadback) return 0;//first frame: no draw calls generated yet
-        int budget = (int) (lastKnownCount * 1.5f) + headroom;
-        return Math.min(cap, Math.max(0, budget));
     }
 
     public void renderOpaque(VkViewport viewport, boolean clearTargets) {
-        //Build pipelines BEFORE the section-count guard: within a frame geometry is
-        // uploaded after this call (nodeManager.tick/buildDrawCalls), so renderTemporal/
-        // renderTranslucent can see sectionCount>0 later this same frame. If we skipped
-        // ensure here when the count is momentarily 0, those calls would bind a null
-        // pipeline. ensureTerrainPipelines is idempotent (no-op once built for the format).
+        //Ensure pipelines before section-count guard (idempotent).
         this.ensureTerrainPipelines(viewport);
         if (this.geometry.getSectionCount() == 0) return;
         this.uploadUniform(viewport);
-        int cap = Math.min((int) (this.geometry.getSectionCount() * 4.4 + 128), VkViewport.OPAQUE_DRAW_COUNT);
-        int maxDraw = this.fixedCountBudget(this.fbOpaqueDraws, 1024, cap);
+        int maxDraw = Math.min((int) (this.geometry.getSectionCount() * 4.4 + 128), VkViewport.OPAQUE_DRAW_COUNT);
         this.renderTerrain(viewport, viewport.colour.view, this.terrainOpaque, 0, 4 * 3, maxDraw, clearTargets);
     }
 
     public void renderTemporal(VkViewport viewport) {
         this.ensureTerrainPipelines(viewport);
         if (this.geometry.getSectionCount() == 0) return;
-        int cap = Math.min(this.geometry.getSectionCount(), VkViewport.TEMPORAL_DRAW_COUNT);
-        int maxDraw = this.fixedCountBudget(this.fbTemporalDraws, 256, cap);
+        int maxDraw = Math.min(this.geometry.getSectionCount(), VkViewport.TEMPORAL_DRAW_COUNT);
         this.renderTerrain(viewport, viewport.colour.view, this.terrainOpaque, TEMPORAL_OFFSET * 5L * 4, 4 * 5, maxDraw, false);
     }
 
-    /** Translucents draw onto the SSAO output (mirrors the GL fbSSAO target). */
+    /** Translucents draw onto SSAO output. */
     public void renderTranslucent(VkViewport viewport) {
         this.ensureTerrainPipelines(viewport);
         if (this.geometry.getSectionCount() == 0) return;
-        int cap = Math.min(this.geometry.getSectionCount(), VkViewport.TRANSLUCENT_DRAW_COUNT);
-        int maxDraw = this.fixedCountBudget(this.fbTranslucentDraws, 256, cap);
+        int maxDraw = Math.min(this.geometry.getSectionCount(), VkViewport.TRANSLUCENT_DRAW_COUNT);
         this.renderTerrain(viewport, viewport.colourSSAO.view, this.terrainTranslucent, TRANSLUCENT_OFFSET * 5L * 4, 4 * 4, maxDraw, false);
     }
 
@@ -429,7 +335,7 @@ public class VkTerrainRenderer {
                 VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
                 VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDEX_READ_BIT);
 
-        this.beginRendering(cmd, viewport, colorView, !clear);//LOAD unless first pass (which cleared via compositor setup)
+        this.beginRendering(cmd, viewport, colorView, !clear); //LOAD unless first pass
         pipeline.bind(cmd);
         VkCmd.setViewportScissor(cmd, viewport.width, viewport.height);
         long lightmapView = VkFrameHost.lightmapView();
@@ -446,33 +352,19 @@ public class VkTerrainRenderer {
         }
         vkCmdBindIndexBuffer(cmd, this.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT16);
         if (this.ctx.vk().hasDrawIndirectCount) {
-            //Tight-count path: the GPU reads the actual draw count from the count
-            // buffer each frame. Requires the drawIndirectCount Vulkan 1.2 feature
-            // to be enabled on the device — desktop Vulkan (NVIDIA/AMD/Intel) enables
-            // it; MoltenVK does not (see the else branch).
+            //Desktop: tight count from GPU buffer.
             vkCmdDrawIndexedIndirectCount(cmd,
                     viewport.drawCallBuffer.buffer, indirectOffset,
                     viewport.drawCountCallBuffer.buffer, drawCountOffset,
                     maxDrawCount, 5 * 4);
         } else {
-            //MoltenVK/macOS fixed-count fallback: drawIndirectCount is not enabled
-            // on MC's adopted Vulkan device (MC's DeviceFeatures record does not
-            // even track it), and calling the function without the feature enabled
-            // is invalid usage that MoltenVK degenerates. The drawCallBuffer slice
-            // for this pass is zeroed per frame in buildDrawCalls (gated to this
-            // fallback path) so trailing slots past the actual command count read
-            // instanceCount=0 (no-op draws); a fixed-count multi-draw over the
-            // clamped maxDrawCount is therefore correct, just less tight.
+            //MoltenVK: fixed count, trailing slots zeroed as no-ops.
             vkCmdDrawIndexedIndirect(cmd, viewport.drawCallBuffer.buffer, indirectOffset, maxDrawCount, 5 * 4);
         }
         vkCmdEndRenderingKHR(cmd);
     }
 
-    /**
-     * Begin dynamic rendering over the offscreen targets (always LOAD; clears
-     * happen in the depth-setup pass). {@code colorView} selects the colour
-     * attachment (main colour vs SSAO output); 0 = depth-only.
-     */
+    /** Begin dynamic rendering. colorView=0 for depth-only. */
     private void beginRendering(VkCommandBuffer cmd, VkViewport viewport,
                                 long colorView, boolean load) {
         try (MemoryStack stack = stackPush()) {
@@ -513,9 +405,7 @@ public class VkTerrainRenderer {
             this.terrainOpaque.free();
             this.terrainTranslucent.free();
         }
-        //depthBoundSampler/lightmapSampler come from VkImage2D.createSampler's
-        // device-lifetime cache (shared handles); never destroy them per-object
-        // (multi-free vkDestroySampler -> SIGSEGV on world unload).
+        //Samplers are device-lifetime cached; don't destroy per-object.
         this.uniform.free();
         this.distanceCountBuffer.free();
         this.indexBuffer.free();

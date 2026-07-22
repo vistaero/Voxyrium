@@ -46,13 +46,18 @@ public class VkTerrainRenderer {
 
     //MoltenVK fixed-count fallback state: the last-known REAL per-pass draw counts,
     // read back from drawCountCallBuffer each frame. On desktop the GPU sources
-    // these counts itself via vkCmdDrawIndexedIndirectCount. Initialised to the
-    // per-pass caps so the first few frames — before the first readback lands —
-    // behave like the old section-count fallback, then converge to the true
-    // visible counts.
-    private int fbOpaqueDraws = VkViewport.OPAQUE_DRAW_COUNT;
-    private int fbTranslucentDraws = VkViewport.TRANSLUCENT_DRAW_COUNT;
-    private int fbTemporalDraws = VkViewport.TEMPORAL_DRAW_COUNT;
+    // these counts itself via vkCmdDrawIndexedIndirectCount. Initialised to 0 and
+    // gated by hasAnyReadback: before the first async readback lands, fixedCountBudget
+    // returns 0 — no draws at all — so renderOpaque (which runs BEFORE buildDrawCalls
+    // and uses last frame's commands) skips entirely on the first frame with geometry.
+    // Without this, the headroom floor (1024/256/256) would issue 1024+ no-op Metal
+    // draws/frame from the zeroed drawCallBuffer, causing the "2D floating blocks"
+    // loading glitch on macOS. Once the first readback lands, hasAnyReadback flips
+    // true and fixedCountBudget operates normally (lastKnown*1.5 + headroom).
+    private int fbOpaqueDraws = 0;
+    private int fbTranslucentDraws = 0;
+    private int fbTemporalDraws = 0;
+    private boolean hasAnyReadback = false;
 
     private final VkBuffer uniform;
     private final VkBuffer distanceCountBuffer;
@@ -253,9 +258,21 @@ public class VkTerrainRenderer {
                         .push(cmd);
             }
             vkCmdDispatch(cmd, 1, 1, 1);
-            //prep (compute) wrote the cull indirect args; the raster-cull draw
-            // reads them. Scope to COMPUTE -> DRAW_INDIRECT|VERTEX_INPUT.
-            this.ctx.computeToDrawBarrier();
+            //prep (compute) wrote drawCountCallBuffer, which has TWO consumers:
+            // the raster-cull draw below reads cullDrawIndirectCommand (@24) from
+            // DRAW_INDIRECT, and cmdgen atomicAdds opaque/translucent/temporal
+            // DrawCount (@12/@16/@20) from COMPUTE. computeToDrawBarrier() scopes
+            // the destination to DRAW_INDIRECT|VERTEX only, so prep -> cmdgen had
+            // no memory dependency at all: cmdgen's atomics could observe the
+            // PREVIOUS frame's counters instead of prep's zeroes, placing draw
+            // commands past their pass region with a baseInstance that no longer
+            // matches the positionBuffer slot written for that section. Desktop
+            // drivers happened to make the writes visible anyway; MoltenVK does
+            // not. Include COMPUTE (read+write, the atomics are RMW) in the dst.
+            this.ctx.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT
+                            | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
         }
 
         {//raster occlusion test into the visibility buffer (depth-tested box draw, no writes)
@@ -343,6 +360,7 @@ public class VkTerrainRenderer {
                 this.fbOpaqueDraws = clampCount(MemoryUtil.memGetInt(ptr), VkViewport.OPAQUE_DRAW_COUNT);
                 this.fbTranslucentDraws = clampCount(MemoryUtil.memGetInt(ptr + 4), VkViewport.TRANSLUCENT_DRAW_COUNT);
                 this.fbTemporalDraws = clampCount(MemoryUtil.memGetInt(ptr + 8), VkViewport.TEMPORAL_DRAW_COUNT);
+                this.hasAnyReadback = true;
             });
         }
     }
@@ -367,6 +385,7 @@ public class VkTerrainRenderer {
      */
     private int fixedCountBudget(int lastKnownCount, int headroom, int cap) {
         if (this.ctx.vk().hasDrawIndirectCount) return cap;
+        if (!this.hasAnyReadback) return 0;//first frame: no draw calls generated yet
         int budget = (int) (lastKnownCount * 1.5f) + headroom;
         return Math.min(cap, Math.max(0, budget));
     }

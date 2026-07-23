@@ -100,13 +100,8 @@ public final class VkImage2D {
         return pView.get(0);
     }
 
-    /** Whole-image layout transition. UNDEFINED-layout images get TOP_OF_PIPE/0
-     *  (no prior producer to synchronize — contents are discarded). */
+    /** Whole-image layout transition recorded into the current frame commands. */
     public void transition(int newLayout, int srcStage, int srcAccess, int dstStage, int dstAccess) {
-        if (this.currentLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
-            srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            srcAccess = 0;
-        }
         try (MemoryStack stack = stackPush()) {
             var imb = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(srcAccess).dstAccessMask(dstAccess)
@@ -120,27 +115,27 @@ public final class VkImage2D {
     }
 
     //Batched transition: records multiple images' layout changes in a single
-    // vkCmdPipelineBarrier. UNDEFINED-layout images get TOP_OF_PIPE/0 (see transition()).
+    // vkCmdPipelineBarrier (one call instead of N). Each image's transition is
+    // described by its own (newLayout, srcStage, srcAccess, dstStage, dstAccess)
+    // tuple; the call uses the union of all src stages -> union of all dst stages
+    // so the single barrier covers every image's dependency.
     public record BatchEntry(VkImage2D image, int newLayout, int srcAccess, int dstAccess) {}
     public static void transitionBatch(java.util.List<BatchEntry> entries, int unionSrcStage, int unionDstStage) {
         if (entries.isEmpty()) return;
-        boolean anyUndefined = false;
         try (MemoryStack stack = stackPush()) {
             var imbs = VkImageMemoryBarrier.calloc(entries.size(), stack);
             for (int i = 0; i < entries.size(); i++) {
                 var e = entries.get(i);
-                boolean undef = e.image.currentLayout == VK_IMAGE_LAYOUT_UNDEFINED;
-                if (undef) anyUndefined = true;
                 imbs.get(i).sType$Default()
-                        .srcAccessMask(undef ? 0 : e.srcAccess).dstAccessMask(e.dstAccess)
+                        .srcAccessMask(e.srcAccess).dstAccessMask(e.dstAccess)
                         .oldLayout(e.image.currentLayout).newLayout(e.newLayout)
                         .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                         .image(e.image.image)
                         .subresourceRange().aspectMask(e.image.aspect).levelCount(e.image.mipLevels).layerCount(1);
             }
+            //Use the first image's ctx (all images share the same VkFrameCtx in Voxy).
             var cmd = entries.get(0).image.ctx.cmd();
-            int actualSrcStage = anyUndefined ? unionSrcStage | VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : unionSrcStage;
-            vkCmdPipelineBarrier(cmd, actualSrcStage, unionDstStage, 0, null, null, imbs);
+            vkCmdPipelineBarrier(cmd, unionSrcStage, unionDstStage, 0, null, null, imbs);
             for (var e : entries) e.image.currentLayout = e.newLayout;
         }
     }

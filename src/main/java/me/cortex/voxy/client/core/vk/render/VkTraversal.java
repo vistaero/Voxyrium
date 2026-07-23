@@ -239,14 +239,6 @@ public class VkTraversal {
 
         //Download + reset the request queue
         this.downloadStream.download(this.requestBuffer, this::forwardDownloadResult);
-        //WAR: download() already recorded the vkCmdCopyBuffer that READS
-        // requestBuffer, and the fill below WRITES it. Two transfer commands in
-        // one command buffer are not implicitly ordered, so without this barrier
-        // the reset could land before/while the copy reads — zeroing the request
-        // count and silently dropping a frame of node requests. Desktop drivers
-        // serialise blits in practice; Metal's blit encoders need not.
-        this.ctx.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
         vkCmdFillBuffer(this.ctx.cmd(), this.requestBuffer.buffer, 0, 4, 0);
         //The download copy read the requestBuffer (TRANSFER read); the fill
         // resets it (TRANSFER write). The next reader is next frame's traversal

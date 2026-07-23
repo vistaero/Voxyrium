@@ -32,9 +32,12 @@ public final class VkFrameHost {
     }
 
     //Layout-transition one of MC's own images (colour/depth attachment) with
-    // scoped stage/access masks matching the actual producer/consumer.
-    // Depth-stencil images transition both aspects together (DEPTH|STENCIL)
-    // since Voxy never enables separateDepthStencilLayouts.
+    // scoped stage/access masks matching the actual producer/consumer — MC just
+    // rendered into the depth attachment (LATE_FRAGMENT_TESTS write), and Voxy
+    // samples it (FRAGMENT_SHADER read), so the previous ALL_COMMANDS masks
+    // (which serialised the transition with unrelated compute) are narrowed.
+    // Used to bracket sampling of MC's attachments mid-frame (they live in
+    // ATTACHMENT_OPTIMAL otherwise).
     public static void transitionMcImage(VkCommandBuffer cmd, GpuTextureView view,
                                           boolean depth, int oldLayout, int newLayout) {
         try (MemoryStack stack = stackPush()) {
@@ -70,8 +73,6 @@ public final class VkFrameHost {
                     dstAccess = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
                 }
             }
-            //Depth-stencil: transition both aspects together.
-            int aspectMask = depth ? (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT) : VK_IMAGE_ASPECT_COLOR_BIT;
             var imb = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(srcAccess).dstAccessMask(dstAccess)
                     .oldLayout(oldLayout).newLayout(newLayout)
@@ -79,7 +80,7 @@ public final class VkFrameHost {
                     .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                     .image(image);
             imb.subresourceRange()
-                    .aspectMask(aspectMask)
+                    .aspectMask(depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT)
                     .levelCount(VK_REMAINING_MIP_LEVELS)
                     .layerCount(VK_REMAINING_ARRAY_LAYERS);
             vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, null, null, imb);

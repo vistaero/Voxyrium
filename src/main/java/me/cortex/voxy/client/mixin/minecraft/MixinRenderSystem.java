@@ -15,6 +15,6 @@ public class MixinRenderSystem {
     //We need to inject before iris to initalize our systems
     @Inject(method = "initRenderer", order = 900, remap = false, at = @At("RETURN"))
     private static void voxy$injectInit(GpuDevice device, CallbackInfo ci) {
-        VoxyClient.initVoxyClient();
+        VoxyClient.initVoxyClient(device);
     }
 }

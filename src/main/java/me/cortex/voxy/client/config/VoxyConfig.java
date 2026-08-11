@@ -5,6 +5,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
 import me.cortex.voxy.client.core.SSAO;
+import me.cortex.voxy.client.core.backend.VoxyGraphicsBackend;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.cpu.CpuLayout;
 import me.cortex.voxy.commonImpl.VoxyCommon;
@@ -100,6 +101,9 @@ public class VoxyConfig {
     }
 
     public boolean isRenderingEnabled() {
-        return VoxyCommon.isAvailable() && this.enabled && this.enableRendering;
+        return VoxyCommon.isAvailable()
+                && VoxyGraphicsBackend.current().hasImplementedRenderer()
+                && this.enabled
+                && this.enableRendering;
     }
 }

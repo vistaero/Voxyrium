@@ -1,5 +1,7 @@
 package me.cortex.voxy.client;
 
+import com.mojang.blaze3d.systems.GpuDevice;
+import me.cortex.voxy.client.core.backend.VoxyGraphicsBackend;
 import me.cortex.voxy.client.core.gl.Capabilities;
 import me.cortex.voxy.client.core.rendering.util.SharedIndexBuffer;
 import me.cortex.voxy.common.Logger;
@@ -20,7 +22,22 @@ import java.util.function.Function;
 public class VoxyClient implements ClientModInitializer {
     private static final HashSet<String> FREX = new HashSet<>();
     private static FileLock EXCLUSIVE_LOCK;
-    public static void initVoxyClient() {
+    public static void initVoxyClient(GpuDevice device) {
+        VoxyGraphicsBackend.initialize(device);
+
+        // Keep the non-rendering client services available on every Blaze3D backend.
+        // The current renderer directly uses OpenGL and must not be initialized on Vulkan.
+        if (!VoxyGraphicsBackend.current().hasImplementedRenderer()) {
+            if (VoxyGraphicsBackend.current().supportsBlaze3dProbe()) {
+                Logger.info("Voxy OpenGL renderer is disabled on Vulkan; enabling the Blaze3D renderer probe through Sodium.");
+            } else {
+                Logger.warn("Voxy rendering is disabled: no renderer is available for Minecraft's "
+                        + VoxyGraphicsBackend.current() + " backend.");
+            }
+            VoxyCommon.setInstanceFactory(VoxyClientInstance::new);
+            return;
+        }
+
         Capabilities.init();//Ensure clinit is called
 
         if (Capabilities.INSTANCE.hasBrokenDepthSampler) {

@@ -2,6 +2,8 @@ package me.cortex.voxy.client.core.backend.blaze3d;
 
 import com.mojang.blaze3d.PrimitiveTopology;
 import com.mojang.blaze3d.buffers.GpuBuffer;
+import com.mojang.blaze3d.pipeline.BlendFunction;
+import com.mojang.blaze3d.pipeline.ColorTargetState;
 import com.mojang.blaze3d.pipeline.DepthStencilState;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.platform.CompareOp;
@@ -93,9 +95,13 @@ public final class VoxyBlaze3DProbeRenderer {
     private static final RenderPipeline MARKER_PIPELINE = createTexturedMarkerPipeline();
     // Minecraft 26.2 uses reverse-Z depth: larger values are closer to the camera.
     private static final RenderPipeline LOD_PIPELINE = createTexturedTerrainPipeline(
-            "blaze3d_lod_probe_terrain", CompareOp.GREATER_THAN, true);
+            "blaze3d_lod_probe_terrain", CompareOp.GREATER_THAN, true, false);
+    private static final RenderPipeline LOD_WATER_PIPELINE = createTexturedTerrainPipeline(
+            "blaze3d_lod_probe_water", CompareOp.GREATER_THAN, false, true);
     private static final RenderPipeline LOD_OVERLAY_PIPELINE = createTexturedTerrainPipeline(
-            "blaze3d_lod_probe_terrain_overlay", CompareOp.ALWAYS_PASS, false);
+            "blaze3d_lod_probe_terrain_overlay", CompareOp.ALWAYS_PASS, false, false);
+    private static final RenderPipeline LOD_WATER_OVERLAY_PIPELINE = createTexturedTerrainPipeline(
+            "blaze3d_lod_probe_water_overlay", CompareOp.ALWAYS_PASS, false, true);
 
     private static RenderPipeline createTexturedMarkerPipeline() {
         return RenderPipeline.builder()
@@ -111,8 +117,8 @@ public final class VoxyBlaze3DProbeRenderer {
                 .build();
     }
 
-    private static RenderPipeline createTexturedTerrainPipeline(String name, CompareOp depthTest, boolean writeDepth) {
-        return RenderPipeline.builder()
+    private static RenderPipeline createTexturedTerrainPipeline(String name, CompareOp depthTest, boolean writeDepth, boolean translucent) {
+        RenderPipeline.Builder builder = RenderPipeline.builder()
             .withLocation(Identifier.fromNamespaceAndPath("voxy", name))
             .withBindGroupLayout(BindGroupLayouts.MATRICES_PROJECTION)
             .withBindGroupLayout(BindGroupLayouts.FOG)
@@ -122,8 +128,11 @@ public final class VoxyBlaze3DProbeRenderer {
             .withVertexBinding(0, LOD_VERTEX_FORMAT)
             .withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
             .withDepthStencilState(new DepthStencilState(depthTest, writeDepth))
-            .withCull(true)
-            .build();
+            .withCull(true);
+        if (translucent) {
+            builder.withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT));
+        }
+        return builder.build();
     }
 
     private static GpuBuffer markerVertexBuffer;
@@ -234,8 +243,26 @@ public final class VoxyBlaze3DProbeRenderer {
                     pass.bindTexture("Sampler2", Minecraft.getInstance().gameRenderer.levelLightmap(),
                             RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
                     for (LodSectionMesh mesh : lodMeshes.values()) {
-                        pass.setVertexBuffer(0, mesh.vertexBuffer().slice());
-                        pass.draw(mesh.vertexCount(), 1, 0, 0);
+                        if (mesh.opaqueVertexCount() != 0) {
+                            pass.setVertexBuffer(0, mesh.opaqueVertexBuffer().slice());
+                            pass.draw(mesh.opaqueVertexCount(), 1, 0, 0);
+                        }
+                    }
+
+                    List<LodSectionMesh> waterMeshes = lodMeshes.values().stream()
+                            .filter(mesh -> mesh.waterVertexCount() != 0)
+                            .sorted(Comparator.comparingDouble((LodSectionMesh mesh) -> distanceSquaredToCamera(mesh.coordinate(), camera)).reversed())
+                            .toList();
+                    if (!waterMeshes.isEmpty()) {
+                        pass.setPipeline(renderLodAboveTerrain ? LOD_WATER_OVERLAY_PIPELINE : LOD_WATER_PIPELINE);
+                        pass.setUniform("Fog", RenderSystem.getShaderFog());
+                        pass.bindTexture("Sampler0", blockAtlas.getTextureView(), blockAtlas.getSampler());
+                        pass.bindTexture("Sampler2", Minecraft.getInstance().gameRenderer.levelLightmap(),
+                                RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
+                        for (LodSectionMesh mesh : waterMeshes) {
+                            pass.setVertexBuffer(0, mesh.waterVertexBuffer().slice());
+                            pass.draw(mesh.waterVertexCount(), 1, 0, 0);
+                        }
                     }
                 }
             }
@@ -614,26 +641,49 @@ public final class VoxyBlaze3DProbeRenderer {
                 copySectionData(world, lodLevel, coordinate.x(), coordinate.y() + 1, coordinate.z()),
                 copySectionData(world, lodLevel, coordinate.x(), coordinate.y(), coordinate.z() - 1),
                 copySectionData(world, lodLevel, coordinate.x(), coordinate.y(), coordinate.z() + 1));
-        int quadCount = countModelQuads(neighborhood, world.getMapper(), fallbackSprite,
+        QuadCounts quadCounts = countModelQuads(neighborhood, world.getMapper(), fallbackSprite,
                 coordinate, voxelSize(lodLevel), vanillaBoundary);
-        if (quadCount == 0) {
+        if (quadCounts.isEmpty()) {
             removeLodMesh(coordinate.key());
             lodMeshFingerprints.put(coordinate.key(), fingerprint);
             return;
         }
 
+        GpuBuffer opaqueBuffer = buildLodMesh(coordinate, neighborhood, world.getMapper(), fallbackSprite,
+                voxelSize(lodLevel), vanillaBoundary, false, quadCounts.opaque());
+        GpuBuffer waterBuffer = buildLodMesh(coordinate, neighborhood, world.getMapper(), fallbackSprite,
+                voxelSize(lodLevel), vanillaBoundary, true, quadCounts.water());
+        replaceLodMesh(coordinate, opaqueBuffer, quadCounts.opaque() * 6, waterBuffer, quadCounts.water() * 6);
+        lodMeshFingerprints.put(coordinate.key(), fingerprint);
+    }
+
+    @Nullable
+    private static GpuBuffer buildLodMesh(LodSectionCoordinate coordinate,
+                                          SectionNeighborhood neighborhood,
+                                          Mapper mapper,
+                                          TextureAtlasSprite fallbackSprite,
+                                          int voxelSize,
+                                          VanillaRenderBoundary vanillaBoundary,
+                                          boolean waterOnly,
+                                          int quadCount) {
+        if (quadCount == 0) {
+            return null;
+        }
         int vertexCount = quadCount * 6;
         int bufferSize = vertexCount * LOD_VERTEX_FORMAT.getVertexSize();
         try (ByteBufferBuilder byteBuffer = ByteBufferBuilder.exactlySized(bufferSize)) {
             BufferBuilder builder = new BufferBuilder(byteBuffer, PrimitiveTopology.TRIANGLES, LOD_VERTEX_FORMAT);
-            int emittedQuads = emitModelQuads(builder, neighborhood, coordinate.x(), coordinate.y(), coordinate.z(), voxelSize(lodLevel),
-                    quadCount, world.getMapper(), fallbackSprite, coordinate, vanillaBoundary);
+            int emittedQuads = emitModelQuads(builder, neighborhood, coordinate.x(), coordinate.y(), coordinate.z(), voxelSize,
+                    quadCount, mapper, fallbackSprite, coordinate, vanillaBoundary, waterOnly);
             if (emittedQuads != quadCount) {
-                throw new IllegalStateException("LoD mesh quad count changed while building: expected " + quadCount + ", got " + emittedQuads);
+                throw new IllegalStateException("LoD " + (waterOnly ? "water" : "opaque")
+                        + " mesh quad count changed while building: expected " + quadCount + ", got " + emittedQuads);
             }
             try (MeshData mesh = builder.buildOrThrow()) {
-                replaceLodMesh(coordinate.key(), mesh, vertexCount);
-                lodMeshFingerprints.put(coordinate.key(), fingerprint);
+                return RenderSystem.getDevice().createBuffer(
+                        () -> "Voxy Blaze3D LoD " + (waterOnly ? "water " : "opaque ") + WorldEngine.pprintPos(coordinate.key()),
+                        GpuBuffer.USAGE_VERTEX | GpuBuffer.USAGE_COPY_DST,
+                        mesh.vertexBuffer());
             }
         }
     }
@@ -680,13 +730,14 @@ public final class VoxyBlaze3DProbeRenderer {
         }
     }
 
-    private static int countModelQuads(SectionNeighborhood neighborhood,
-                                       Mapper mapper,
-                                       TextureAtlasSprite fallbackSprite,
-                                       LodSectionCoordinate coordinate,
-                                       int voxelSize,
-                                       VanillaRenderBoundary vanillaBoundary) {
-        int quads = 0;
+    private static QuadCounts countModelQuads(SectionNeighborhood neighborhood,
+                                              Mapper mapper,
+                                              TextureAtlasSprite fallbackSprite,
+                                              LodSectionCoordinate coordinate,
+                                              int voxelSize,
+                                              VanillaRenderBoundary vanillaBoundary) {
+        int opaqueQuads = 0;
+        int waterQuads = 0;
         for (int y = 0; y < 32; y++) {
             for (int z = 0; z < 32; z++) {
                 for (int x = 0; x < 32; x++) {
@@ -698,20 +749,49 @@ public final class VoxyBlaze3DProbeRenderer {
                         continue;
                     }
                     BlockRenderDefinition definition = getBlockRenderDefinition(mapper, Mapper.getBlockId(state), fallbackSprite);
-                    quads += definition.unculledQuads().size();
-                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y - 1, z)) quads += definition.culledQuads(0).size();
-                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y + 1, z)) quads += definition.culledQuads(1).size();
-                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x - 1, y, z)) quads += definition.culledQuads(2).size();
-                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x + 1, y, z)) quads += definition.culledQuads(3).size();
-                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y, z - 1)) quads += definition.culledQuads(4).size();
-                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y, z + 1)) quads += definition.culledQuads(5).size();
-                    if (quads >= MAX_LOD_QUAD_COUNT_PER_SECTION) {
-                        return MAX_LOD_QUAD_COUNT_PER_SECTION;
+                    opaqueQuads += countQuads(definition.unculledQuads(), false);
+                    waterQuads += countQuads(definition.unculledQuads(), true);
+                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y - 1, z)) {
+                        opaqueQuads += countQuads(definition.culledQuads(0), false);
+                        waterQuads += countQuads(definition.culledQuads(0), true);
+                    }
+                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y + 1, z)) {
+                        opaqueQuads += countQuads(definition.culledQuads(1), false);
+                        waterQuads += countQuads(definition.culledQuads(1), true);
+                    }
+                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x - 1, y, z)) {
+                        opaqueQuads += countQuads(definition.culledQuads(2), false);
+                        waterQuads += countQuads(definition.culledQuads(2), true);
+                    }
+                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x + 1, y, z)) {
+                        opaqueQuads += countQuads(definition.culledQuads(3), false);
+                        waterQuads += countQuads(definition.culledQuads(3), true);
+                    }
+                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y, z - 1)) {
+                        opaqueQuads += countQuads(definition.culledQuads(4), false);
+                        waterQuads += countQuads(definition.culledQuads(4), true);
+                    }
+                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y, z + 1)) {
+                        opaqueQuads += countQuads(definition.culledQuads(5), false);
+                        waterQuads += countQuads(definition.culledQuads(5), true);
+                    }
+                    if (opaqueQuads + waterQuads >= MAX_LOD_QUAD_COUNT_PER_SECTION) {
+                        return new QuadCounts(opaqueQuads, waterQuads);
                     }
                 }
             }
         }
-        return quads;
+        return new QuadCounts(opaqueQuads, waterQuads);
+    }
+
+    private static int countQuads(List<ModelQuad> quads, boolean waterOnly) {
+        int count = 0;
+        for (ModelQuad quad : quads) {
+            if (quad.fluidTint() == waterOnly) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private static int emitModelQuads(BufferBuilder builder,
@@ -722,7 +802,8 @@ public final class VoxyBlaze3DProbeRenderer {
                                       Mapper mapper,
                                       TextureAtlasSprite fallbackSprite,
                                       LodSectionCoordinate coordinate,
-                                      VanillaRenderBoundary vanillaBoundary) {
+                                      VanillaRenderBoundary vanillaBoundary,
+                                      boolean waterOnly) {
         int quads = 0;
         int sectionSize = SECTION_EDGE * voxelSize;
         float originX = sectionX * (float) sectionSize;
@@ -744,25 +825,25 @@ public final class VoxyBlaze3DProbeRenderer {
                     float blockZ = originZ + z * voxelSize;
                     BlockRenderDefinition definition = getBlockRenderDefinition(mapper, Mapper.getBlockId(state), fallbackSprite);
                     quads = emitQuads(builder, definition.unculledQuads(), state, mapper, blockX, blockY, blockZ, voxelSize,
-                            brightestLight(neighborhood, x, y, z, state), quads, maxQuads);
+                            brightestLight(neighborhood, x, y, z, state), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
                     if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y - 1, z)) quads = emitQuads(builder, definition.culledQuads(0), state, mapper, blockX, blockY, blockZ, voxelSize,
-                            visibleFaceLight(state, getState(neighborhood, x, y - 1, z)), quads, maxQuads);
+                            visibleFaceLight(state, getState(neighborhood, x, y - 1, z)), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
                     if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y + 1, z)) quads = emitQuads(builder, definition.culledQuads(1), state, mapper, blockX, blockY, blockZ, voxelSize,
-                            visibleFaceLight(state, getState(neighborhood, x, y + 1, z)), quads, maxQuads);
+                            visibleFaceLight(state, getState(neighborhood, x, y + 1, z)), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
                     if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x - 1, y, z)) quads = emitQuads(builder, definition.culledQuads(2), state, mapper, blockX, blockY, blockZ, voxelSize,
-                            visibleFaceLight(state, getState(neighborhood, x - 1, y, z)), quads, maxQuads);
+                            visibleFaceLight(state, getState(neighborhood, x - 1, y, z)), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
                     if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x + 1, y, z)) quads = emitQuads(builder, definition.culledQuads(3), state, mapper, blockX, blockY, blockZ, voxelSize,
-                            visibleFaceLight(state, getState(neighborhood, x + 1, y, z)), quads, maxQuads);
+                            visibleFaceLight(state, getState(neighborhood, x + 1, y, z)), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
                     if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y, z - 1)) quads = emitQuads(builder, definition.culledQuads(4), state, mapper, blockX, blockY, blockZ, voxelSize,
-                            visibleFaceLight(state, getState(neighborhood, x, y, z - 1)), quads, maxQuads);
+                            visibleFaceLight(state, getState(neighborhood, x, y, z - 1)), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
                     if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y, z + 1)) quads = emitQuads(builder, definition.culledQuads(5), state, mapper, blockX, blockY, blockZ, voxelSize,
-                            visibleFaceLight(state, getState(neighborhood, x, y, z + 1)), quads, maxQuads);
+                            visibleFaceLight(state, getState(neighborhood, x, y, z + 1)), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
                 }
             }
@@ -851,14 +932,18 @@ public final class VoxyBlaze3DProbeRenderer {
                                  float blockZ,
                                  int voxelSize,
                                  int packedLight,
+                                 boolean waterOnly,
                                  int emitted,
                                  int maxQuads) {
         for (ModelQuad quad : quads) {
+            if (quad.fluidTint() != waterOnly) {
+                continue;
+            }
             int color = quad.tinted()
                     ? resolveTintColor(mapper, Mapper.getBlockId(state), Mapper.getBiomeId(state), quad.tintIndex(), quad.fluidTint(), blockX, blockY, blockZ)
                     : 0xFFFFFF;
             color = shadeColor(color, quad.direction());
-            addModelQuad(builder, quad, blockX, blockY, blockZ, voxelSize, color, packedLight);
+            addModelQuad(builder, quad, blockX, blockY, blockZ, voxelSize, color, quad.fluidTint() ? 204 : 255, packedLight);
             if (++emitted == maxQuads) {
                 return emitted;
             }
@@ -1056,7 +1141,7 @@ public final class VoxyBlaze3DProbeRenderer {
                 + ", state=" + state
                 + ", fluid=" + (state != null && state.getBlock() instanceof LiquidBlock)
                 + ", quads=" + quadCount
-                + ", uvSpace=atlas, alphaMode=opaque.");
+                + ", uvSpace=atlas, alphaMode=" + (definition.hasFluid() ? "split-water" : "opaque") + ".");
     }
 
     private static Direction faceToDirection(int face) {
@@ -1078,16 +1163,17 @@ public final class VoxyBlaze3DProbeRenderer {
                                      float blockZ,
                                      int voxelSize,
                                      int color,
+                                     int alpha,
                                      int packedLight) {
         int red = color >> 16 & 0xFF;
         int green = color >> 8 & 0xFF;
         int blue = color & 0xFF;
-        addModelVertex(builder, quad, 0, blockX, blockY, blockZ, voxelSize, red, green, blue, packedLight);
-        addModelVertex(builder, quad, 1, blockX, blockY, blockZ, voxelSize, red, green, blue, packedLight);
-        addModelVertex(builder, quad, 2, blockX, blockY, blockZ, voxelSize, red, green, blue, packedLight);
-        addModelVertex(builder, quad, 0, blockX, blockY, blockZ, voxelSize, red, green, blue, packedLight);
-        addModelVertex(builder, quad, 2, blockX, blockY, blockZ, voxelSize, red, green, blue, packedLight);
-        addModelVertex(builder, quad, 3, blockX, blockY, blockZ, voxelSize, red, green, blue, packedLight);
+        addModelVertex(builder, quad, 0, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight);
+        addModelVertex(builder, quad, 1, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight);
+        addModelVertex(builder, quad, 2, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight);
+        addModelVertex(builder, quad, 0, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight);
+        addModelVertex(builder, quad, 2, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight);
+        addModelVertex(builder, quad, 3, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight);
     }
 
     private static void addModelVertex(BufferBuilder builder,
@@ -1100,6 +1186,7 @@ public final class VoxyBlaze3DProbeRenderer {
                                        int red,
                                        int green,
                                        int blue,
+                                       int alpha,
                                        int packedLight) {
         float[] positions = quad.positions();
         float[] uvs = quad.uvs();
@@ -1110,7 +1197,7 @@ public final class VoxyBlaze3DProbeRenderer {
                         blockZ + positions[positionOffset + 2] * voxelSize)
                 .setUv(uvs[uvOffset], uvs[uvOffset + 1])
                 .setUv2((packedLight >>> 4 & 0xF) << 4, (packedLight & 0xF) << 4)
-                .setColor(red, green, blue, 255);
+                .setColor(red, green, blue, alpha);
     }
 
     private static int resolveTintColor(Mapper mapper,
@@ -1289,13 +1376,13 @@ public final class VoxyBlaze3DProbeRenderer {
         return buffer;
     }
 
-    private static void replaceLodMesh(long sectionKey, MeshData mesh, int vertexCount) {
-        removeLodMesh(sectionKey);
-        GpuBuffer buffer = RenderSystem.getDevice().createBuffer(
-                () -> "Voxy Blaze3D LoD " + WorldEngine.pprintPos(sectionKey),
-                GpuBuffer.USAGE_VERTEX | GpuBuffer.USAGE_COPY_DST,
-                mesh.vertexBuffer());
-        lodMeshes.put(sectionKey, new LodSectionMesh(buffer, vertexCount));
+    private static void replaceLodMesh(LodSectionCoordinate coordinate,
+                                       @Nullable GpuBuffer opaqueBuffer,
+                                       int opaqueVertexCount,
+                                       @Nullable GpuBuffer waterBuffer,
+                                       int waterVertexCount) {
+        removeLodMesh(coordinate.key());
+        lodMeshes.put(coordinate.key(), new LodSectionMesh(coordinate, opaqueBuffer, opaqueVertexCount, waterBuffer, waterVertexCount));
     }
 
     private static void removeLodMesh(long sectionKey) {
@@ -1303,21 +1390,15 @@ public final class VoxyBlaze3DProbeRenderer {
         if (previous == null) {
             return;
         }
-        try {
-            previous.vertexBuffer().close();
-        } catch (RuntimeException exception) {
-            Logger.error("Failed to release Blaze3D LoD mesh " + WorldEngine.pprintPos(sectionKey) + ".", exception);
-        }
+        releaseLodMeshBuffer(previous.opaqueVertexBuffer(), sectionKey);
+        releaseLodMeshBuffer(previous.waterVertexBuffer(), sectionKey);
     }
 
     private static void clearLodMeshes() {
         int meshCount = lodMeshes.size();
         for (LodSectionMesh mesh : lodMeshes.values()) {
-            try {
-                mesh.vertexBuffer().close();
-            } catch (RuntimeException exception) {
-                Logger.error("Failed to release a Blaze3D LoD mesh.", exception);
-            }
+            releaseLodMeshBuffer(mesh.opaqueVertexBuffer(), mesh.coordinate().key());
+            releaseLodMeshBuffer(mesh.waterVertexBuffer(), mesh.coordinate().key());
         }
         lodMeshes.clear();
         lodMeshFingerprints.clear();
@@ -1445,7 +1526,28 @@ public final class VoxyBlaze3DProbeRenderer {
     private record LodSectionCoordinate(long key, int x, int y, int z) {
     }
 
-    private record LodSectionMesh(GpuBuffer vertexBuffer, int vertexCount) {
+    private static void releaseLodMeshBuffer(@Nullable GpuBuffer buffer, long sectionKey) {
+        if (buffer == null) {
+            return;
+        }
+        try {
+            buffer.close();
+        } catch (RuntimeException exception) {
+            Logger.error("Failed to release Blaze3D LoD mesh " + WorldEngine.pprintPos(sectionKey) + ".", exception);
+        }
+    }
+
+    private record QuadCounts(int opaque, int water) {
+        private boolean isEmpty() {
+            return opaque == 0 && water == 0;
+        }
+    }
+
+    private record LodSectionMesh(LodSectionCoordinate coordinate,
+                                  @Nullable GpuBuffer opaqueVertexBuffer,
+                                  int opaqueVertexCount,
+                                  @Nullable GpuBuffer waterVertexBuffer,
+                                  int waterVertexCount) {
     }
 
     private static void addMarker(BufferBuilder builder, CameraTransform camera, TextureAtlasSprite dirtSprite) {

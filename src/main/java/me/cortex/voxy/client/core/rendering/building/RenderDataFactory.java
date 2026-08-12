@@ -11,6 +11,8 @@ import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.common.world.WorldSection;
 import me.cortex.voxy.common.world.other.Mapper;
 import me.cortex.voxy.commonImpl.VoxyCommon;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.material.FluidState;
 import org.lwjgl.system.MemoryUtil;
 
 import java.util.Arrays;
@@ -43,6 +45,13 @@ public class RenderDataFactory {
     private final int[] opaqueMasks = new int[32*32];
     private final int[] nonOpaqueMasks = new int[32*32];
     private final int[] fluidMasks = new int[32*32];//Used to separately mesh fluids, allowing for fluid + blockstate
+
+    //Fluid corner heights need diagonal cells and the block above, including at
+    //section edges. Neighbour sections are acquired lazily and retained only
+    //while the current section mesh is being generated.
+    private WorldSection fluidSourceSection;
+    private final WorldSection[] fluidNeighborSections = new WorldSection[27];
+    private final int[] fluidCornerHeightCache = new int[WorldSection.SECTION_VOLUME];
 
 
     //TODO: emit directly to memory buffer instead of long arrays
@@ -91,6 +100,23 @@ public class RenderDataFactory {
                 }
             }
 
+            int modelId = (int) ((data>>>26)&0xFFFF);
+            boolean fluidQuad = ModelQueries.isFluid(RenderDataFactory.this.modelMan.getModelMetadataFromClientId(modelId));
+
+            //The normal quad format spends eight bits on greedy-mesh dimensions.
+            //Fluid surfaces need those bits for four corner heights instead, so
+            //split a merged fluid rectangle back into individual cells here.
+            if (fluidQuad && (length != 1 || width != 1)) {
+                int minX = x-(length-1);
+                int minZ = z-(width-1);
+                for (int cellZ = minZ; cellZ <= z; cellZ++) {
+                    for (int cellX = minX; cellX <= x; cellX++) {
+                        this.emitQuad(cellX, cellZ, 1, 1, data);
+                    }
+                }
+                return;
+            }
+
             RenderDataFactory.this.quadCount++;
 
             x -= length-1;
@@ -134,7 +160,30 @@ public class RenderDataFactory {
             int face = (axis<<1)|axisSide;
 
             int encodedPosition = face;
-            encodedPosition |= ((width - 1) << 7) | ((length - 1) << 3);
+            if (fluidQuad) {
+                int cellX;
+                int cellY;
+                int cellZ;
+                if (axis == 0) {
+                    cellX = x;
+                    cellY = auxPos;
+                    cellZ = z;
+                } else if (axis == 1) {
+                    cellX = x;
+                    cellY = z;
+                    cellZ = auxPos;
+                } else {
+                    cellX = auxPos;
+                    cellY = x;
+                    cellZ = z;
+                }
+
+                int cornerHeights = RenderDataFactory.this.packFluidCornerHeights(cellX, cellY, cellZ);
+                encodedPosition |= (cornerHeights&0xFF)<<3;
+                data = (data&~(0xFL<<42)) | (Integer.toUnsignedLong((cornerHeights>>>8)&0xF)<<42);
+            } else {
+                encodedPosition |= ((width - 1) << 7) | ((length - 1) << 3);
+            }
             encodedPosition |= x << (axis==2?16:21);
             encodedPosition |= z << (axis==1?16:11);
             int shiftAmount = axis==0?16:(axis==1?11:21);
@@ -195,6 +244,132 @@ public class RenderDataFactory {
         } else {
             this.occupancy = null;
         }
+    }
+
+    private int packFluidCornerHeights(int cellX, int cellY, int cellZ) {
+        int cacheIndex = WorldSection.getIndex(cellX, cellY, cellZ);
+        int cached = this.fluidCornerHeightCache[cacheIndex];
+        if (cached != -1) {
+            return cached;
+        }
+
+        BlockState state = this.getFluidBlockState(cellX, cellY, cellZ);
+        FluidState fluid = state.getFluidState();
+        if (fluid.isEmpty()) {
+            //This can only happen if a contained-fluid model and the raw section
+            //state disagree. A full cell is the safest crack-free fallback.
+            this.fluidCornerHeightCache[cacheIndex] = 0xFFF;
+            return 0xFFF;
+        }
+
+        int packed = 0;
+        for (int cornerX = 0; cornerX < 2; cornerX++) {
+            for (int cornerZ = 0; cornerZ < 2; cornerZ++) {
+                float height = this.fluidCornerHeight(fluid, cellX, cellY, cellZ, cornerX, cornerZ);
+                //A corner belonging to a fluid cell is never zero, so the
+                //three-bit code can represent 1/8..1 instead of wasting a code.
+                int quantized = Math.max(0, Math.min(7, Math.round(height*8.0f)-1));
+                packed |= quantized<<(3*((cornerX<<1)|cornerZ));
+            }
+        }
+        this.fluidCornerHeightCache[cacheIndex] = packed;
+        return packed;
+    }
+
+    private float fluidCornerHeight(FluidState expectedFluid,
+                                    int cellX,
+                                    int cellY,
+                                    int cellZ,
+                                    int cornerX,
+                                    int cornerZ) {
+        int offsetX = cornerX == 0 ? -1 : 1;
+        int offsetZ = cornerZ == 0 ? -1 : 1;
+        float center = this.fluidHeight(expectedFluid, cellX, cellY, cellZ);
+        if (center >= 1.0f) {
+            return 1.0f;
+        }
+
+        float alongX = this.fluidHeight(expectedFluid, cellX+offsetX, cellY, cellZ);
+        float alongZ = this.fluidHeight(expectedFluid, cellX, cellY, cellZ+offsetZ);
+        if (alongX >= 1.0f || alongZ >= 1.0f) {
+            return 1.0f;
+        }
+
+        float diagonal = -1.0f;
+        if (alongX > 0.0f || alongZ > 0.0f) {
+            diagonal = this.fluidHeight(expectedFluid, cellX+offsetX, cellY, cellZ+offsetZ);
+            if (diagonal >= 1.0f) {
+                return 1.0f;
+            }
+        }
+
+        //Equivalent to FluidRenderer#calculateAverageHeight. Values at or
+        //above 0.8 receive the same high-water weighting as vanilla.
+        float centerWeight = fluidHeightWeight(center);
+        float alongXWeight = fluidHeightWeight(alongX);
+        float alongZWeight = fluidHeightWeight(alongZ);
+        float diagonalWeight = fluidHeightWeight(diagonal);
+        float weight = centerWeight+alongXWeight+alongZWeight+diagonalWeight;
+        if (weight == 0.0f) {
+            return expectedFluid.getOwnHeight();
+        }
+        return (center*centerWeight + alongX*alongXWeight + alongZ*alongZWeight + diagonal*diagonalWeight)/weight;
+    }
+
+    private static float fluidHeightWeight(float height) {
+        if (height >= 0.8f) {
+            return 10.0f;
+        }
+        return height >= 0.0f ? 1.0f : 0.0f;
+    }
+
+    private float fluidHeight(FluidState expectedFluid, int cellX, int cellY, int cellZ) {
+        BlockState state = this.getFluidBlockState(cellX, cellY, cellZ);
+        FluidState sample = state.getFluidState();
+        if (expectedFluid.getType().isSame(sample.getType())) {
+            FluidState above = this.getFluidBlockState(cellX, cellY+1, cellZ).getFluidState();
+            return expectedFluid.getType().isSame(above.getType()) ? 1.0f : sample.getOwnHeight();
+        }
+        return state.isSolid() ? -1.0f : 0.0f;
+    }
+
+    private BlockState getFluidBlockState(int cellX, int cellY, int cellZ) {
+        int sectionX = Math.floorDiv(cellX, 32);
+        int sectionY = Math.floorDiv(cellY, 32);
+        int sectionZ = Math.floorDiv(cellZ, 32);
+        if (Math.abs(sectionX) > 1 || Math.abs(sectionY) > 1 || Math.abs(sectionZ) > 1) {
+            throw new IllegalArgumentException("Fluid neighbour outside one-section border");
+        }
+
+        WorldSection section;
+        if (sectionX == 0 && sectionY == 0 && sectionZ == 0) {
+            section = this.fluidSourceSection;
+        } else {
+            int index = ((sectionY+1)*3+(sectionZ+1))*3+(sectionX+1);
+            section = this.fluidNeighborSections[index];
+            if (section == null) {
+                WorldSection source = this.fluidSourceSection;
+                section = this.world.acquire(source.lvl, source.x+sectionX, source.y+sectionY, source.z+sectionZ);
+                this.fluidNeighborSections[index] = section;
+            }
+        }
+
+        int localX = Math.floorMod(cellX, 32);
+        int localY = Math.floorMod(cellY, 32);
+        int localZ = Math.floorMod(cellZ, 32);
+        long rawState = section._unsafeGetRawDataArray()[WorldSection.getIndex(localX, localY, localZ)];
+        return this.world.getMapper().getBlockStateFromBlockId(Mapper.getBlockId(rawState));
+    }
+
+    private void releaseFluidNeighborSections() {
+        for (int i = 0; i < this.fluidNeighborSections.length; i++) {
+            WorldSection section = this.fluidNeighborSections[i];
+            if (section != null) {
+                section.release(WorldSection.RELEASE_HINT_POSSIBLE_REUSE);
+                this.fluidNeighborSections[i] = null;
+            }
+        }
+        this.fluidSourceSection = null;
     }
 
     private static long getQuadTyping(long metadata) {//2 bits
@@ -1725,6 +1900,7 @@ public class RenderDataFactory {
         Arrays.fill(this.opaqueMasks, 0);
         Arrays.fill(this.nonOpaqueMasks, 0);
         Arrays.fill(this.fluidMasks, 0);
+        Arrays.fill(this.fluidCornerHeightCache, -1);
 
         //Prepare everything
         int neighborMskAndFlags = this.prepareSectionData(section._unsafeGetRawDataArray());
@@ -1737,6 +1913,7 @@ public class RenderDataFactory {
             this.acquireNeighborData(section, neighborMsk);
         }
 
+        this.fluidSourceSection = section;
         try {
             this.generateYZFaces();
             this.generateXFaces();
@@ -1744,6 +1921,8 @@ public class RenderDataFactory {
             e.auxBitMsk = neighborMsk;
             e.auxData = this.neighboringFaces;
             throw e;
+        } finally {
+            this.releaseFluidNeighborSections();
         }
 
         //We only care if we have quads

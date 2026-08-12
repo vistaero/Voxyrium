@@ -8,6 +8,7 @@ import java.lang.invoke.VarHandle;
 import java.util.Arrays;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 //Represents a loaded world section at a specific detail level
 // holds a 32x32x32 region of detail
@@ -58,6 +59,7 @@ public final class WorldSection {
     final ActiveSectionTracker tracker;
     volatile boolean inSaveQueue;
     volatile boolean isDirty;
+    private final AtomicLong renderRevision = new AtomicLong();
 
     //When the first bit is set it means its loaded
     @SuppressWarnings("all")
@@ -290,6 +292,15 @@ public final class WorldSection {
 
     public void markDirty() {
         IS_DIRTY_HANDLE.getAndSet(this, true);
+        this.renderRevision.incrementAndGet();
+    }
+
+    /**
+     * Monotonic revision used by renderer backends to avoid rebuilding an
+     * unchanged section after it has been uploaded once.
+     */
+    public long getRenderRevision() {
+        return this.renderRevision.get();
     }
 
 

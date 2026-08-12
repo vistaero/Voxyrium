@@ -86,6 +86,10 @@ public class VoxyClient implements ClientModInitializer {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             if (VoxyCommon.isAvailable()) {
                 dispatcher.register(VoxyCommands.register());
+                dispatcher.register(VoxyCommands.registerToggleTestCube());
+                dispatcher.register(VoxyCommands.registerSetVoxyQualityLevel());
+                dispatcher.register(VoxyCommands.registerToggleLodOverlay());
+                dispatcher.register(VoxyCommands.registerToggleFog());
             }
         });
 

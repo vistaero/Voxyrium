@@ -2,10 +2,12 @@ package me.cortex.voxy.client.mixin.sodium;
 
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
-import com.mojang.blaze3d.opengl.GlTextureView;
 import com.mojang.blaze3d.textures.GpuSampler;
 import me.cortex.voxy.client.VoxyClient;
+import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
+import me.cortex.voxy.client.core.backend.VoxyGraphicsBackend;
+import me.cortex.voxy.client.core.backend.blaze3d.VoxyBlaze3DProbeRenderer;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices;
@@ -48,17 +50,27 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
     @Unique
     private void doRender(ChunkRenderMatrices matrices, TerrainRenderPass renderPass, CameraTransform camera, FogParameters fogParameters) {
         if (renderPass == DefaultTerrainRenderPasses.CUTOUT) {
-            var renderer = IVoxyRenderSystemHolder.getNullable();
-            if (renderer != null) {
-                Viewport<?> viewport = null;
-                var target = renderPass.getTarget();
-                if (IrisUtil.USED_IRIS_VIEWPORT) {
-                    viewport = renderer.getViewport();
-                    IrisUtil.USED_IRIS_VIEWPORT = false;
-                } else {
-                    viewport = renderer.setupViewport(matrices.projection(), matrices.modelView(), fogParameters, target.width, target.height, camera.x, camera.y, camera.z);
+            if (!VoxyGraphicsBackend.current().supportsBlaze3dProbe()) {
+                var renderer = IVoxyRenderSystemHolder.getNullable();
+                if (renderer != null) {
+                    Viewport<?> viewport = null;
+                    var target = renderPass.getTarget();
+                    if (IrisUtil.USED_IRIS_VIEWPORT) {
+                        viewport = renderer.getViewport();
+                        IrisUtil.USED_IRIS_VIEWPORT = false;
+                    } else {
+                        viewport = renderer.setupViewport(matrices.projection(), matrices.modelView(), fogParameters, target.width, target.height, camera.x, camera.y, camera.z);
+                    }
+                    renderer.renderOpaque(viewport, ((com.mojang.blaze3d.opengl.GlTextureView)target.getDepthTextureView()).glId(), ((com.mojang.blaze3d.opengl.GlTextureView)target.getColorTextureView()).glId());
                 }
-                renderer.renderOpaque(viewport, ((GlTextureView)target.getDepthTextureView()).glId(), ((GlTextureView)target.getColorTextureView()).glId());
+            }
+            return;
+        }
+
+        if (renderPass == DefaultTerrainRenderPasses.TRANSLUCENT && VoxyGraphicsBackend.current().supportsBlaze3dProbe()) {
+            if (VoxyConfig.CONFIG.enabled && VoxyConfig.CONFIG.enableRendering) {
+                var target = renderPass.getTarget();
+                VoxyBlaze3DProbeRenderer.render(matrices, target.getColorTextureView(), target.getDepthTextureView(), camera);
             }
         }
     }

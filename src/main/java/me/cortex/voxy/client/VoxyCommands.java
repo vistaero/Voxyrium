@@ -1,12 +1,14 @@
 package me.cortex.voxy.client;
 
 import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
+import me.cortex.voxy.client.core.backend.blaze3d.VoxyBlaze3DProbeRenderer;
 import me.cortex.voxy.common.DebugUtils;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
@@ -29,6 +31,27 @@ import java.util.concurrent.CompletableFuture;
 
 
 public class VoxyCommands {
+
+    public static LiteralArgumentBuilder<FabricClientCommandSource> registerToggleTestCube() {
+        return ClientCommands.literal("toggleTestCube")
+                .executes(VoxyCommands::toggleTestCube);
+    }
+
+    public static LiteralArgumentBuilder<FabricClientCommandSource> registerSetVoxyQualityLevel() {
+        return ClientCommands.literal("setVoxyQualityLevel")
+                .then(ClientCommands.argument("level", IntegerArgumentType.integer(0, 4))
+                        .executes(VoxyCommands::setVoxyQualityLevel));
+    }
+
+    public static LiteralArgumentBuilder<FabricClientCommandSource> registerToggleLodOverlay() {
+        return ClientCommands.literal("toggleVoxyLodOverlay")
+                .executes(VoxyCommands::toggleLodOverlay);
+    }
+
+    public static LiteralArgumentBuilder<FabricClientCommandSource> registerToggleFog() {
+        return ClientCommands.literal("toggleVoxyFog")
+                .executes(VoxyCommands::toggleFog);
+    }
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> register() {
         var imports = ClientCommands.literal("import")
@@ -93,6 +116,32 @@ public class VoxyCommands {
         var r = Minecraft.getInstance().levelExtractor;
         if (r != null) r.allChanged();
         return 0;
+    }
+
+    private static int toggleTestCube(CommandContext<FabricClientCommandSource> ctx) {
+        boolean visible = VoxyBlaze3DProbeRenderer.toggleTestCube();
+        ctx.getSource().sendFeedback(Component.literal("Voxy test cube " + (visible ? "enabled" : "disabled") + "."));
+        return 1;
+    }
+
+    private static int setVoxyQualityLevel(CommandContext<FabricClientCommandSource> ctx) {
+        int requestedLevel = IntegerArgumentType.getInteger(ctx, "level");
+        int lodLevel = VoxyBlaze3DProbeRenderer.setLodQualityLevel(requestedLevel);
+        ctx.getSource().sendFeedback(Component.literal("Voxy dynamic LoD minimum level set to " + lodLevel
+                + " (refinement stops at one voxel per " + (1 << lodLevel) + " blocks)."));
+        return 1;
+    }
+
+    private static int toggleLodOverlay(CommandContext<FabricClientCommandSource> ctx) {
+        boolean enabled = VoxyBlaze3DProbeRenderer.toggleLodOverlay();
+        ctx.getSource().sendFeedback(Component.literal("Voxy LoD terrain overlay " + (enabled ? "enabled" : "disabled") + "."));
+        return 1;
+    }
+
+    private static int toggleFog(CommandContext<FabricClientCommandSource> ctx) {
+        boolean enabled = VoxyBlaze3DProbeRenderer.toggleFog();
+        ctx.getSource().sendFeedback(Component.literal("Voxy fog " + (enabled ? "enabled" : "disabled") + "."));
+        return 1;
     }
 
     private static int verifyTLNs(CommandContext<FabricClientCommandSource> ctx, boolean attemptRepair) {

@@ -4,6 +4,7 @@ import me.cortex.voxy.client.VoxyClientInstance;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
+import me.cortex.voxy.client.core.backend.blaze3d.VoxyBlaze3DProbeRenderer;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.world.WorldEngine;
@@ -37,6 +38,7 @@ public abstract class MixinLevelRenderer implements IVoxyRenderSystemHolder {
 
     @Override
     public void voxy$shutdownRenderer() {
+        VoxyBlaze3DProbeRenderer.shutdown();
         if (this.renderer != null) {
             this.renderer.shutdown();
             this.renderer = null;

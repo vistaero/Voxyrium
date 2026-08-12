@@ -9,6 +9,8 @@ import net.fabricmc.loader.api.ModContainer;
 
 public class VoxyCommon implements ModInitializer {
     public static final String MOD_VERSION;
+    public static final long BUILD_NUMBER;
+    public static final String BUILD_ID;
     public static final boolean IS_DEDICATED_SERVER;
     public static final boolean IS_IN_MINECRAFT;
 
@@ -18,12 +20,17 @@ public class VoxyCommon implements ModInitializer {
             IS_IN_MINECRAFT = false;
             Logger.error("Running voxy without minecraft");
             MOD_VERSION = "<UNKNOWN>";
+            BUILD_NUMBER = -1L;
+            BUILD_ID = MOD_VERSION + "+unknown";
             IS_DEDICATED_SERVER = false;
         } else {
             IS_IN_MINECRAFT = true;
             var version = mod.getMetadata().getVersion().getFriendlyString();
             var commit = mod.getMetadata().getCustomValue("commit").getAsString();
             MOD_VERSION = version + "-" + commit.substring(0,7);
+            var buildTime = mod.getMetadata().getCustomValue("buildtime");
+            BUILD_NUMBER = buildTime == null ? -1L : buildTime.getAsNumber().longValue();
+            BUILD_ID = MOD_VERSION + "+build." + BUILD_NUMBER;
             IS_DEDICATED_SERVER = FabricLoader.getInstance().getEnvironmentType() == EnvType.SERVER;
             Serialization.init();
         }

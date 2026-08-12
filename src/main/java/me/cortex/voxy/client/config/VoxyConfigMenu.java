@@ -1,6 +1,7 @@
 package me.cortex.voxy.client.config;
 
 import me.cortex.voxy.client.ClientSessionEvents;
+import me.cortex.voxy.client.VoxyClient;
 import me.cortex.voxy.client.config.SodiumConfigBuilder.*;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.SSAO;
@@ -102,7 +103,7 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
                                         CFG::getRendererBackendMode,
                                         value->{
                                             CFG.setRendererBackendMode(value);
-                                            VoxyGraphicsBackend.applyPreference(value);
+                                            VoxyClient.selectRenderer(value);
                                         })
                                         .setNameProvider(value->Component.translatable(
                                                 "voxy.config.general.renderer_backend." + value.name().toLowerCase(java.util.Locale.ROOT)))

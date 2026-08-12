@@ -28,13 +28,10 @@ public class VoxyClient implements ClientModInitializer {
     public static void initVoxyClient(GpuDevice device) {
         VoxyGraphicsBackend.initialize(device);
         var rendererMode = VoxyConfig.CONFIG.getRendererBackendMode();
+        selectRenderer(rendererMode);
+        VoxyCommon.setInstanceFactory(VoxyClientInstance::new);
 
         if (VoxyGraphicsBackend.current() == VoxyGraphicsBackend.VULKAN) {
-            VoxyGraphicsBackend.resolveRenderer(
-                    rendererMode,
-                    rendererMode != VoxyGraphicsBackend.RendererMode.BLAZE3D
-                            && VulkanBackend.shouldUseVulkan());
-            VoxyCommon.setInstanceFactory(VoxyClientInstance::new);
             if (VoxyGraphicsBackend.usesNativeRenderer()) {
                 initVoxyClientVulkan();
             } else {
@@ -43,17 +40,24 @@ public class VoxyClient implements ClientModInitializer {
             return;
         }
 
-        boolean nativeOpenGlAvailable = rendererMode != VoxyGraphicsBackend.RendererMode.BLAZE3D
-                && VoxyGraphicsBackend.current() == VoxyGraphicsBackend.OPENGL
-                && probeNativeOpenGlRenderer();
-        VoxyGraphicsBackend.resolveRenderer(rendererMode, nativeOpenGlAvailable);
-        VoxyCommon.setInstanceFactory(VoxyClientInstance::new);
-
         if (VoxyGraphicsBackend.usesNativeRenderer()) {
             initVoxyClientOpenGl();
         } else {
             initBlaze3dOrReportUnavailable();
         }
+    }
+
+    public static void selectRenderer(VoxyGraphicsBackend.RendererMode rendererMode) {
+        boolean nativeAvailable = false;
+        if (rendererMode != VoxyGraphicsBackend.RendererMode.BLAZE3D) {
+            nativeAvailable = switch (VoxyGraphicsBackend.current()) {
+                case VULKAN -> VulkanBackend.shouldUseVulkan();
+                case OPENGL -> probeNativeOpenGlRenderer();
+                case UNKNOWN -> false;
+            };
+        }
+        VoxyGraphicsBackend.resolveRenderer(rendererMode, nativeAvailable);
+        Logger.info("Selected Voxy renderer: " + VoxyGraphicsBackend.statusLine());
     }
 
     private static boolean probeNativeOpenGlRenderer() {

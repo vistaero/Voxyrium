@@ -1,1 +1,1 @@
-Voxy is an LoD rendering mod for minecraft
+A fork of Voxy that adds an experimental renderer for Vulkan

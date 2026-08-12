@@ -37,10 +37,12 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.CardinalLighting;
 import net.minecraft.world.level.ColorResolver;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.LiquidBlock;
@@ -50,6 +52,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.SingleThreadedRandomSource;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
 import org.joml.Vector3fc;
@@ -83,6 +86,7 @@ public final class VoxyBlaze3DProbeRenderer {
     private static final int MAX_LOD_QUAD_COUNT_PER_SECTION = 65536;
     private static final int MATERIAL_LOG_LIMIT = 12;
     private static final float LOD_MARKER_SIZE = 12.0f;
+    private static final float[] NO_CORNER_OCCLUSION = {1.0f, 1.0f, 1.0f, 1.0f};
     private static final Identifier DIRT_SPRITE = Identifier.fromNamespaceAndPath("minecraft", "block/dirt");
     private static final float[][] UNIT_CUBE_FACE_POSITIONS = {
             {0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1},
@@ -141,6 +145,11 @@ public final class VoxyBlaze3DProbeRenderer {
     private static final Map<Integer, BlockRenderDefinition> blockRenderDefinitions = new HashMap<>();
     private static final Map<Integer, Biome> voxyBiomes = new HashMap<>();
     private static final Map<TintKey, Integer> tintColors = new HashMap<>();
+    // Sodium collects these on the render thread before its translucent pass.  The OpenGL path
+    // rasterizes the same sections into a depth mask; Blaze3D currently consumes them while meshing.
+    private static final Set<Long> visibleVanillaSections = new HashSet<>();
+    private static final Set<Long> collectedVisibleVanillaSections = new HashSet<>();
+    private static long visibleVanillaMaskRevision;
     private static boolean failed;
     private static boolean initialized;
     private static long frameCount;
@@ -203,6 +212,14 @@ public final class VoxyBlaze3DProbeRenderer {
         return renderLodAboveTerrain;
     }
 
+    public static void beginVisibleVanillaSectionCollection() {
+        collectedVisibleVanillaSections.clear();
+    }
+
+    public static void recordVisibleVanillaSection(int sectionX, int sectionY, int sectionZ) {
+        collectedVisibleVanillaSections.add(SectionPos.asLong(sectionX, sectionY, sectionZ));
+    }
+
     public static void render(ChunkRenderMatrices matrices, GpuTextureView colorTarget, GpuTextureView depthTarget, CameraTransform camera) {
         if (failed) {
             return;
@@ -211,6 +228,7 @@ public final class VoxyBlaze3DProbeRenderer {
         try {
             RenderSystem.assertOnRenderThread();
             initialize();
+            commitVisibleVanillaSectionMask();
 
             CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
             if (testCubeVisible) {
@@ -288,6 +306,9 @@ public final class VoxyBlaze3DProbeRenderer {
         blockRenderDefinitions.clear();
         voxyBiomes.clear();
         tintColors.clear();
+        visibleVanillaSections.clear();
+        collectedVisibleVanillaSections.clear();
+        visibleVanillaMaskRevision = 0;
         initialized = false;
         failed = false;
         frameCount = 0;
@@ -321,8 +342,19 @@ public final class VoxyBlaze3DProbeRenderer {
                 + ", multiDrawIndirect=" + deviceInfo.features().multiDrawIndirect()
                 + ", persistentMapping=" + deviceInfo.features().persistentMapping());
         Logger.info("Blaze3D LoD features: testCube=off, custom-model-occlusion=disabled, "
-                + "lighting=live-lightmap+directional, fog=voxy-environmental.");
+                + "lighting=live-lightmap+directional, fog=voxy-environmental, vanilla-mask=section-visibility.");
         initialized = true;
+    }
+
+    private static void commitVisibleVanillaSectionMask() {
+        if (visibleVanillaSections.equals(collectedVisibleVanillaSections)) {
+            return;
+        }
+        visibleVanillaSections.clear();
+        visibleVanillaSections.addAll(collectedVisibleVanillaSections);
+        visibleVanillaMaskRevision++;
+        // Rebuild incrementally using the same pacing as ordinary LoD changes.
+        lastLodRefreshFrame = Long.MIN_VALUE;
     }
 
     private static void uploadMarker(CommandEncoder encoder, CameraTransform camera) {
@@ -609,6 +641,7 @@ public final class VoxyBlaze3DProbeRenderer {
         if (fingerprint != Long.MIN_VALUE && voxelSize(lodLevel) == 1 && vanillaBoundary != null
                 && vanillaBoundary.intersectsSection(coordinate)) {
             fingerprint = mixRevision(fingerprint, vanillaBoundary.key().hashCode());
+            fingerprint = mixRevision(fingerprint, visibleVanillaMaskRevision);
         }
         if (fingerprint == Long.MIN_VALUE) {
             removeLodMesh(coordinate.key());
@@ -741,7 +774,7 @@ public final class VoxyBlaze3DProbeRenderer {
         for (int y = 0; y < 32; y++) {
             for (int z = 0; z < 32; z++) {
                 for (int x = 0; x < 32; x++) {
-                    if (shouldHideLodCell(coordinate, voxelSize, x, z, vanillaBoundary)) {
+                    if (shouldHideLodCell(coordinate, voxelSize, x, y, z, vanillaBoundary)) {
                         continue;
                     }
                     long state = neighborhood.center()[WorldSection.getIndex(x, y, z)];
@@ -812,7 +845,7 @@ public final class VoxyBlaze3DProbeRenderer {
         for (int y = 0; y < 32; y++) {
             for (int z = 0; z < 32; z++) {
                 for (int x = 0; x < 32; x++) {
-                    if (shouldHideLodCell(coordinate, voxelSize, x, z, vanillaBoundary)) {
+                    if (shouldHideLodCell(coordinate, voxelSize, x, y, z, vanillaBoundary)) {
                         continue;
                     }
                     long state = neighborhood.center()[WorldSection.getIndex(x, y, z)];
@@ -824,25 +857,25 @@ public final class VoxyBlaze3DProbeRenderer {
                     float blockY = originY + y * voxelSize;
                     float blockZ = originZ + z * voxelSize;
                     BlockRenderDefinition definition = getBlockRenderDefinition(mapper, Mapper.getBlockId(state), fallbackSprite);
-                    quads = emitQuads(builder, definition.unculledQuads(), state, mapper, blockX, blockY, blockZ, voxelSize,
+                    quads = emitQuads(builder, definition.unculledQuads(), neighborhood, x, y, z, state, mapper, blockX, blockY, blockZ, voxelSize,
                             brightestLight(neighborhood, x, y, z, state), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
-                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y - 1, z)) quads = emitQuads(builder, definition.culledQuads(0), state, mapper, blockX, blockY, blockZ, voxelSize,
+                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y - 1, z)) quads = emitQuads(builder, definition.culledQuads(0), neighborhood, x, y, z, state, mapper, blockX, blockY, blockZ, voxelSize,
                             visibleFaceLight(state, getState(neighborhood, x, y - 1, z)), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
-                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y + 1, z)) quads = emitQuads(builder, definition.culledQuads(1), state, mapper, blockX, blockY, blockZ, voxelSize,
+                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y + 1, z)) quads = emitQuads(builder, definition.culledQuads(1), neighborhood, x, y, z, state, mapper, blockX, blockY, blockZ, voxelSize,
                             visibleFaceLight(state, getState(neighborhood, x, y + 1, z)), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
-                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x - 1, y, z)) quads = emitQuads(builder, definition.culledQuads(2), state, mapper, blockX, blockY, blockZ, voxelSize,
+                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x - 1, y, z)) quads = emitQuads(builder, definition.culledQuads(2), neighborhood, x, y, z, state, mapper, blockX, blockY, blockZ, voxelSize,
                             visibleFaceLight(state, getState(neighborhood, x - 1, y, z)), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
-                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x + 1, y, z)) quads = emitQuads(builder, definition.culledQuads(3), state, mapper, blockX, blockY, blockZ, voxelSize,
+                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x + 1, y, z)) quads = emitQuads(builder, definition.culledQuads(3), neighborhood, x, y, z, state, mapper, blockX, blockY, blockZ, voxelSize,
                             visibleFaceLight(state, getState(neighborhood, x + 1, y, z)), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
-                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y, z - 1)) quads = emitQuads(builder, definition.culledQuads(4), state, mapper, blockX, blockY, blockZ, voxelSize,
+                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y, z - 1)) quads = emitQuads(builder, definition.culledQuads(4), neighborhood, x, y, z, state, mapper, blockX, blockY, blockZ, voxelSize,
                             visibleFaceLight(state, getState(neighborhood, x, y, z - 1)), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
-                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y, z + 1)) quads = emitQuads(builder, definition.culledQuads(5), state, mapper, blockX, blockY, blockZ, voxelSize,
+                    if (shouldEmitCulledFace(neighborhood, mapper, definition, fallbackSprite, x, y, z + 1)) quads = emitQuads(builder, definition.culledQuads(5), neighborhood, x, y, z, state, mapper, blockX, blockY, blockZ, voxelSize,
                             visibleFaceLight(state, getState(neighborhood, x, y, z + 1)), waterOnly, quads, maxQuads);
                     if (quads == maxQuads) return quads;
                 }
@@ -854,6 +887,7 @@ public final class VoxyBlaze3DProbeRenderer {
     private static boolean shouldHideLodCell(LodSectionCoordinate coordinate,
                                              int voxelSize,
                                              int cellX,
+                                             int cellY,
                                              int cellZ,
                                              VanillaRenderBoundary vanillaBoundary) {
         if (vanillaBoundary == null || voxelSize != 1) {
@@ -861,7 +895,12 @@ public final class VoxyBlaze3DProbeRenderer {
         }
         int sectionSize = SECTION_EDGE * voxelSize;
         int worldX = coordinate.x() * sectionSize + cellX * voxelSize;
+        int worldY = coordinate.y() * sectionSize + cellY * voxelSize;
         int worldZ = coordinate.z() * sectionSize + cellZ * voxelSize;
+        if (!visibleVanillaSections.isEmpty()) {
+            return visibleVanillaSections.contains(SectionPos.asLong(
+                    Math.floorDiv(worldX, 16), Math.floorDiv(worldY, 16), Math.floorDiv(worldZ, 16)));
+        }
         return vanillaBoundary.containsChunk(Math.floorDiv(worldX, 16), Math.floorDiv(worldZ, 16));
     }
 
@@ -925,6 +964,10 @@ public final class VoxyBlaze3DProbeRenderer {
 
     private static int emitQuads(BufferBuilder builder,
                                  List<ModelQuad> quads,
+                                 SectionNeighborhood neighborhood,
+                                 int cellX,
+                                 int cellY,
+                                 int cellZ,
                                  long state,
                                  Mapper mapper,
                                  float blockX,
@@ -939,11 +982,15 @@ public final class VoxyBlaze3DProbeRenderer {
             if (quad.fluidTint() != waterOnly) {
                 continue;
             }
+            if (quad.fluidTint()) {
+                quad = createFluidQuad(neighborhood, mapper, state, cellX, cellY, cellZ, quad.direction());
+            }
             int color = quad.tinted()
                     ? resolveTintColor(mapper, Mapper.getBlockId(state), Mapper.getBiomeId(state), quad.tintIndex(), quad.fluidTint(), blockX, blockY, blockZ)
                     : 0xFFFFFF;
             color = shadeColor(color, quad.direction());
-            addModelQuad(builder, quad, blockX, blockY, blockZ, voxelSize, color, quad.fluidTint() ? 204 : 255, packedLight);
+            addModelQuad(builder, quad, blockX, blockY, blockZ, voxelSize, color, quad.fluidTint() ? 204 : 255, packedLight,
+                    quad.shaded() ? cornerAmbientOcclusion(neighborhood, mapper, cellX, cellY, cellZ, quad) : NO_CORNER_OCCLUSION);
             if (++emitted == maxQuads) {
                 return emitted;
             }
@@ -1079,7 +1126,8 @@ public final class VoxyBlaze3DProbeRenderer {
             uvs[index * 2] = UVPair.unpackU(packedUv);
             uvs[index * 2 + 1] = UVPair.unpackV(packedUv);
         }
-        return new ModelQuad(positions, uvs, quad.materialInfo().isTinted(), quad.materialInfo().tintIndex(), quad.direction(), false);
+        return new ModelQuad(positions, uvs, quad.materialInfo().isTinted(), quad.materialInfo().tintIndex(), quad.direction(), false,
+                quad.materialInfo().shade());
     }
 
     private static void addFallbackCube(List<ModelQuad>[] culled, TextureAtlasSprite sprite) {
@@ -1092,21 +1140,126 @@ public final class VoxyBlaze3DProbeRenderer {
         FluidModel fluidModel = Minecraft.getInstance().getModelManager().getFluidStateModelSet().get(state.getFluidState());
         TextureAtlasSprite stillSprite = fluidModel.stillMaterial().sprite();
         TextureAtlasSprite flowingSprite = fluidModel.flowingMaterial().sprite();
-        float height = state.getFluidState().getOwnHeight();
-        culled[0].add(cubeQuad(stillSprite, Direction.DOWN, true, 0, fluidFacePositions(0, height)));
-        culled[1].add(cubeQuad(stillSprite, Direction.UP, true, 0, fluidFacePositions(1, height)));
-        culled[2].add(cubeQuad(flowingSprite, Direction.WEST, true, 0, fluidFacePositions(2, height)));
-        culled[3].add(cubeQuad(flowingSprite, Direction.EAST, true, 0, fluidFacePositions(3, height)));
-        culled[4].add(cubeQuad(flowingSprite, Direction.NORTH, true, 0, fluidFacePositions(4, height)));
-        culled[5].add(cubeQuad(flowingSprite, Direction.SOUTH, true, 0, fluidFacePositions(5, height)));
+        // The cached definitions only classify fluid faces. Their sprite and the four top-edge
+        // heights are resolved from the neighboring Voxy cells when the section is built.
+        culled[0].add(cubeQuad(stillSprite, Direction.DOWN, true, 0, UNIT_CUBE_FACE_POSITIONS[0]));
+        culled[1].add(cubeQuad(stillSprite, Direction.UP, true, 0, UNIT_CUBE_FACE_POSITIONS[1]));
+        culled[2].add(cubeQuad(flowingSprite, Direction.WEST, true, 0, UNIT_CUBE_FACE_POSITIONS[2]));
+        culled[3].add(cubeQuad(flowingSprite, Direction.EAST, true, 0, UNIT_CUBE_FACE_POSITIONS[3]));
+        culled[4].add(cubeQuad(flowingSprite, Direction.NORTH, true, 0, UNIT_CUBE_FACE_POSITIONS[4]));
+        culled[5].add(cubeQuad(flowingSprite, Direction.SOUTH, true, 0, UNIT_CUBE_FACE_POSITIONS[5]));
     }
 
-    private static float[] fluidFacePositions(int face, float height) {
-        float[] positions = UNIT_CUBE_FACE_POSITIONS[face].clone();
-        for (int index = 1; index < positions.length; index += 3) {
-            positions[index] *= height;
+    private static ModelQuad createFluidQuad(SectionNeighborhood neighborhood,
+                                             Mapper mapper,
+                                             long state,
+                                             int cellX,
+                                             int cellY,
+                                             int cellZ,
+                                             Direction direction) {
+        FluidState fluidState = mapper.getBlockStateFromBlockId(Mapper.getBlockId(state)).getFluidState();
+        FluidModel fluidModel = Minecraft.getInstance().getModelManager().getFluidStateModelSet().get(fluidState);
+        float[] positions = UNIT_CUBE_FACE_POSITIONS[directionToFace(direction)].clone();
+        for (int vertex = 0; vertex < 4; vertex++) {
+            int offset = vertex * 3;
+            if (positions[offset + 1] != 0.0f) {
+                positions[offset + 1] = fluidCornerHeight(neighborhood, mapper, fluidState, cellX, cellY, cellZ,
+                        positions[offset] == 0.0f ? 0 : 1, positions[offset + 2] == 0.0f ? 0 : 1);
+            }
         }
-        return positions;
+        if (direction == Direction.UP) {
+            return createFluidTopQuad(neighborhood, mapper, fluidState, cellX, cellY, cellZ, fluidModel, positions);
+        }
+        return cubeQuad(fluidModel.flowingMaterial().sprite(), direction, true, 0, positions);
+    }
+
+    private static ModelQuad createFluidTopQuad(SectionNeighborhood neighborhood,
+                                                Mapper mapper,
+                                                FluidState fluidState,
+                                                int cellX,
+                                                int cellY,
+                                                int cellZ,
+                                                FluidModel fluidModel,
+                                                float[] positions) {
+        Vec3 flow = fluidState.getFlow(new VoxyFluidGetter(neighborhood, mapper, cellX, cellY, cellZ), BlockPos.ZERO);
+        if (flow.x == 0.0 && flow.z == 0.0) {
+            return cubeQuad(fluidModel.stillMaterial().sprite(), Direction.UP, true, 0, positions);
+        }
+
+        // Match FluidRenderer: the flowing sprite is rotated around its centre by FluidState#getFlow.
+        float angle = (float) Math.atan2(flow.z, flow.x) - (float) (Math.PI / 2.0);
+        float sin = (float) Math.sin(angle) * 0.25f;
+        float cos = (float) Math.cos(angle) * 0.25f;
+        TextureAtlasSprite sprite = fluidModel.flowingMaterial().sprite();
+        float[] uvs = {
+                sprite.getU(0.5f - cos + sin), sprite.getV(0.5f + cos + sin),
+                sprite.getU(0.5f + cos + sin), sprite.getV(0.5f + cos - sin),
+                sprite.getU(0.5f + cos - sin), sprite.getV(0.5f - cos - sin),
+                sprite.getU(0.5f - cos - sin), sprite.getV(0.5f - cos + sin)
+        };
+        return new ModelQuad(positions, uvs, true, 0, Direction.UP, true, false);
+    }
+
+    private static float fluidCornerHeight(SectionNeighborhood neighborhood,
+                                           Mapper mapper,
+                                           FluidState expectedFluid,
+                                           int cellX,
+                                           int cellY,
+                                           int cellZ,
+                                           int cornerX,
+                                           int cornerZ) {
+        int offsetX = cornerX == 0 ? -1 : 1;
+        int offsetZ = cornerZ == 0 ? -1 : 1;
+        float center = fluidHeight(neighborhood, mapper, expectedFluid, cellX, cellY, cellZ);
+        if (center >= 1.0f) {
+            return 1.0f;
+        }
+        float alongX = fluidHeight(neighborhood, mapper, expectedFluid, cellX + offsetX, cellY, cellZ);
+        float alongZ = fluidHeight(neighborhood, mapper, expectedFluid, cellX, cellY, cellZ + offsetZ);
+        if (alongX >= 1.0f || alongZ >= 1.0f) {
+            return 1.0f;
+        }
+
+        // This is FluidRenderer#calculateAverageHeight.  Its high-water weighting is what keeps
+        // a flowing surface joined to an adjacent source block instead of leaving a visible seam.
+        float[] weighted = new float[2];
+        if (alongX > 0.0f || alongZ > 0.0f) {
+            float diagonal = fluidHeight(neighborhood, mapper, expectedFluid, cellX + offsetX, cellY, cellZ + offsetZ);
+            if (diagonal >= 1.0f) {
+                return 1.0f;
+            }
+            addWeightedFluidHeight(weighted, diagonal);
+        }
+        addWeightedFluidHeight(weighted, center);
+        addWeightedFluidHeight(weighted, alongX);
+        addWeightedFluidHeight(weighted, alongZ);
+        return weighted[1] == 0.0f ? expectedFluid.getOwnHeight() : weighted[0] / weighted[1];
+    }
+
+    private static float fluidHeight(SectionNeighborhood neighborhood,
+                                     Mapper mapper,
+                                     FluidState expectedFluid,
+                                     int cellX,
+                                     int cellY,
+                                     int cellZ) {
+        BlockState state = mapper.getBlockStateFromBlockId(Mapper.getBlockId(getState(neighborhood, cellX, cellY, cellZ)));
+        FluidState sample = state.getFluidState();
+        if (expectedFluid.getType().isSame(sample.getType())) {
+            FluidState above = mapper.getBlockStateFromBlockId(Mapper.getBlockId(
+                    getState(neighborhood, cellX, cellY + 1, cellZ))).getFluidState();
+            return expectedFluid.getType().isSame(above.getType()) ? 1.0f : sample.getOwnHeight();
+        }
+        return state.isSolid() ? -1.0f : 0.0f;
+    }
+
+    private static void addWeightedFluidHeight(float[] weighted, float height) {
+        if (height >= 0.8f) {
+            weighted[0] += height * 10.0f;
+            weighted[1] += 10.0f;
+        } else if (height >= 0.0f) {
+            weighted[0] += height;
+            weighted[1] += 1.0f;
+        }
     }
 
     private static ModelQuad cubeQuad(TextureAtlasSprite sprite, Direction direction, float... positions) {
@@ -1124,7 +1277,7 @@ public final class VoxyBlaze3DProbeRenderer {
         }
         return new ModelQuad(positions, new float[]{
                 sprite.getU(0), sprite.getV(1), sprite.getU(1), sprite.getV(1),
-                sprite.getU(1), sprite.getV(0), sprite.getU(0), sprite.getV(0)}, tinted, tintIndex, direction, tinted);
+                sprite.getU(1), sprite.getV(0), sprite.getU(0), sprite.getV(0)}, tinted, tintIndex, direction, tinted, false);
     }
 
     private static void logMaterialDefinition(int blockId, @Nullable BlockState state, BlockRenderDefinition definition) {
@@ -1156,6 +1309,17 @@ public final class VoxyBlaze3DProbeRenderer {
         };
     }
 
+    private static int directionToFace(Direction direction) {
+        return switch (direction) {
+            case DOWN -> 0;
+            case UP -> 1;
+            case WEST -> 2;
+            case EAST -> 3;
+            case NORTH -> 4;
+            case SOUTH -> 5;
+        };
+    }
+
     private static void addModelQuad(BufferBuilder builder,
                                      ModelQuad quad,
                                      float blockX,
@@ -1164,16 +1328,17 @@ public final class VoxyBlaze3DProbeRenderer {
                                      int voxelSize,
                                      int color,
                                      int alpha,
-                                     int packedLight) {
+                                     int packedLight,
+                                     float[] cornerOcclusion) {
         int red = color >> 16 & 0xFF;
         int green = color >> 8 & 0xFF;
         int blue = color & 0xFF;
-        addModelVertex(builder, quad, 0, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight);
-        addModelVertex(builder, quad, 1, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight);
-        addModelVertex(builder, quad, 2, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight);
-        addModelVertex(builder, quad, 0, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight);
-        addModelVertex(builder, quad, 2, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight);
-        addModelVertex(builder, quad, 3, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight);
+        addModelVertex(builder, quad, 0, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight, cornerOcclusion[0]);
+        addModelVertex(builder, quad, 1, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight, cornerOcclusion[1]);
+        addModelVertex(builder, quad, 2, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight, cornerOcclusion[2]);
+        addModelVertex(builder, quad, 0, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight, cornerOcclusion[0]);
+        addModelVertex(builder, quad, 2, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight, cornerOcclusion[2]);
+        addModelVertex(builder, quad, 3, blockX, blockY, blockZ, voxelSize, red, green, blue, alpha, packedLight, cornerOcclusion[3]);
     }
 
     private static void addModelVertex(BufferBuilder builder,
@@ -1187,7 +1352,8 @@ public final class VoxyBlaze3DProbeRenderer {
                                        int green,
                                        int blue,
                                        int alpha,
-                                       int packedLight) {
+                                       int packedLight,
+                                       float occlusion) {
         float[] positions = quad.positions();
         float[] uvs = quad.uvs();
         int positionOffset = vertex * 3;
@@ -1197,7 +1363,7 @@ public final class VoxyBlaze3DProbeRenderer {
                         blockZ + positions[positionOffset + 2] * voxelSize)
                 .setUv(uvs[uvOffset], uvs[uvOffset + 1])
                 .setUv2((packedLight >>> 4 & 0xF) << 4, (packedLight & 0xF) << 4)
-                .setColor(red, green, blue, alpha);
+                .setColor(Math.round(red * occlusion), Math.round(green * occlusion), Math.round(blue * occlusion), alpha);
     }
 
     private static int resolveTintColor(Mapper mapper,
@@ -1265,6 +1431,76 @@ public final class VoxyBlaze3DProbeRenderer {
         return red << 16 | green << 8 | blue;
     }
 
+    private static float[] cornerAmbientOcclusion(SectionNeighborhood neighborhood,
+                                                   Mapper mapper,
+                                                   int cellX,
+                                                   int cellY,
+                                                   int cellZ,
+                                                   ModelQuad quad) {
+        float[] occlusion = new float[4];
+        Direction face = quad.direction();
+        for (int vertex = 0; vertex < 4; vertex++) {
+            int positionOffset = vertex * 3;
+            float[] positions = quad.positions();
+            int signA;
+            int signB;
+            int tangentAX;
+            int tangentAY;
+            int tangentAZ;
+            int tangentBX;
+            int tangentBY;
+            int tangentBZ;
+            switch (face.getAxis()) {
+                case Y -> {
+                    signA = positions[positionOffset] == 0.0f ? -1 : 1;
+                    signB = positions[positionOffset + 2] == 0.0f ? -1 : 1;
+                    tangentAX = 1; tangentAY = 0; tangentAZ = 0;
+                    tangentBX = 0; tangentBY = 0; tangentBZ = 1;
+                }
+                case X -> {
+                    signA = positions[positionOffset + 1] == 0.0f ? -1 : 1;
+                    signB = positions[positionOffset + 2] == 0.0f ? -1 : 1;
+                    tangentAX = 0; tangentAY = 1; tangentAZ = 0;
+                    tangentBX = 0; tangentBY = 0; tangentBZ = 1;
+                }
+                case Z -> {
+                    signA = positions[positionOffset] == 0.0f ? -1 : 1;
+                    signB = positions[positionOffset + 1] == 0.0f ? -1 : 1;
+                    tangentAX = 1; tangentAY = 0; tangentAZ = 0;
+                    tangentBX = 0; tangentBY = 1; tangentBZ = 0;
+                }
+                default -> throw new IllegalStateException("Unknown face axis " + face.getAxis());
+            }
+            int normalX = face.getStepX();
+            int normalY = face.getStepY();
+            int normalZ = face.getStepZ();
+            boolean sideA = isAmbientOccluder(neighborhood, mapper,
+                    cellX + normalX + tangentAX * signA,
+                    cellY + normalY + tangentAY * signA,
+                    cellZ + normalZ + tangentAZ * signA);
+            boolean sideB = isAmbientOccluder(neighborhood, mapper,
+                    cellX + normalX + tangentBX * signB,
+                    cellY + normalY + tangentBY * signB,
+                    cellZ + normalZ + tangentBZ * signB);
+            boolean corner = isAmbientOccluder(neighborhood, mapper,
+                    cellX + normalX + tangentAX * signA + tangentBX * signB,
+                    cellY + normalY + tangentAY * signA + tangentBY * signB,
+                    cellZ + normalZ + tangentAZ * signA + tangentBZ * signB);
+            int blockers = sideA && sideB ? 3 : (sideA ? 1 : 0) + (sideB ? 1 : 0) + (corner ? 1 : 0);
+            occlusion[vertex] = 1.0f - blockers * 0.18f;
+        }
+        return occlusion;
+    }
+
+    private static boolean isAmbientOccluder(SectionNeighborhood neighborhood, Mapper mapper, int x, int y, int z) {
+        long stateId = getState(neighborhood, x, y, z);
+        if (Mapper.isAir(stateId)) {
+            return false;
+        }
+        BlockState state = mapper.getBlockStateFromBlockId(Mapper.getBlockId(stateId));
+        return state.getFluidState().isEmpty() && state.canOcclude() && state.isSolid();
+    }
+
 
     private static boolean isAir(SectionNeighborhood neighborhood, int x, int y, int z) {
         if (x < 0) return isAir(neighborhood.negativeX(), 31, y, z);
@@ -1291,7 +1527,8 @@ public final class VoxyBlaze3DProbeRenderer {
                              boolean tinted,
                              int tintIndex,
                              Direction direction,
-                             boolean fluidTint) {
+                             boolean fluidTint,
+                             boolean shaded) {
     }
 
     private record BlockRenderDefinition(List<ModelQuad> unculledQuads,
@@ -1349,6 +1586,49 @@ public final class VoxyBlaze3DProbeRenderer {
         @Override
         public FluidState getFluidState(BlockPos pos) {
             return state.getFluidState();
+        }
+
+        @Override
+        public int getHeight() {
+            return 0;
+        }
+
+        @Override
+        public int getMinY() {
+            return 0;
+        }
+    }
+
+    private static final class VoxyFluidGetter implements BlockGetter {
+        private final SectionNeighborhood neighborhood;
+        private final Mapper mapper;
+        private final int cellX;
+        private final int cellY;
+        private final int cellZ;
+
+        private VoxyFluidGetter(SectionNeighborhood neighborhood, Mapper mapper, int cellX, int cellY, int cellZ) {
+            this.neighborhood = neighborhood;
+            this.mapper = mapper;
+            this.cellX = cellX;
+            this.cellY = cellY;
+            this.cellZ = cellZ;
+        }
+
+        @Nullable
+        @Override
+        public BlockEntity getBlockEntity(BlockPos pos) {
+            return null;
+        }
+
+        @Override
+        public BlockState getBlockState(BlockPos pos) {
+            long state = getState(neighborhood, cellX + pos.getX(), cellY + pos.getY(), cellZ + pos.getZ());
+            return mapper.getBlockStateFromBlockId(Mapper.getBlockId(state));
+        }
+
+        @Override
+        public FluidState getFluidState(BlockPos pos) {
+            return getBlockState(pos).getFluidState();
         }
 
         @Override

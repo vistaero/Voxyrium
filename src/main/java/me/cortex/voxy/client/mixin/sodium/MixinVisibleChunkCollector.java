@@ -2,6 +2,8 @@ package me.cortex.voxy.client.mixin.sodium;
 
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
+import me.cortex.voxy.client.core.backend.VoxyGraphicsBackend;
+import me.cortex.voxy.client.core.backend.blaze3d.VoxyBlaze3DProbeRenderer;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import net.caffeinemc.mods.sodium.client.render.chunk.LocalSectionIndex;
 import net.caffeinemc.mods.sodium.client.render.chunk.RenderSectionFlags;
@@ -30,8 +32,14 @@ public class MixinVisibleChunkCollector {
     private RenderRegion voxy$injectVisibleSectionGather(RenderRegionManager instance, int x, int y, int z) {
         var region = instance.getForChunk(x,y,z);
         VoxyRenderSystem vrs;
-        if (!IrisUtil.irisShadowActive() && (vrs = IVoxyRenderSystemHolder.getNullable()) != null && voxy$shouldUseForChunkBound(region, LocalSectionIndex.pack(x, y, z))) {
-            vrs.visbleSectionStream.put(SectionPos.asLong(x,y,z));
+        boolean visibleBuiltSection = voxy$shouldUseForChunkBound(region, LocalSectionIndex.pack(x, y, z));
+        if (!IrisUtil.irisShadowActive() && visibleBuiltSection) {
+            if ((vrs = IVoxyRenderSystemHolder.getNullable()) != null) {
+                vrs.visbleSectionStream.put(SectionPos.asLong(x,y,z));
+            }
+            if (VoxyGraphicsBackend.current().supportsBlaze3dProbe()) {
+                VoxyBlaze3DProbeRenderer.recordVisibleVanillaSection(x, y, z);
+            }
         }
         return region;
     }

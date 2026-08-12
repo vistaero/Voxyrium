@@ -4,6 +4,8 @@ import me.cortex.voxy.client.ICheekyClientChunkCache;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
+import me.cortex.voxy.client.core.backend.VoxyGraphicsBackend;
+import me.cortex.voxy.client.core.backend.blaze3d.VoxyBlaze3DProbeRenderer;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.world.service.VoxelIngestService;
 import net.caffeinemc.mods.sodium.client.render.chunk.RenderSection;
@@ -46,6 +48,9 @@ public class MixinRenderSectionManager {
         if (vrs != null && !IrisUtil.irisShadowActive()) {
             vrs.visbleSectionStream.reset();
         }
+        if (!IrisUtil.irisShadowActive() && VoxyGraphicsBackend.current().supportsBlaze3dProbe()) {
+            VoxyBlaze3DProbeRenderer.beginVisibleVanillaSectionCollection();
+        }
     }
 
     @Inject(method = "readRenderListFromTree", at = @At(value = "INVOKE", target = "Lnet/caffeinemc/mods/sodium/client/render/chunk/lists/VisibleChunkCollector;<init>(Lnet/caffeinemc/mods/sodium/client/render/chunk/region/RenderRegionManager;I)V"))
@@ -53,6 +58,9 @@ public class MixinRenderSectionManager {
         var vrs = IVoxyRenderSystemHolder.getNullable();
         if (vrs != null && !IrisUtil.irisShadowActive()) {
             vrs.visbleSectionStream.reset();
+        }
+        if (!IrisUtil.irisShadowActive() && VoxyGraphicsBackend.current().supportsBlaze3dProbe()) {
+            VoxyBlaze3DProbeRenderer.beginVisibleVanillaSectionCollection();
         }
     }
 

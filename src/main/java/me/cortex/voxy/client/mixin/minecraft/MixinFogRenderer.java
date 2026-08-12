@@ -2,7 +2,6 @@ package me.cortex.voxy.client.mixin.minecraft;
 
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
-import me.cortex.voxy.client.core.backend.blaze3d.VoxyBlaze3DProbeRenderer;
 import me.cortex.voxy.common.Logger;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
@@ -27,13 +26,6 @@ public class MixinFogRenderer {
 
         var data = cir.getReturnValue();
         if (blaze3dProbeActive) {
-            if (!VoxyBlaze3DProbeRenderer.isFogEnabled()) {
-                data.environmentalStart = 999999999;
-                data.environmentalEnd = 999999999;
-                data.renderDistanceStart = 999999999;
-                data.renderDistanceEnd = 999999999;
-                return;
-            }
             if (!voxy$loggedBlaze3dFogSuppression) {
                 voxy$loggedBlaze3dFogSuppression = true;
                 Logger.info("Blaze3D renderer restoring Voxy-style environmental fog: environmental="

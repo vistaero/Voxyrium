@@ -179,7 +179,6 @@ public final class VoxyBlaze3DProbeRenderer {
     private static boolean lodGridInvalidated = true;
     private static boolean renderLodAboveTerrain;
     private static volatile boolean testCubeVisible;
-    private static volatile boolean fogEnabled = true;
     private static volatile boolean performanceProfiling;
     private static long lastPerformanceLogNanos;
     private static long profiledSelectionNanos;
@@ -207,16 +206,6 @@ public final class VoxyBlaze3DProbeRenderer {
         return testCubeVisible;
     }
 
-    public static boolean toggleFog() {
-        fogEnabled = !fogEnabled;
-        Logger.info("Blaze3D Voxy fog " + (fogEnabled ? "enabled" : "disabled") + ".");
-        return fogEnabled;
-    }
-
-    public static boolean isFogEnabled() {
-        return fogEnabled;
-    }
-
     public static boolean togglePerformanceProfiler() {
         performanceProfiling = !performanceProfiling;
         lastPerformanceLogNanos = 0;
@@ -235,12 +224,6 @@ public final class VoxyBlaze3DProbeRenderer {
         Logger.info("Blaze3D LoD minimum level changed to " + clampedLevel
                 + " (dynamic refinement stops at one voxel per " + voxelSize(clampedLevel) + " world blocks).");
         return clampedLevel;
-    }
-
-    public static boolean toggleLodOverlay() {
-        renderLodAboveTerrain = !renderLodAboveTerrain;
-        Logger.info("Blaze3D LoD terrain overlay " + (renderLodAboveTerrain ? "enabled" : "disabled") + ".");
-        return renderLodAboveTerrain;
     }
 
     public static String getLodDebugSummary() {

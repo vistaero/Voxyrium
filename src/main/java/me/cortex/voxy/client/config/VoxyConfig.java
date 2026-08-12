@@ -65,7 +65,10 @@ public class VoxyConfig {
 
 
     private static VoxyConfig loadOrCreate() {
-        if (VoxyCommon.isAvailable()) {
+        //The client config is initialized before Voxy registers its instance
+        //factory, so isAvailable() is still false at this point. Config I/O is
+        //valid for the Minecraft client regardless of renderer init order.
+        if (canAccessClientConfig()) {
             var path = getConfigPath();
             if (Files.exists(path)) {
                 try (FileReader reader = new FileReader(path.toFile())) {
@@ -97,7 +100,7 @@ public class VoxyConfig {
     }
 
     public void save() {
-        if (!VoxyCommon.isAvailable()) {
+        if (!canAccessClientConfig()) {
             Logger.info("Not saving config since voxy is unavalible");
             return;
         }
@@ -113,6 +116,10 @@ public class VoxyConfig {
         return FabricLoader.getInstance()
                 .getConfigDir()
                 .resolve("voxy-config.json");
+    }
+
+    private static boolean canAccessClientConfig() {
+        return VoxyCommon.IS_IN_MINECRAFT && !VoxyCommon.IS_DEDICATED_SERVER;
     }
 
     public boolean isRenderingEnabled() {

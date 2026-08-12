@@ -44,16 +44,6 @@ public class VoxyCommands {
                         .executes(VoxyCommands::setVoxyQualityLevel));
     }
 
-    public static LiteralArgumentBuilder<FabricClientCommandSource> registerToggleLodOverlay() {
-        return ClientCommands.literal("toggleVoxyLodOverlay")
-                .executes(VoxyCommands::toggleLodOverlay);
-    }
-
-    public static LiteralArgumentBuilder<FabricClientCommandSource> registerToggleFog() {
-        return ClientCommands.literal("toggleVoxyFog")
-                .executes(VoxyCommands::toggleFog);
-    }
-
     public static LiteralArgumentBuilder<FabricClientCommandSource> registerToggleVoxyProfiler() {
         return ClientCommands.literal("toggleVoxyProfiler")
                 .executes(VoxyCommands::toggleVoxyProfiler);
@@ -140,18 +130,6 @@ public class VoxyCommands {
         int lodLevel = VoxyBlaze3DProbeRenderer.setLodQualityLevel(requestedLevel);
         ctx.getSource().sendFeedback(Component.literal("Voxy dynamic LoD minimum level set to " + lodLevel
                 + " (refinement stops at one voxel per " + (1 << lodLevel) + " blocks)."));
-        return 1;
-    }
-
-    private static int toggleLodOverlay(CommandContext<FabricClientCommandSource> ctx) {
-        boolean enabled = VoxyBlaze3DProbeRenderer.toggleLodOverlay();
-        ctx.getSource().sendFeedback(Component.literal("Voxy LoD terrain overlay " + (enabled ? "enabled" : "disabled") + "."));
-        return 1;
-    }
-
-    private static int toggleFog(CommandContext<FabricClientCommandSource> ctx) {
-        boolean enabled = VoxyBlaze3DProbeRenderer.toggleFog();
-        ctx.getSource().sendFeedback(Component.literal("Voxy fog " + (enabled ? "enabled" : "disabled") + "."));
         return 1;
     }
 

@@ -49,8 +49,8 @@ public class VkNodeCleaner implements INodeCleaner {
         this.outputBuffer = new VkBuffer(ctx, OUTPUT_COUNT * 4 + OUTPUT_COUNT * 8);
         ctx.flushImmediate();
 
-        this.sorter = new VkShaderPipeline(ctx, "sort_visibility.comp",
-                VkShaderSource.load("voxy:lod/hierarchical/cleaner/sort_visibility.comp", VkShaderSource.defs()
+        this.sorter = new VkShaderPipeline(ctx, "sort_visibility_vk.comp",
+                VkShaderSource.load("voxy:lod/hierarchical/cleaner/sort_visibility_vk.comp", VkShaderSource.defs()
                         .def("WORK_SIZE", SORTING_WORKER_SIZE)
                         .def("ELEMS_PER_THREAD", WORK_PER_THREAD)
                         .def("OUTPUT_SIZE", OUTPUT_COUNT)

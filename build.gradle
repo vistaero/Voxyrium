@@ -429,6 +429,52 @@ dependencies {
     //implementation 'redis.clients:jedis:5.1.0'
 }
 
+// The alternative renderer must remain a public-Blaze3D-only implementation.
+// Keep this as part of `check` so a future convenience import cannot silently
+// make the fallback require Vulkan, OpenGL 4.6, or Minecraft's private backend
+// implementations.
+tasks.register('verifyBlaze3dBackendIsolation') {
+    group = 'verification'
+    description = 'Rejects direct native graphics API use in the Blaze3D renderer.'
+
+    def blaze3dSources = fileTree('src/main/java/me/cortex/voxy/client/core/backend/blaze3d') {
+        include '**/*.java'
+    }
+    inputs.files(blaze3dSources)
+
+    doLast {
+        def forbidden = [
+                'org.lwjgl.opengl',
+                'org.lwjgl.vulkan',
+                'com.mojang.blaze3d.opengl',
+                'com.mojang.blaze3d.vulkan',
+                'me.cortex.voxy.client.core.gl',
+                'me.cortex.voxy.client.core.vk'
+        ]
+        def violations = []
+        blaze3dSources.each { source ->
+            def text = source.getText('UTF-8')
+            forbidden.each { symbol ->
+                if (text.contains(symbol)) {
+                    violations.add("${source}: forbidden native dependency '${symbol}'")
+                }
+            }
+            text.eachLine { line, number ->
+                if (line =~ /\b(?:vk[A-Z]\w*|gl[A-Z]\w*|VK_[A-Z0-9_]+|GL_[A-Z0-9_]+)\b/) {
+                    violations.add("${source}:${number}: direct native graphics symbol: ${line.trim()}")
+                }
+            }
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException('Blaze3D backend isolation failed:\n' + violations.join('\n'))
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('verifyBlaze3dBackendIsolation')
+}
+
 /*
 if (!isInGHA) {
     repositories {

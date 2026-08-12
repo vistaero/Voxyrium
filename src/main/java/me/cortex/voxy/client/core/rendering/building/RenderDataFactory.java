@@ -333,6 +333,16 @@ public class RenderDataFactory {
         return state.isSolid() ? -1.0f : 0.0f;
     }
 
+    private boolean statesShareFluid(long firstState, long secondState) {
+        Mapper mapper = this.world.getMapper();
+        FluidState firstFluid = mapper.getBlockStateFromBlockId(Mapper.getBlockId(firstState)).getFluidState();
+        if (firstFluid.isEmpty()) {
+            return false;
+        }
+        FluidState secondFluid = mapper.getBlockStateFromBlockId(Mapper.getBlockId(secondState)).getFluidState();
+        return !secondFluid.isEmpty() && firstFluid.getType().isSame(secondFluid.getType());
+    }
+
     private BlockState getFluidBlockState(int cellX, int cellY, int cellZ) {
         int sectionX = Math.floorDiv(cellX, 32);
         int sectionY = Math.floorDiv(cellY, 32);
@@ -717,8 +727,17 @@ public class RenderDataFactory {
                 int current = this.fluidMasks[pidx];
                 int next = this.fluidMasks[pidx + skipAmount];
 
-                int msk = (current | this.opaqueMasks[pidx]) ^ (next | this.opaqueMasks[pidx + skipAmount]);
-                msk &= current|next;
+                int msk;
+                if (axis == 0) {
+                    //A fluid top is below the cell boundary, so a solid block
+                    //above it must not hide the surface. A bottom face is still
+                    //hidden by a solid below, and vertically continuous fluid
+                    //has no internal interface at all.
+                    msk = (current&~next)|(next&~current&~this.opaqueMasks[pidx]);
+                } else {
+                    msk = (current | this.opaqueMasks[pidx]) ^ (next | this.opaqueMasks[pidx + skipAmount]);
+                    msk &= current|next;
+                }
                 if (msk == 0) {
                     cSkip += 32;
                     continue;
@@ -749,7 +768,8 @@ public class RenderDataFactory {
                         int bi = facingForward == 1 ? b : a;
 
                         //TODO: check if must cull against next entries face
-                        if (CHECK_NEIGHBOR_FACE_OCCLUSION) {//TODO:SELF OCCLUSION
+                        boolean fluidTop = axis == 0 && facingForward == 1;
+                        if (CHECK_NEIGHBOR_FACE_OCCLUSION && !fluidTop) {//TODO:SELF OCCLUSION
                             if (ModelQueries.faceOccludes(this.sectionData[bi + 1], (axis << 1) | (1 - facingForward))) {
                                 this.blockMesher.skip(1);
                                 continue;
@@ -822,6 +842,15 @@ public class RenderDataFactory {
 
                         int neighborIdx = ((axis+1)*32*32 * 2)+(side)*32*32;
                         long neighborId = this.neighboringFaces[neighborIdx + (other*32) + index];
+                        long rawState = this.fluidSourceSection._unsafeGetRawDataArray()[idx];
+
+                        //Fluid level/state may differ across a section border,
+                        //but water remains continuous with water (and likewise
+                        //for lava), so never emit an internal face between them.
+                        if (this.statesShareFluid(rawState, neighborId)) {
+                            this.blockMesher.skip(1);
+                            continue;
+                        }
 
                         long A = this.sectionData[idx * 2];
                         long Am = this.sectionData[idx * 2 + 1];
@@ -841,17 +870,9 @@ public class RenderDataFactory {
                         if (Mapper.getBlockId(neighborId) != 0) {//Not air
                             int modelId = this.modelMan.getModelId(Mapper.getBlockId(neighborId));
                             long meta = this.modelMan.getModelMetadataFromClientId(modelId);
-                            if (ModelQueries.containsFluid(meta)) {
-                                modelId = this.modelMan.getFluidClientStateId(modelId);
-                            }
-                            if (ModelQueries.cullsSame(Am)) {
-                                if (modelId == ((A>>26)&0xFFFF)) {
-                                    this.blockMesher.skip(1);
-                                    continue;
-                                }
-                            }
 
-                            if (CHECK_NEIGHBOR_FACE_OCCLUSION) {
+                            boolean fluidTop = axis == 0 && side == 1;
+                            if (CHECK_NEIGHBOR_FACE_OCCLUSION && !fluidTop) {
                                 if (ModelQueries.faceOccludes(meta, (axis << 1) | (1 - side))) {
                                     this.blockMesher.skip(1);
                                     continue;
@@ -1452,8 +1473,13 @@ public class RenderDataFactory {
                     boolean oki = true;
 
                     int sidx = (i<<5) * 2;
+                    long rawState = this.fluidSourceSection._unsafeGetRawDataArray()[sidx>>1];
                     long A = this.sectionData[sidx];
                     long Am = this.sectionData[sidx + 1];
+
+                    if (this.statesShareFluid(rawState, neighborId)) {
+                        oki = false;
+                    }
 
                     if (ModelQueries.containsFluid(Am)) {
                         int modelId = (int) ((A>>26)&0xFFFF);
@@ -1482,15 +1508,6 @@ public class RenderDataFactory {
                             }
                         }
 
-                        if (ModelQueries.containsFluid(meta)) {
-                            modelId = this.modelMan.getFluidClientStateId(modelId);
-                        }
-
-                        if (ModelQueries.cullsSame(Am)) {
-                            if (modelId == ((A>>26)&0xFFFF)) {
-                                oki = false;
-                            }
-                        }
                     }
 
                     if (oki) {
@@ -1518,8 +1535,13 @@ public class RenderDataFactory {
 
 
                     int sidx = (i*32+31) * 2;
+                    long rawState = this.fluidSourceSection._unsafeGetRawDataArray()[sidx>>1];
                     long A = this.sectionData[sidx];
                     long Am = this.sectionData[sidx + 1];
+
+                    if (this.statesShareFluid(rawState, neighborId)) {
+                        oki = false;
+                    }
 
                     //TODO: check if must cull against next entries face
                     if (ModelQueries.containsFluid(Am)) {
@@ -1546,15 +1568,6 @@ public class RenderDataFactory {
                             }
                         }
 
-                        if (ModelQueries.containsFluid(meta)) {
-                            modelId = this.modelMan.getFluidClientStateId(modelId);
-                        }
-
-                        if (ModelQueries.cullsSame(Am)) {
-                            if (modelId == ((A>>26)&0xFFFF)) {
-                                oki = false;
-                            }
-                        }
                     }
 
                     if (oki) {

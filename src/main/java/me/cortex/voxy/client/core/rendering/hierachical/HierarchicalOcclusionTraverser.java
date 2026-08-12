@@ -11,9 +11,9 @@ import me.cortex.voxy.client.core.gl.shader.ShaderLoader;
 import me.cortex.voxy.client.core.gl.shader.ShaderType;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.client.core.rendering.building.RenderGenerationService;
-import me.cortex.voxy.client.core.rendering.util.DownloadStream;
+import me.cortex.voxy.client.core.rendering.util.AbstractDownloadStream;
 import me.cortex.voxy.client.core.rendering.util.PrintfDebugUtil;
-import me.cortex.voxy.client.core.rendering.util.UploadStream;
+import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.world.WorldEngine;
@@ -193,7 +193,7 @@ public class HierarchicalOcclusionTraverser {
     }
 
     private void uploadUniform(Viewport<?> viewport) {
-        long ptr = UploadStream.INSTANCE.upload(this.uniformBuffer, 0, 1024);
+        long ptr = AbstractUploadStream.INSTANCE().upload(this.uniformBuffer, 0, 1024);
 
         viewport.MVP.getToAddress(ptr); ptr += 4*4*4;
 
@@ -212,7 +212,7 @@ public class HierarchicalOcclusionTraverser {
 
         setFrustum(viewport, ptr); ptr += 4*4*6;
 
-        MemoryUtil.memPutInt(ptr, (int) (viewport.getRenderList().size()/4-1)); ptr += 4;
+        MemoryUtil.memPutInt(ptr, (int) (viewport.getRenderList().sizeBytes()/4-1)); ptr += 4;
 
         //VisibilityId
         MemoryUtil.memPutInt(ptr, this.nodeCleaner.visibilityId); ptr += 4;
@@ -237,12 +237,12 @@ public class HierarchicalOcclusionTraverser {
         //Bind the hiz buffer
         glBindTextureUnit(0, viewport.hiZBuffer.getHizTextureId());
         glBindSampler(0, this.hizSampler);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, RENDER_QUEUE_BINDING, viewport.getRenderList().id);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, RENDER_QUEUE_BINDING, viewport.getRenderList().glId());
     }
 
     public void doTraversal(Viewport<?> viewport) {
         this.uploadUniform(viewport);
-        //UploadStream.INSTANCE.commit(); //Done inside traversal
+        //AbstractUploadStream.INSTANCE().commit(); //Done inside traversal
 
         this.traversal.bind();
         this.bindings(viewport);
@@ -257,7 +257,7 @@ public class HierarchicalOcclusionTraverser {
         }
 
         //Clear the render output counter
-        nglClearNamedBufferSubData(viewport.getRenderList().id, GL_R32UI, 0, 4, GL_RED_INTEGER, GL_UNSIGNED_INT, 0);
+        nglClearNamedBufferSubData(viewport.getRenderList().glId(), GL_R32UI, 0, 4, GL_RED_INTEGER, GL_UNSIGNED_INT, 0);
 
         //Traverse
         this.traverseInternal();
@@ -265,7 +265,7 @@ public class HierarchicalOcclusionTraverser {
         this.downloadResetRequestQueue();
 
         if (RenderStatistics.enabled) {
-            DownloadStream.INSTANCE.download(this.statisticsBuffer, down->{
+            AbstractDownloadStream.INSTANCE().download(this.statisticsBuffer, down->{
                 for (int i = 0; i < MAX_ITERATIONS; i++) {
                     RenderStatistics.hierarchicalTraversalCounts[i] = MemoryUtil.memGetInt(down.address+i*4L);
                 }
@@ -300,7 +300,7 @@ public class HierarchicalOcclusionTraverser {
         glClearNamedBufferSubData(this.queueMetaBuffer.id, GL_RGBA32UI, 0, 16, GL_RGBA, GL_UNSIGNED_INT, new int[]{firstDispatchSize,1,1,initialQueueSize});
          */
         {//TODO:FIXME: THIS IS BULLSHIT BY INTEL need to fix the clearing
-            long ptr = UploadStream.INSTANCE.upload(this.queueMetaBuffer, 0, 16*MAX_ITERATIONS);
+            long ptr = AbstractUploadStream.INSTANCE().upload(this.queueMetaBuffer, 0, 16*MAX_ITERATIONS);
             MemoryUtil.memPutInt(ptr +  0, firstDispatchSize);
             MemoryUtil.memPutInt(ptr +  4, 1);
             MemoryUtil.memPutInt(ptr +  8, 1);
@@ -311,7 +311,7 @@ public class HierarchicalOcclusionTraverser {
                 MemoryUtil.memPutInt(ptr + (i*16)+ 8, 1);
                 MemoryUtil.memPutInt(ptr + (i*16)+12, 0);
             }
-            UploadStream.INSTANCE.commit();
+            AbstractUploadStream.INSTANCE().commit();
         }
 
         //Execute first iteration
@@ -349,7 +349,7 @@ public class HierarchicalOcclusionTraverser {
 
     private void downloadResetRequestQueue() {
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-        DownloadStream.INSTANCE.download(this.requestBuffer, this::forwardDownloadResult);
+        AbstractDownloadStream.INSTANCE().download(this.requestBuffer, this::forwardDownloadResult);
         nglClearNamedBufferSubData(this.requestBuffer.id, GL_R32UI, 0, 4, GL_RED_INTEGER, GL_UNSIGNED_INT, 0);
     }
 

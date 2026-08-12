@@ -5,6 +5,7 @@ import me.cortex.voxy.client.core.AbstractRenderPipeline;
 import me.cortex.voxy.client.core.RenderProperties;
 import me.cortex.voxy.client.core.gl.shader.Shader;
 import me.cortex.voxy.client.core.gl.shader.ShaderType;
+import me.cortex.voxy.client.core.model.IModelStore;
 import me.cortex.voxy.client.core.model.ModelStore;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.client.core.rendering.section.geometry.IGeometryData;
@@ -17,11 +18,11 @@ import java.util.List;
 //Takes in mesh ids from the hierachical traversal and may perform more culling then renders it
 public abstract class AbstractSectionRenderer <T extends Viewport<T>, J extends IGeometryData> {
     public interface FactoryConstructor<VIEWPORT extends Viewport<VIEWPORT>, GEODATA extends IGeometryData> {
-        AbstractSectionRenderer<VIEWPORT, GEODATA> create(AbstractRenderPipeline pipeline, ModelStore modelStore, GEODATA geometryData);
+        AbstractSectionRenderer<VIEWPORT, GEODATA> create(AbstractRenderPipeline pipeline, IModelStore modelStore, GEODATA geometryData);
     }
 
     public record Factory<VIEWPORT extends Viewport<VIEWPORT>, GEODATA extends IGeometryData>(Class<? extends AbstractSectionRenderer<VIEWPORT, GEODATA>> clz, FactoryConstructor<VIEWPORT, GEODATA> constructor) {
-        public AbstractSectionRenderer<VIEWPORT, GEODATA> create(AbstractRenderPipeline pipeline, ModelStore store, IGeometryData geometryData) {
+        public AbstractSectionRenderer<VIEWPORT, GEODATA> create(AbstractRenderPipeline pipeline, IModelStore store, IGeometryData geometryData) {
             return this.constructor.create(pipeline, store, (GEODATA) geometryData);
         }
 
@@ -33,7 +34,7 @@ public abstract class AbstractSectionRenderer <T extends Viewport<T>, J extends 
             }
             var constructor = constructors[0];
             var params = constructor.getParameterTypes();
-            if (params.length != 3 || params[0] != AbstractRenderPipeline.class || params[1] != ModelStore.class || !IGeometryData.class.isAssignableFrom(params[2])) {
+            if (params.length != 3 || params[0] != AbstractRenderPipeline.class || params[1] != IModelStore.class || !IGeometryData.class.isAssignableFrom(params[2])) {
                 Logger.error("Render backend " + clz.getCanonicalName() + " had invalid constructor");
                 return null;
             }
@@ -49,9 +50,9 @@ public abstract class AbstractSectionRenderer <T extends Viewport<T>, J extends 
 
 
     protected final J geometryManager;
-    protected final ModelStore modelStore;
+    protected final IModelStore modelStore;
     protected final RenderProperties properties;
-    protected AbstractSectionRenderer(RenderProperties properties, ModelStore modelStore, J geometryManager) {
+    protected AbstractSectionRenderer(RenderProperties properties, IModelStore modelStore, J geometryManager) {
         this.properties = properties;
         this.geometryManager = geometryManager;
         this.modelStore = modelStore;

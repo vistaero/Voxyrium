@@ -11,7 +11,7 @@ import static org.lwjgl.opengl.GL11C.*;
 import static org.lwjgl.opengl.GL15C.GL_ARRAY_BUFFER;
 import static org.lwjgl.opengl.GL15C.glBindBuffer;
 
-public class BasicSectionGeometryData implements IGeometryData {
+public class BasicSectionGeometryData implements IBasicGeometryData {
     public static final int SECTION_METADATA_SIZE = 32;
     private final GlBuffer sectionMetadataBuffer;
     private final GlBuffer geometryBuffer;
@@ -96,6 +96,16 @@ public class BasicSectionGeometryData implements IGeometryData {
 
     public GlBuffer getGeometryBuffer() {
         return this.geometryBuffer;
+    }
+
+    @Override
+    public me.cortex.voxy.client.core.rendering.util.IDeviceBuffer geometryBufferHandle() {
+        return this.geometryBuffer;
+    }
+
+    @Override
+    public me.cortex.voxy.client.core.rendering.util.IDeviceBuffer metadataBufferHandle() {
+        return this.sectionMetadataBuffer;
     }
 
     public GlBuffer getMetadataBuffer() {

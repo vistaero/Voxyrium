@@ -2,6 +2,14 @@
 #extension GL_ARB_gpu_shader_int64 : enable
 #define VISIBILITY_ACCESS
 
+#ifdef VOXY_VULKAN
+#define VERT_ID gl_VertexIndex
+#define INSTANCE_ID gl_InstanceIndex
+#else
+#define VERT_ID gl_VertexID
+#define INSTANCE_ID gl_InstanceID
+#endif
+
 #define SECTION_METADATA_BUFFER_BINDING 1
 #define VISIBILITY_BUFFER_BINDING 2
 #define INDIRECT_SECTION_LOOKUP_BINDING 3
@@ -19,7 +27,7 @@ vec2 getTAA();
 #endif
 
 void main() {
-    uint sid = indirectLookup[gl_InstanceID];
+    uint sid = indirectLookup[INSTANCE_ID];
 
     SectionMeta section = sectionData[sid];
 
@@ -36,7 +44,7 @@ void main() {
 
 
     vec3 offset = aabbOffset-EXPANSION;
-    offset += vec3(gl_VertexID&1, (gl_VertexID>>2)&1, (gl_VertexID>>1)&1)*(size+2*EXPANSION);
+    offset += vec3(VERT_ID&1, (VERT_ID>>2)&1, (VERT_ID>>1)&1)*(size+2*EXPANSION);
 
     gl_Position = MVP * vec4(vec3(pos)+offset*(1<<detail),1);
 

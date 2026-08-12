@@ -2,7 +2,7 @@ package me.cortex.voxy.client.core.rendering.bounding;
 
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.rendering.Viewport;
-import me.cortex.voxy.client.core.rendering.util.UploadStream;
+import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
 import me.cortex.voxy.common.util.MemoryBuffer;
 import net.caffeinemc.mods.sodium.client.render.chunk.map.ChunkTrackerHolder;
 import net.minecraft.client.Minecraft;
@@ -24,9 +24,9 @@ public class ColumnStreamedBoundStore implements IBoundStore {
     public void preRender(Viewport<?> viewport) {
         final float renderDistance = Minecraft.getInstance().options.getEffectiveRenderDistance()*16;//In blocks
         {
-            long addr = UploadStream.INSTANCE.uploadTo(this.chunkPosBuffer);
+            long addr = AbstractUploadStream.INSTANCE().uploadTo(this.chunkPosBuffer);
             this.count = findEmitBoundingChunks(viewport, renderDistance, (int) (this.chunkPosBuffer.size() / 8), addr);
-            UploadStream.INSTANCE.commit();
+            AbstractUploadStream.INSTANCE().commit();
         }
         if (this.count<0) {
             this.chunkPosBuffer.free();//Destroy old

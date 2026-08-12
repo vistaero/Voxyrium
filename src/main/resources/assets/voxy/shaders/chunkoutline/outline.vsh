@@ -27,8 +27,20 @@ bool shouldRender(ivec3 icorner) {
 vec2 getTAA();
 #endif
 
+#ifdef VOXY_VULKAN
+//VK draws one 36-index box per instance (no 32-batching, no baseInstance games):
+// gl_InstanceIndex is the chunk id directly and the vertex index is the raw 0..7 corner.
+#define VERT_ID gl_VertexIndex
+#else
+#define VERT_ID gl_VertexID
+#endif
+
 void main() {
-    uint id = (gl_InstanceID<<5)+gl_BaseInstance+(gl_VertexID>>3);
+#ifdef VOXY_VULKAN
+    uint id = uint(gl_InstanceIndex);
+#else
+    uint id = (gl_InstanceID<<5)+gl_BaseInstance+(VERT_ID>>3);
+#endif
 
     ivec3 origin = unpackPos(chunkPos[id])*16;
     origin -= cameraBlockPos.xyz;
@@ -38,7 +50,7 @@ void main() {
         return;
     }
 
-    ivec3 cubeCornerI = ivec3(gl_VertexID&1, (gl_VertexID>>2)&1, (gl_VertexID>>1)&1)*16;
+    ivec3 cubeCornerI = ivec3(VERT_ID&1, (VERT_ID>>2)&1, (VERT_ID>>1)&1)*16;
     //Expand the y height to be big (will be +- 8192)
     //TODO: make it W.R.T world height and offsets
     //cubeCornerI.y = cubeCornerI.y*1024-512;

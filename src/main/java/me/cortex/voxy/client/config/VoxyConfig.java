@@ -35,6 +35,21 @@ public class VoxyConfig {
     public float subDivisionSize = 64;
     public boolean useEnvironmentalFog = true;
     public boolean dontUseSodiumBuilderThreads = false;
+    public String rendererBackend = "auto";
+
+    public VoxyGraphicsBackend.RendererMode getRendererBackendMode() {
+        if (this.rendererBackend == null) return VoxyGraphicsBackend.RendererMode.AUTO;
+        try {
+            return VoxyGraphicsBackend.RendererMode.valueOf(this.rendererBackend.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException exception) {
+            return VoxyGraphicsBackend.RendererMode.AUTO;
+        }
+    }
+
+    public void setRendererBackendMode(VoxyGraphicsBackend.RendererMode mode) {
+        this.rendererBackend = mode.name().toLowerCase(Locale.ROOT);
+    }
+
     public String ssaoMode;
 
     public SSAO.SSAOMode getSSAOMode() {
@@ -102,7 +117,14 @@ public class VoxyConfig {
 
     public boolean isRenderingEnabled() {
         return VoxyCommon.isAvailable()
-                && VoxyGraphicsBackend.current().hasImplementedRenderer()
+                && VoxyGraphicsBackend.usesNativeRenderer()
+                && this.enabled
+                && this.enableRendering;
+    }
+
+    public boolean isBlaze3dRenderingEnabled() {
+        return VoxyCommon.isAvailable()
+                && VoxyGraphicsBackend.usesBlaze3dRenderer()
                 && this.enabled
                 && this.enableRendering;
     }

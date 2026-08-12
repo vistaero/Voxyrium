@@ -2,7 +2,6 @@ package me.cortex.voxy.client.mixin.minecraft;
 
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
-import me.cortex.voxy.client.core.backend.VoxyGraphicsBackend;
 import me.cortex.voxy.client.core.backend.blaze3d.VoxyBlaze3DProbeRenderer;
 import me.cortex.voxy.common.Logger;
 import net.minecraft.client.Camera;
@@ -23,9 +22,7 @@ public class MixinFogRenderer {
 
     @Inject(method = "setupFog", at = @At("RETURN"))
     private void voxy$modifyFog(Camera camera, int renderDistanceInChunks, DeltaTracker deltaTracker, float darkenWorldAmount, ClientLevel level, CallbackInfoReturnable<FogData> cir) {
-        boolean blaze3dProbeActive = VoxyGraphicsBackend.current().supportsBlaze3dProbe()
-                && VoxyConfig.CONFIG.enabled
-                && VoxyConfig.CONFIG.enableRendering;
+        boolean blaze3dProbeActive = VoxyConfig.CONFIG.isBlaze3dRenderingEnabled();
         if (!VoxyConfig.CONFIG.isRenderingEnabled() && !blaze3dProbeActive) return;
 
         var data = cir.getReturnValue();
@@ -39,7 +36,7 @@ public class MixinFogRenderer {
             }
             if (!voxy$loggedBlaze3dFogSuppression) {
                 voxy$loggedBlaze3dFogSuppression = true;
-                Logger.info("Blaze3D probe restoring Voxy-style environmental fog on Vulkan: environmental="
+                Logger.info("Blaze3D renderer restoring Voxy-style environmental fog: environmental="
                         + data.environmentalStart + ".." + data.environmentalEnd
                         + ", render-distance=" + data.renderDistanceStart + ".." + data.renderDistanceEnd);
             }

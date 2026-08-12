@@ -4,6 +4,7 @@ import me.cortex.voxy.client.ClientSessionEvents;
 import me.cortex.voxy.client.config.SodiumConfigBuilder.*;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.SSAO;
+import me.cortex.voxy.client.core.backend.VoxyGraphicsBackend;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.util.cpu.CpuLayout;
 import me.cortex.voxy.commonImpl.VoxyCommon;
@@ -93,6 +94,19 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
                                             }
                                         },"voxy:enabled", RENDER_RELOAD)
                                         .setPostChangeFlags("voxy:iris_reload")
+                                        .setEnabler("voxy:enabled"),
+                                new EnumOption<>(
+                                        "voxy:renderer_backend",
+                                        VoxyGraphicsBackend.RendererMode.class,
+                                        Component.translatable("voxy.config.general.renderer_backend"),
+                                        CFG::getRendererBackendMode,
+                                        value->{
+                                            CFG.setRendererBackendMode(value);
+                                            VoxyGraphicsBackend.applyPreference(value);
+                                        })
+                                        .setNameProvider(value->Component.translatable(
+                                                "voxy.config.general.renderer_backend." + value.name().toLowerCase(java.util.Locale.ROOT)))
+                                        .setPostChangeFlags(RENDER_RELOAD, "voxy:iris_reload")
                                         .setEnabler("voxy:enabled")
                         ), new Group(
                                 new IntOption(

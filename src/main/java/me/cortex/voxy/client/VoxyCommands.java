@@ -10,6 +10,7 @@ import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.backend.blaze3d.VoxyBlaze3DProbeRenderer;
 import me.cortex.voxy.common.DebugUtils;
+import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
 import me.cortex.voxy.commonImpl.importers.DHImporter;
@@ -51,6 +52,16 @@ public class VoxyCommands {
     public static LiteralArgumentBuilder<FabricClientCommandSource> registerToggleFog() {
         return ClientCommands.literal("toggleVoxyFog")
                 .executes(VoxyCommands::toggleFog);
+    }
+
+    public static LiteralArgumentBuilder<FabricClientCommandSource> registerToggleVoxyProfiler() {
+        return ClientCommands.literal("toggleVoxyProfiler")
+                .executes(VoxyCommands::toggleVoxyProfiler);
+    }
+
+    public static LiteralArgumentBuilder<FabricClientCommandSource> registerVoxyLodDebug() {
+        return ClientCommands.literal("voxyLodDebug")
+                .executes(VoxyCommands::voxyLodDebug);
     }
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> register() {
@@ -141,6 +152,19 @@ public class VoxyCommands {
     private static int toggleFog(CommandContext<FabricClientCommandSource> ctx) {
         boolean enabled = VoxyBlaze3DProbeRenderer.toggleFog();
         ctx.getSource().sendFeedback(Component.literal("Voxy fog " + (enabled ? "enabled" : "disabled") + "."));
+        return 1;
+    }
+
+    private static int toggleVoxyProfiler(CommandContext<FabricClientCommandSource> ctx) {
+        boolean enabled = VoxyBlaze3DProbeRenderer.togglePerformanceProfiler();
+        ctx.getSource().sendFeedback(Component.literal("Voxy performance profiler " + (enabled ? "enabled" : "disabled") + "."));
+        return 1;
+    }
+
+    private static int voxyLodDebug(CommandContext<FabricClientCommandSource> ctx) {
+        String summary = VoxyBlaze3DProbeRenderer.getLodDebugSummary();
+        Logger.info("Blaze3D " + summary);
+        ctx.getSource().sendFeedback(Component.literal(summary));
         return 1;
     }
 

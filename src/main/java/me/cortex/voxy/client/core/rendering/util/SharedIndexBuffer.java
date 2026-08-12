@@ -8,9 +8,21 @@ import org.lwjgl.system.MemoryUtil;
 //Has a base index buffer of 16380 quads, and also a 1 cube byte index buffer at the end
 public class SharedIndexBuffer {
     public static final int CUBE_INDEX_OFFSET = (1<<16)*6*2;
-    public static final SharedIndexBuffer INSTANCE = new SharedIndexBuffer();
-    public static final SharedIndexBuffer INSTANCE_BYTE = new SharedIndexBuffer(true);
-    public static final SharedIndexBuffer INSTANCE_BB_BYTE = new SharedIndexBuffer(true, true);
+    //Lazy: creating these does GL work, and this class must never touch the GPU
+    // before a context exists (nor load at all when MC is on Vulkan).
+    private static SharedIndexBuffer INSTANCE, INSTANCE_BYTE, INSTANCE_BB_BYTE;
+    public static SharedIndexBuffer INSTANCE() {
+        var i = INSTANCE; if (i == null) i = INSTANCE = new SharedIndexBuffer();
+        return i;
+    }
+    public static SharedIndexBuffer INSTANCE_BYTE() {
+        var i = INSTANCE_BYTE; if (i == null) i = INSTANCE_BYTE = new SharedIndexBuffer(true);
+        return i;
+    }
+    public static SharedIndexBuffer INSTANCE_BB_BYTE() {
+        var i = INSTANCE_BB_BYTE; if (i == null) i = INSTANCE_BB_BYTE = new SharedIndexBuffer(true, true);
+        return i;
+    }
 
     private final GlBuffer indexBuffer;
 
@@ -19,13 +31,13 @@ public class SharedIndexBuffer {
         var quadIndexBuff = generateQuadIndicesShort(16380);
         var cubeBuff = generateCubeIndexBuffer();
 
-        long ptr = UploadStream.INSTANCE.upload(this.indexBuffer, 0, this.indexBuffer.size());
+        long ptr = AbstractUploadStream.INSTANCE().upload(this.indexBuffer, 0, this.indexBuffer.size());
         quadIndexBuff.cpyTo(ptr);
         cubeBuff.cpyTo((1<<16)*2*6 + ptr);
 
         quadIndexBuff.free();
         cubeBuff.free();
-        UploadStream.INSTANCE.commit();
+        AbstractUploadStream.INSTANCE().commit();
     }
 
     private SharedIndexBuffer(boolean type2) {
@@ -33,7 +45,7 @@ public class SharedIndexBuffer {
         var quadIndexBuff = generateQuadIndicesByte(63);
         var cubeBuff = generateCubeIndexBuffer();
 
-        long ptr = UploadStream.INSTANCE.upload(this.indexBuffer, 0, this.indexBuffer.size());
+        long ptr = AbstractUploadStream.INSTANCE().upload(this.indexBuffer, 0, this.indexBuffer.size());
         quadIndexBuff.cpyTo(ptr);
         cubeBuff.cpyTo((1<<8)*6 + ptr);
 
@@ -45,12 +57,12 @@ public class SharedIndexBuffer {
         this.indexBuffer = new GlBuffer(6*2*3*(256/8));
         var cubeBuff = generateByteCubesIndexBuffer(256/8);
 
-        cubeBuff.cpyTo(UploadStream.INSTANCE.upload(this.indexBuffer, 0, this.indexBuffer.size()));
-        UploadStream.INSTANCE.commit();
+        cubeBuff.cpyTo(AbstractUploadStream.INSTANCE().upload(this.indexBuffer, 0, this.indexBuffer.size()));
+        AbstractUploadStream.INSTANCE().commit();
         cubeBuff.free();
     }
 
-    private static MemoryBuffer generateCubeIndexBuffer() {
+    public static MemoryBuffer generateCubeIndexBuffer() {
         var buffer = new MemoryBuffer(6*2*3);
         long ptr = buffer.address;
         MemoryUtil.memSet(ptr, 0, 6*2*3 );

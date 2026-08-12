@@ -47,31 +47,51 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
         this.doRender(matrices, renderPass, camera, parameters);
     }
 
+    @Inject(method = "render", at = @At("HEAD"))
+    private void voxy$injectOpaqueBlaze3dRender(ChunkRenderMatrices matrices, ChunkRenderListIterable renderLists, TerrainRenderPass renderPass, CameraTransform camera, FogParameters parameters, boolean indexedRenderingEnabled, GpuSampler terrainSampler, GpuBufferSlice uniformData, GpuBuffer sectionTimeInfo, CallbackInfo ci) {
+        if (renderPass == DefaultTerrainRenderPasses.SOLID
+                && VoxyConfig.CONFIG.isBlaze3dRenderingEnabled()) {
+            var target = renderPass.getTarget();
+            VoxyBlaze3DProbeRenderer.renderOpaque(matrices, target.getColorTextureView(), target.getDepthTextureView(), camera);
+        }
+    }
+
     @Unique
     private void doRender(ChunkRenderMatrices matrices, TerrainRenderPass renderPass, CameraTransform camera, FogParameters fogParameters) {
         if (renderPass == DefaultTerrainRenderPasses.CUTOUT) {
-            if (!VoxyGraphicsBackend.current().supportsBlaze3dProbe()) {
-                var renderer = IVoxyRenderSystemHolder.getNullable();
-                if (renderer != null) {
-                    Viewport<?> viewport = null;
-                    var target = renderPass.getTarget();
-                    if (IrisUtil.USED_IRIS_VIEWPORT) {
-                        viewport = renderer.getViewport();
-                        IrisUtil.USED_IRIS_VIEWPORT = false;
-                    } else {
-                        viewport = renderer.setupViewport(matrices.projection(), matrices.modelView(), fogParameters, target.width, target.height, camera.x, camera.y, camera.z);
-                    }
-                    renderer.renderOpaque(viewport, ((com.mojang.blaze3d.opengl.GlTextureView)target.getDepthTextureView()).glId(), ((com.mojang.blaze3d.opengl.GlTextureView)target.getColorTextureView()).glId());
+            if (VoxyGraphicsBackend.usesBlaze3dRenderer()) {
+                return;
+            }
+            var renderer = IVoxyRenderSystemHolder.getNullable();
+            if (renderer != null) {
+                if (renderer.isVulkanBackend()) {
+                    //Vulkan backend: Voxy renders via its own frame hook
+                    // (MixinSodiumOpaqueVkFrame). Sodium 0.9.1 also renders through MC's
+                    // Vulkan device, so target.get*TextureView() returns a
+                    // VulkanGpuTextureView with no glId() — the GL-interop path below
+                    // must not run (the cast would ClassCastException before
+                    // renderOpaque's own VK early-return is reached).
+                    return;
                 }
+                Viewport<?> viewport = null;
+                var target = renderPass.getTarget();
+                if (IrisUtil.USED_IRIS_VIEWPORT) {
+                    viewport = renderer.getViewport();
+                    IrisUtil.USED_IRIS_VIEWPORT = false;
+                } else {
+                    viewport = renderer.setupViewport(matrices.projection(), matrices.modelView(), fogParameters, target.width, target.height, camera.x, camera.y, camera.z);
+                }
+                renderer.renderOpaque(viewport,
+                        ((com.mojang.blaze3d.opengl.GlTextureView)target.getDepthTextureView()).glId(),
+                        ((com.mojang.blaze3d.opengl.GlTextureView)target.getColorTextureView()).glId());
             }
             return;
         }
 
-        if (renderPass == DefaultTerrainRenderPasses.TRANSLUCENT && VoxyGraphicsBackend.current().supportsBlaze3dProbe()) {
-            if (VoxyConfig.CONFIG.enabled && VoxyConfig.CONFIG.enableRendering) {
-                var target = renderPass.getTarget();
-                VoxyBlaze3DProbeRenderer.render(matrices, target.getColorTextureView(), target.getDepthTextureView(), camera);
-            }
+        if (renderPass == DefaultTerrainRenderPasses.TRANSLUCENT
+                && VoxyConfig.CONFIG.isBlaze3dRenderingEnabled()) {
+            var target = renderPass.getTarget();
+            VoxyBlaze3DProbeRenderer.renderWater(matrices, target.getColorTextureView(), target.getDepthTextureView(), camera);
         }
     }
 }

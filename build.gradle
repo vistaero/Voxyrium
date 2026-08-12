@@ -330,7 +330,11 @@ tasks.register('makeExcludedRocksDB', Zip) {
     exclude {
         def file = it.name
         if (file.endsWith(".jnilib")) {
-            return true
+            //RocksDB selects its native library from os.arch at runtime. Keep both
+            //macOS variants: Apple Silicon needs osx-arm64 and Intel Macs (and
+            //x86_64 macOS installations) need osx-x86_64. Removing either makes
+            //world creation fail before the renderer is initialized.
+            return !(file.contains("osx-arm64") || file.contains("osx-x86_64"))
         }
         if (!file.endsWith(".so")) {
             return false
@@ -365,6 +369,18 @@ jar {
 }
 
 project.ext.lwjglVersion = "3.4.1"
+
+// --- Voxy Vulkan backend deps (optional at runtime; probed via capability detection) ---
+dependencies {
+    include(implementation("org.lwjgl:lwjgl-vulkan:${project.ext.lwjglVersion}"))
+    include(implementation("org.lwjgl:lwjgl-shaderc:${project.ext.lwjglVersion}"))
+    for (n in ["natives-windows", "natives-linux", "natives-macos", "natives-macos-arm64"]) {
+        include(runtimeOnly("org.lwjgl:lwjgl-shaderc:${project.ext.lwjglVersion}:${n}"))
+    }
+    // MoltenVK translation layer path on macOS is provided by lwjgl-vulkan natives there:
+    include(runtimeOnly("org.lwjgl:lwjgl-vulkan:${project.ext.lwjglVersion}:natives-macos"))
+    include(runtimeOnly("org.lwjgl:lwjgl-vulkan:${project.ext.lwjglVersion}:natives-macos-arm64"))
+}
 project.ext.lwjglNatives = "natives-windows"
 
 repositories {
@@ -384,6 +400,12 @@ dependencies {
     include(runtimeOnly "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-windows")
     include(runtimeOnly "org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-linux")
     include(runtimeOnly "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-linux")
+    //macOS natives: required for the MoltenVK/Vulkan path so Voxy's section
+    // storage (zstd compression + lmdb index) can load on Apple Silicon.
+    include(runtimeOnly "org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-macos")
+    include(runtimeOnly "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-macos")
+    include(runtimeOnly "org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-macos-arm64")
+    include(runtimeOnly "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-macos-arm64")
     if (INCLUDE_OTHER_ARCHS) {
         runtimeOnly "org.lwjgl:lwjgl:$lwjglVersion:natives-linux-arm64"
         include(runtimeOnly "org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-linux-arm64")

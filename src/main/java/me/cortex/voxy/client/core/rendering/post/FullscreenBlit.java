@@ -45,7 +45,7 @@ public class FullscreenBlit {
     public void blit() {
         glBindVertexArray(EMPTY_VAO);
         this.shader.bind();
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, SharedIndexBuffer.INSTANCE_BYTE.id());
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, SharedIndexBuffer.INSTANCE_BYTE().id());
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_BYTE, 0);
         glBindVertexArray(0);
     }

@@ -16,7 +16,11 @@ layout(binding = OUTPUT_BUFFER2_BINDING, std430) restrict writeonly buffer Outpu
     uvec4[] output2;
 };
 
+#ifdef VOXY_VULKAN
+layout(push_constant) uniform PushConstants { uint count; };
+#else
 layout(location=0) uniform uint count;
+#endif
 
 void main() {
     uint id = gl_GlobalInvocationID.x;

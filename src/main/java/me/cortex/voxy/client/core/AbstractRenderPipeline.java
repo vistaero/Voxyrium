@@ -12,7 +12,7 @@ import me.cortex.voxy.client.core.rendering.hierachical.NodeCleaner;
 import me.cortex.voxy.client.core.rendering.post.FullscreenBlit;
 import me.cortex.voxy.client.core.rendering.section.backend.AbstractSectionRenderer;
 import me.cortex.voxy.client.core.rendering.util.DepthFramebuffer;
-import me.cortex.voxy.client.core.rendering.util.DownloadStream;
+import me.cortex.voxy.client.core.rendering.util.AbstractDownloadStream;
 import me.cortex.voxy.client.core.util.GPUTiming;
 import me.cortex.voxy.common.util.TrackedObject;
 import org.joml.Matrix4f;
@@ -208,7 +208,7 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
             TimingStatistics.D.start();
             //Tick download stream
-            DownloadStream.INSTANCE.tick();
+            AbstractDownloadStream.INSTANCE().tick();
             TimingStatistics.D.stop();
 
             this.nodeManager.tick(this.traversal.getNodeBuffer(), this.nodeCleaner);

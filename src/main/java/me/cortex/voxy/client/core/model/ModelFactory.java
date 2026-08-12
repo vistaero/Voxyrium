@@ -8,7 +8,7 @@ import it.unimi.dsi.fastutil.objects.ObjectSet;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.GlTexture;
 import me.cortex.voxy.client.core.model.bakery.SoftwareModelTextureBakery;
-import me.cortex.voxy.client.core.rendering.util.UploadStream;
+import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.util.Pair;
@@ -117,28 +117,26 @@ public class ModelFactory {
     private final ReentrantLock blockStatesInFlightLock = new ReentrantLock();
 
     private final List<Biome> biomes = new ArrayList<>();
-    private record ModelBlockStatePair(int model, BlockState state) {}
-    private final List<ModelBlockStatePair> modelsRequiringBiomeColours = new ArrayList<>();
+    private final List<Pair<Integer, BlockState>> modelsRequiringBiomeColours = new ArrayList<>();
+
+    private static final ObjectSet<BlockState> LOGGED_SELF_CULLING_WARNING = new ObjectOpenHashSet<>();
 
     private final Mapper mapper;
-    private final ModelStore storage;
+    private final IModelStore storage;
 
     private final ConcurrentLinkedDeque<BlockBake> bakeQueue = new ConcurrentLinkedDeque<>();
 
     private final ConcurrentLinkedDeque<ResultUploader> uploadResults = new ConcurrentLinkedDeque<>();
 
     private Object2IntMap<BlockState> customBlockStateIdMapping;
-    private final boolean rasterUV;
 
     //TODO: NOTE!!! is it worth even uploading as a 16x16 texture, since automatic lod selection... doing 8x8 textures might be perfectly ok!!!
     // this _quarters_ the memory requirements for the texture atlas!!! WHICH IS HUGE saving
-    public ModelFactory(Mapper mapper, ModelStore storage) {
+    public ModelFactory(Mapper mapper, IModelStore storage) {
         this.mapper = mapper;
         this.storage = storage;
         this.bakery2 = new SoftwareModelTextureBakery();
         this.bakery2.setupTexture();
-
-        this.rasterUV = false;
 
         this.metadataCache = new long[1<<16];
         this.fluidStateLUT = new int[1<<16];
@@ -227,7 +225,7 @@ public class ModelFactory {
         if (bake == null) return false;
         ColourDepthTextureData[] textureData = new ColourDepthTextureData[6];
 
-        int flags = this.bakery2.renderToOutput(bake.state, this.bakeScratchBuffer, this.rasterUV);
+        int flags = this.bakery2.renderToOutput(bake.state, this.bakeScratchBuffer);
 
 
         {//Create texture data
@@ -327,59 +325,40 @@ public class ModelFactory {
         var upload = this.uploadResults.poll();
         if (upload==null) return;
 
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        this.storage.beginTextureUploads();
         do {
             upload.upload(this.storage);
             upload.free();
             upload = this.uploadResults.poll();
         } while (upload != null);
-        UploadStream.INSTANCE.commit();
+        this.storage.endTextureUploads();
+        AbstractUploadStream.INSTANCE().commit();
     }
 
     private interface ResultUploader {
-        void upload(ModelStore store);
+        void upload(IModelStore store);
         void free();
     }
 
     private static final class ModelBakeResultUpload implements ResultUploader {
         private final MemoryBuffer model = new MemoryBuffer(MODEL_SIZE).zero();
-        private final MemoryBuffer texture;
-        private final boolean hasMips;
+        private final MemoryBuffer texture = new MemoryBuffer((2L*3*computeSizeWithMips(MODEL_TEXTURE_SIZE))*4);
 
         public int modelId = -1;
 
         public int biomeUploadIndex = -1;
         public @Nullable MemoryBuffer biomeUpload;
 
-        private ModelBakeResultUpload(boolean useMips) {
-            this.hasMips = useMips;
-            this.texture = new MemoryBuffer((2L*3*(useMips?computeSizeWithMips(MODEL_TEXTURE_SIZE):MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE))*4);
-        }
-
-        public void upload(ModelStore store) {//Uploads and resets for reuse
-            this.upload(store.modelBuffer, store.modelColourBuffer, store.textures);
-        }
-
-        public void upload(GlBuffer modelBuffer, GlBuffer colourBuffer, GlTexture atlas) {//Uploads and resets for reuse
-            this.model.cpyTo(UploadStream.INSTANCE.upload(modelBuffer, (long) this.modelId * MODEL_SIZE, MODEL_SIZE));
+        public void upload(IModelStore store) {//Uploads and resets for reuse
+            this.model.cpyTo(AbstractUploadStream.INSTANCE().upload(store.modelBufferHandle(), (long) this.modelId * MODEL_SIZE, MODEL_SIZE));
             if (this.biomeUploadIndex != -1) {
-                this.biomeUpload.cpyTo(UploadStream.INSTANCE.upload(colourBuffer, this.biomeUploadIndex * 4L, this.biomeUpload.size));
+                this.biomeUpload.cpyTo(AbstractUploadStream.INSTANCE().upload(store.colourBufferHandle(), this.biomeUploadIndex * 4L, this.biomeUpload.size));
                 this.biomeUploadIndex = -1;
                 this.biomeUpload.free();
                 this.biomeUpload = null;
             }
 
-            int X = (this.modelId&0xFF) * MODEL_TEXTURE_SIZE*3;
-            int Y = ((this.modelId>>8)&0xFF) * MODEL_TEXTURE_SIZE*2;
-
-            long cAddr = this.texture.address;
-            for (int lvl = 0; lvl < (this.hasMips?LAYERS:1); lvl++) {
-                nglTextureSubImage2D(atlas.id, lvl, X >> lvl, Y >> lvl, (MODEL_TEXTURE_SIZE*3) >> lvl, (MODEL_TEXTURE_SIZE*2) >> lvl, GL_RGBA, GL_UNSIGNED_BYTE, cAddr);
-                cAddr += (MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE*3*2*4)>>(lvl<<1);
-            }
+            store.uploadModelTexture(this.modelId, this.texture);
 
             this.modelId = -1;
         }
@@ -468,7 +447,7 @@ public class ModelFactory {
 
 
 
-        ModelBakeResultUpload uploadResult = new ModelBakeResultUpload(!this.rasterUV);
+        ModelBakeResultUpload uploadResult = new ModelBakeResultUpload();
         uploadResult.modelId = modelId;
         long uploadPtr = uploadResult.model.address;
 
@@ -658,7 +637,7 @@ public class ModelFactory {
             //Populate the list of biomes for the model state
             int biomeIndex = this.modelsRequiringBiomeColours.size() * this.biomes.size();
             MemoryUtil.memPutInt(uploadPtr, biomeIndex);
-            this.modelsRequiringBiomeColours.add(new ModelBlockStatePair(modelId, blockState));
+            this.modelsRequiringBiomeColours.add(new Pair<>(modelId, blockState));
             if (!this.biomes.isEmpty()) {
                 uploadResult.biomeUploadIndex = biomeIndex;
                 long clrUploadPtr = (uploadResult.biomeUpload = new MemoryBuffer(4L * this.biomes.size())).address;
@@ -684,8 +663,8 @@ public class ModelFactory {
 
         //TODO callback to inject extra data into the model data
 
-        if (uploadResult.hasMips)
-            MipGen.putTextures(darkenedTinting, textureData, uploadResult.texture);
+
+        MipGen.putTextures(darkenedTinting, textureData, uploadResult.texture);
 
         //glGenerateTextureMipmap(this.textures.id);
 
@@ -718,18 +697,18 @@ public class ModelFactory {
             this.modelBiomeIndexPairs = new MemoryBuffer(models*8);
         }
 
-        public void upload(ModelStore store) {
-            this.upload(store.modelBuffer, store.modelColourBuffer);
+        public void upload(IModelStore store) {
+            this.upload(store.modelBufferHandle(), store.colourBufferHandle());
         }
 
-        public void upload(GlBuffer modelBuffer, GlBuffer modelColourBuffer) {
-            this.biomeColourBuffer.cpyTo(UploadStream.INSTANCE.upload(modelColourBuffer, 0, this.biomeColourBuffer.size));
+        public void upload(me.cortex.voxy.client.core.rendering.util.IDeviceBuffer modelBuffer, me.cortex.voxy.client.core.rendering.util.IDeviceBuffer modelColourBuffer) {
+            this.biomeColourBuffer.cpyTo(AbstractUploadStream.INSTANCE().upload(modelColourBuffer, 0, this.biomeColourBuffer.size));
 
             //TODO: optimize this to like a compute scatter update or something
             long ptr = this.modelBiomeIndexPairs.address;
             for (long offset = 0; offset < this.modelBiomeIndexPairs.size; offset += 8) {
                 long v = MemoryUtil.memGetLong(ptr);ptr += 8;
-                MemoryUtil.memPutInt(UploadStream.INSTANCE.upload(modelBuffer, (MODEL_SIZE*(v&((1L<<32)-1)))+ 4*6 + 4, 4), (int) (v>>>32));
+                MemoryUtil.memPutInt(AbstractUploadStream.INSTANCE().upload(modelBuffer, (MODEL_SIZE*(v&((1L<<32)-1)))+ 4*6 + 4, 4), (int) (v>>>32));
             }
 
             this.biomeColourBuffer.free();
@@ -768,19 +747,19 @@ public class ModelFactory {
         int i = 0;
         long modelUpPtr = result.modelBiomeIndexPairs.address;
         for (var entry : this.modelsRequiringBiomeColours) {
-            var colourProvider = getTintSources(entry.state);
+            var colourProvider = getTintSources(entry.right());
             if (colourProvider == null) {
                 throw new IllegalStateException();
             }
             //Populate the list of biomes for the model state
             int biomeIndex = (i++) * this.biomes.size();
-            MemoryUtil.memPutLong(modelUpPtr, Integer.toUnsignedLong(entry.model)|(Integer.toUnsignedLong(biomeIndex)<<32));modelUpPtr+=8;
+            MemoryUtil.memPutLong(modelUpPtr, Integer.toUnsignedLong(entry.left())|(Integer.toUnsignedLong(biomeIndex)<<32));modelUpPtr+=8;
             long clrUploadPtr = result.biomeColourBuffer.address + biomeIndex * 4L;
             for (var biomeE : this.biomes) {
                 if (biomeE == null) {
                     continue;//If null, ignore
                 }
-                MemoryUtil.memPutInt(clrUploadPtr, captureColourConstant(colourProvider, entry.state, biomeE)|0xFF000000); clrUploadPtr += 4;
+                MemoryUtil.memPutInt(clrUploadPtr, captureColourConstant(colourProvider, entry.right(), biomeE)|0xFF000000); clrUploadPtr += 4;
             }
         }
 

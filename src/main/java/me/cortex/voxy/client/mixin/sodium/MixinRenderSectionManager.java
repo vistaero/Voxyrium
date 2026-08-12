@@ -4,7 +4,6 @@ import me.cortex.voxy.client.ICheekyClientChunkCache;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
-import me.cortex.voxy.client.core.backend.VoxyGraphicsBackend;
 import me.cortex.voxy.client.core.backend.blaze3d.VoxyBlaze3DProbeRenderer;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.world.service.VoxelIngestService;
@@ -46,9 +45,9 @@ public class MixinRenderSectionManager {
     private void voxy$injectReset1(Viewport viewport, FogParameters fogParameters, CallbackInfo ci) {
         var vrs = IVoxyRenderSystemHolder.getNullable();
         if (vrs != null && !IrisUtil.irisShadowActive()) {
-            vrs.visbleSectionStream.reset();
+            if (vrs.visbleSectionStream != null) vrs.visbleSectionStream.reset();
         }
-        if (!IrisUtil.irisShadowActive() && VoxyGraphicsBackend.current().supportsBlaze3dProbe()) {
+        if (!IrisUtil.irisShadowActive() && VoxyConfig.CONFIG.isBlaze3dRenderingEnabled()) {
             VoxyBlaze3DProbeRenderer.beginVisibleVanillaSectionCollection();
         }
     }
@@ -57,9 +56,9 @@ public class MixinRenderSectionManager {
     private void voxy$injectReset2(Viewport viewport, FogParameters fogParameters, CallbackInfo ci) {
         var vrs = IVoxyRenderSystemHolder.getNullable();
         if (vrs != null && !IrisUtil.irisShadowActive()) {
-            vrs.visbleSectionStream.reset();
+            if (vrs.visbleSectionStream != null) vrs.visbleSectionStream.reset();
         }
-        if (!IrisUtil.irisShadowActive() && VoxyGraphicsBackend.current().supportsBlaze3dProbe()) {
+        if (!IrisUtil.irisShadowActive() && VoxyConfig.CONFIG.isBlaze3dRenderingEnabled()) {
             VoxyBlaze3DProbeRenderer.beginVisibleVanillaSectionCollection();
         }
     }

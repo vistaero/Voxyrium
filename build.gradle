@@ -103,7 +103,6 @@ processResources {
     {
         StringBuilder sodium_versions_builder = new StringBuilder("[");
         var vers = [*project.properties.getOrDefault("sodium_extra_allows", "").split(" ")];
-        vers.add("0.0.0");//Sodium dummy provider 0.0.0
         for (String ver : vers) {
             if (!ver.isBlank()) {
                 sodium_versions_builder.append("\"=").append(ver).append("\", ");
@@ -147,6 +146,31 @@ processResources {
         filter {line->line.replace("\"\${","\${").replace("}\"", "}")};
         expand(props);
     }
+}
+
+
+var dummySodiumProviderGenerator = tasks.register("dummySodiumProviderGenerator", Jar) {
+    destinationDirectory.set(processIncludeJars.outputDirectory);
+    archiveFileName.set("dummyprovider.jar");
+    dependsOn(processIncludeJars)
+
+    var (_, _1, _2, sodium_version) = findSodiumVersion();
+    var props = ["sodium_version":sodium_version];
+
+    inputs.properties(props);
+    from("dummyprovider.fabric.mod.json") {
+        rename("dummyprovider.", "");
+        expand(props)
+    }
+}
+/*
+jar {
+    dependsOn(dummySodiumProviderGenerator)
+    from(dummySodiumProviderGenerator)
+}*/
+
+jar {
+    dependsOn(dummySodiumProviderGenerator)
 }
 
 loom {
@@ -204,6 +228,7 @@ def smartDependency(String property, boolean runtime = false, String maven = nul
     return ver
 }
 
+
 dependencies {
     // To change the versions see the gradle.properties file
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
@@ -217,27 +242,6 @@ dependencies {
     runtimeOnlyMsk(fabricApi.module("fabric-command-api-v2", project.fabric_api_version))
 
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}";
-
-    repositories {
-        exclusiveContent {
-            forRepository {
-                flatDir {
-                    dir(projectDir)
-                }
-            }
-            filter {
-                includeVersion("me.cortex", "dummyprovider", "0.0.0")
-            }
-        }
-    }
-
-    include(implementation("me.cortex:dummyprovider:0.0.0") {
-        /*
-        with {
-            it.addArtifact()
-        }*/
-    });
-
 
     {
         var (_, mr, ver, _2) = findSodiumVersion()
@@ -342,7 +346,7 @@ tasks.register('makeExcludedRocksDB', Zip) {
 
 
 processIncludeJars {
-    outputs.cacheIf {true}
+    //outputs.cacheIf {true}
     if (!INCLUDE_OTHER_ARCHS) {
         dependsOn makeExcludedRocksDB
         jars = jars.filter {!it.name.startsWith('rocksdb')}
@@ -386,9 +390,9 @@ repositories {
 dependencies {
     implementation platform("org.lwjgl:lwjgl-bom:$lwjglVersion")
 
-    implementation "org.lwjgl:lwjgl"
-    include(implementation "org.lwjgl:lwjgl-lmdb")
-    include(implementation "org.lwjgl:lwjgl-zstd")
+    implementation "org.lwjgl:lwjgl:unsafe"
+    include(implementation "org.lwjgl:lwjgl-lmdb:unsafe")
+    include(implementation "org.lwjgl:lwjgl-zstd:unsafe")
     runtimeOnly "org.lwjgl:lwjgl:$lwjglVersion:natives-windows"
     runtimeOnly "org.lwjgl:lwjgl:$lwjglVersion:natives-linux"
     include(runtimeOnly "org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-windows")

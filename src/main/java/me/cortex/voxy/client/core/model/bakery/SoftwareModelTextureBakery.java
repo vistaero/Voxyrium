@@ -186,6 +186,10 @@ public class SoftwareModelTextureBakery {
     // in this version the values are simply appended (0,0),(1,0),(2,0),(0,1),(1,1),(2,1)
 
     public int renderToOutput(BlockState state, long outputBuffer) {
+        return renderToOutput(state, outputBuffer, false);
+    }
+
+    public int renderToOutput(BlockState state, long outputBuffer, boolean rasterAsUV) {
         MemoryUtil.memSet(outputBuffer,0,16*16*8*6);
 
 
@@ -216,9 +220,10 @@ public class SoftwareModelTextureBakery {
                 for (int i = 0; i < VIEWS.length; i++) {
                     this.rasterizer.setFaceCull(i==1||i==2||i==4);
                     this.rasterizer.clear();
+                    this.rasterizer.setUVRaster(rasterAsUV);
                     this.rasterizer.setBlending(false);
                     this.rasterizer.raster(VIEWS[i], this.opaqueVC);
-                    this.rasterizer.setBlending(true);
+                    this.rasterizer.setBlending(!rasterAsUV);
                     this.rasterizer.raster(VIEWS[i], this.translucentVC);
                     UnsafeUtil.memcpy(this.rasterizer.getRawFramebuffer(), outputBuffer+(SINGLE_FACE_OUTPUT_SIZE*i));
                 }
@@ -240,9 +245,10 @@ public class SoftwareModelTextureBakery {
 
                 //The projection matrix
                 this.rasterizer.clear();
+                this.rasterizer.setUVRaster(rasterAsUV);
                 this.rasterizer.setBlending(false);
                 this.rasterizer.raster(VIEWS[i], this.opaqueVC);
-                this.rasterizer.setBlending(true);
+                this.rasterizer.setBlending(!rasterAsUV);
                 this.rasterizer.raster(VIEWS[i], this.translucentVC);
                 UnsafeUtil.memcpy(this.rasterizer.getRawFramebuffer(), outputBuffer+(SINGLE_FACE_OUTPUT_SIZE*i));
             }

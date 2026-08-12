@@ -20,6 +20,7 @@ public class IrisUtil {
         }
     }
 
+    public static boolean USED_IRIS_VIEWPORT;
     public static CapturedViewportParameters CAPTURED_VIEWPORT_PARAMETERS;
 
     public static final boolean IRIS_INSTALLED = FabricLoader.getInstance().isModLoaded("iris");

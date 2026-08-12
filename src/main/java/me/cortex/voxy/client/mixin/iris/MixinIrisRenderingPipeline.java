@@ -46,6 +46,8 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
             var renderer = IVoxyRenderSystemHolder.getNullable();
             if (renderer != null) {
                 IrisUtil.CAPTURED_VIEWPORT_PARAMETERS.apply(renderer);
+                IrisUtil.CAPTURED_VIEWPORT_PARAMETERS = null;
+                IrisUtil.USED_IRIS_VIEWPORT = true;
             }
         }
     }

@@ -7,7 +7,6 @@ import net.caffeinemc.mods.sodium.client.render.chunk.LocalSectionIndex;
 import net.caffeinemc.mods.sodium.client.render.chunk.RenderSection;
 import net.caffeinemc.mods.sodium.client.render.chunk.RenderSectionFlags;
 import net.caffeinemc.mods.sodium.client.render.chunk.lists.FallbackVisibleChunkCollector;
-import net.caffeinemc.mods.sodium.client.render.chunk.region.RenderRegion;
 import net.caffeinemc.mods.sodium.client.render.chunk.storage.SectionStorage;
 import net.minecraft.core.SectionPos;
 import org.spongepowered.asm.mixin.Mixin;

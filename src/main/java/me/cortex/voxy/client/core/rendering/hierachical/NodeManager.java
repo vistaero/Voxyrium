@@ -1068,7 +1068,7 @@ public class NodeManager {
 
     //==================================================================================================================
 
-    private int _nodeAlreadyInFlightDontSpam = 0;
+    private int _nodeAlreadyInFlightDontSpam = 1;
 
     public void processRequest(long pos) {
         int nodeId = this.activeSectionMap.get(pos);
@@ -1132,7 +1132,7 @@ public class NodeManager {
 
             //Check if the node is already in-flight, if it is, dont do any processing
             if (this.nodeData.isNodeRequestInFlight(nodeId)) {
-                if (this._nodeAlreadyInFlightDontSpam>1 && this._nodeAlreadyInFlightDontSpam<100) {
+                if (this._nodeAlreadyInFlightDontSpam>=1 && this._nodeAlreadyInFlightDontSpam<100) {
                     Logger.warn("Tried processing a node that already has a request in flight: " + nodeId + " pos: " + WorldEngine.pprintPos(pos) + " ignoring");
                     this._nodeAlreadyInFlightDontSpam++;
                 } else if (this._nodeAlreadyInFlightDontSpam==100) {

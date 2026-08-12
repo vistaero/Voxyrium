@@ -2,11 +2,7 @@ package me.cortex.voxy.client.mixin.sodium;
 
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
-import com.mojang.blaze3d.opengl.GlCommandEncoder;
-import com.mojang.blaze3d.opengl.GlRenderPass;
 import com.mojang.blaze3d.opengl.GlTextureView;
-import com.mojang.blaze3d.systems.RenderPass;
-import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.GpuSampler;
 import me.cortex.voxy.client.VoxyClient;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
@@ -21,17 +17,11 @@ import net.caffeinemc.mods.sodium.client.render.chunk.terrain.TerrainRenderPass;
 import net.caffeinemc.mods.sodium.client.render.chunk.vertex.format.ChunkVertexType;
 import net.caffeinemc.mods.sodium.client.render.viewport.CameraTransform;
 import net.caffeinemc.mods.sodium.client.util.FogParameters;
-import net.caffeinemc.mods.sodium.mixin.core.CommandEncoderAccessor;
-import net.caffeinemc.mods.sodium.mixin.core.RenderPassAccessor;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.util.Collections;
-import java.util.Optional;
-import java.util.OptionalDouble;
 
 @Mixin(value = DefaultChunkRenderer.class, remap = false)
 public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
@@ -71,8 +61,9 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
                 }
                 Viewport<?> viewport = null;
                 var target = renderPass.getTarget();
-                if (IrisUtil.irisShaderPackEnabled()) {
+                if (IrisUtil.USED_IRIS_VIEWPORT) {
                     viewport = renderer.getViewport();
+                    IrisUtil.USED_IRIS_VIEWPORT = false;
                 } else {
                     viewport = renderer.setupViewport(matrices.projection(), matrices.modelView(), fogParameters, target.width, target.height, camera.x, camera.y, camera.z);
                 }

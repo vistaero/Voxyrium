@@ -9,7 +9,7 @@ import org.joml.Vector4f;
 import java.util.Arrays;
 
 public class SoftwareRasterizer {
-    private static final int INTEGER_BITS = 9;//+-512
+    private static final int INTEGER_BITS = 13;//+-512
     private static final int TOTAL_INTEGER_BITS = INTEGER_BITS+1;
     private static final int FIXED_POINT_BITS = 32-TOTAL_INTEGER_BITS;
     private static final long FIXED_POINT_BIT_SCALE = (1<<FIXED_POINT_BITS)-1;
@@ -43,6 +43,7 @@ public class SoftwareRasterizer {
 
     private boolean cullBackFace;
     private boolean doTheBlending;
+    private boolean rasterUV;
 
     private int samplerWidth;
     private int samplerHeight;
@@ -66,6 +67,10 @@ public class SoftwareRasterizer {
         this.doTheBlending = blending;
     }
 
+    public void setUVRaster(boolean rasterUV) {
+        this.rasterUV = rasterUV;
+    }
+
     public void setSamplerTexture(int[] texture, int width, int height) {
         if (texture.length != width*height) throw new IllegalArgumentException();
         this.samplerTexture = texture;
@@ -86,8 +91,14 @@ public class SoftwareRasterizer {
     public void raster(Matrix4f mvp, ReuseVertexConsumer vertices) {
         this.raster(mvp, vertices.getAddress(), vertices.quadCount());
     }
+
     public void raster(Matrix4f mvp, long verticesAddr, int quadCount) {
         if (quadCount == 0) return;
+
+        if (this.doTheBlending&&this.rasterUV) {
+            throw new IllegalStateException("Blending and UV raster both enabled");
+        }
+
         for (int i = 0; i < quadCount; i++) {
             this.rasterQuad(mvp, verticesAddr+ReuseVertexConsumer.VERTEX_FORMAT_SIZE*4L*i);
         }
@@ -190,6 +201,11 @@ public class SoftwareRasterizer {
         //TODO: meta&1 OR if we are blending
         if ((meta&1)!=0 && (colour>>>24)<=ALPHA_CUTOFF_THRESHOLD) {//Discard on small alpha
             return;
+        }
+
+        if (this.rasterUV&&!this.doTheBlending) {
+            final int MSK = ((1<<16)-1);
+            colour = ((int) (u*MSK))|(((int) (v*MSK))<<16);
         }
 
         //Stencil increment first

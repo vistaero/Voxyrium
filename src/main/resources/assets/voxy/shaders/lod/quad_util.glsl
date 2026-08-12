@@ -32,6 +32,7 @@ struct QuadData {
     vec3 basePoint;
     vec2 quadSizeAddin;
     vec2 uvCorner;
+    vec2 uvSizeAddin;
 };
 
 uint makeQuadFlags(uint faceData, uint modelId, ivec2 quadSize, const in BlockModel model, uint face) {
@@ -131,23 +132,36 @@ void setupQuad(out QuadData quad, const in Quad rawQuad, uvec2 sPos, bool genera
         quad.attributeData.yzw = makeRemainingAttributes(model, rawQuad, lodLevel, face);
     }
 
-    vec4 faceSize = getFaceSize(faceData);
+    vec4 textureFaceSize = getFaceSize(faceData);
+    vec4 geometryFaceSize = textureFaceSize;
+
+    // FluidRenderer leaves a small inset around its baked side quads. That is
+    // harmless at vanilla scale, but turns into visible gaps once a LoD cell is
+    // enlarged. Keep the cropped texture coordinates, while extending only the
+    // geometry of fluid side faces to the exact block boundaries.
+    if (modelIsFluid(model) && (face>>1) != 0u) {
+        geometryFaceSize = vec4(0.0, 1.0, 0.0, 1.0);
+    }
+
     #ifdef USE_SINGLE_TRI
-    faceSize *= 2;
+    textureFaceSize *= 2;
+    geometryFaceSize *= 2;
     #endif
     vec3 quadStart = extractPos(rawQuad);
     float depthOffset = extractFaceIndentation(faceData);
-    quadStart += swizzelDataAxis(face>>1, vec3(faceSize.xz, mix(depthOffset, 1-depthOffset, float(face&1u))));
+    quadStart += swizzelDataAxis(face>>1, vec3(geometryFaceSize.xz, mix(depthOffset, 1-depthOffset, float(face&1u))));
 
     quad.lodScale = lodScale;
     quad.axis = face>>1;
     quad.basePoint = (quadStart*lodScale)+vec3(baseSection<<5);
     #ifdef USE_SINGLE_TRI
-    quad.quadSizeAddin = (faceSize.yw + (quadSize - 1)*2);
+    quad.quadSizeAddin = (geometryFaceSize.yw + (quadSize - 1)*2);
+    quad.uvSizeAddin = (textureFaceSize.yw + (quadSize - 1)*2);
     #else
-    quad.quadSizeAddin = faceSize.yw + quadSize - 1;
+    quad.quadSizeAddin = geometryFaceSize.yw + quadSize - 1;
+    quad.uvSizeAddin = textureFaceSize.yw + quadSize - 1;
     #endif
-    quad.uvCorner = faceSize.xz;
+    quad.uvCorner = textureFaceSize.xz;
 }
 
 vec4 getQuadCornerPos(in QuadData quad, uint cornerId) {
@@ -160,7 +174,7 @@ vec4 getQuadCornerPos(in QuadData quad, uint cornerId) {
 
 #ifndef USE_NV_BARRY
 vec2 getCornerUV(const in QuadData quad, uint cornerId) {
-    return quad.uvCorner + quad.quadSizeAddin*vec2((cornerId>>1)&1u, cornerId&1u);
+    return quad.uvCorner + quad.uvSizeAddin*vec2((cornerId>>1)&1u, cornerId&1u);
 }
 #endif
 

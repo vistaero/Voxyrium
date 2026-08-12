@@ -330,10 +330,11 @@ tasks.register('makeExcludedRocksDB', Zip) {
     exclude {
         def file = it.name
         if (file.endsWith(".jnilib")) {
-            //Keep macOS arm64 native so RocksDB works on Apple Silicon (VK/MoltenVK
-            // target); drop x86_64. Without this, world load crashes on M-series Macs
-            // with "librocksdbjni-osx-arm64.jnilib was not found inside JAR".
-            return !file.contains("osx-arm64")
+            //RocksDB selects its native library from os.arch at runtime. Keep both
+            //macOS variants: Apple Silicon needs osx-arm64 and Intel Macs (and
+            //x86_64 macOS installations) need osx-x86_64. Removing either makes
+            //world creation fail before the renderer is initialized.
+            return !(file.contains("osx-arm64") || file.contains("osx-x86_64"))
         }
         if (!file.endsWith(".so")) {
             return false

@@ -174,7 +174,9 @@ public class VkTerrainRenderer {
         var opaque = new VkShaderPipeline.GfxDesc();
         opaque.name = "terrain-opaque";
         opaque.vertGlsl = vert;
-        opaque.fragGlsl = VkShaderSource.load("voxy:lod/gl46/quads.frag", VkShaderSource.defs().props(this.properties).build());
+        opaque.fragGlsl = VkShaderSource.load("voxy:lod/gl46/quads.frag", VkShaderSource.defs().props(this.properties)
+                .defIf("VOXY_VULKAN_SAMPLE_MASK_DISCARD", this.ctx.vk().needsSampleMaskDiscard)
+                .build());
         opaque.colorFormat = cf;
         opaque.depthFormat = df;
         opaque.stencilFormat = df;
@@ -190,6 +192,7 @@ public class VkTerrainRenderer {
         translucent.name = "terrain-translucent";
         translucent.vertGlsl = vert;
         translucent.fragGlsl = VkShaderSource.load("voxy:lod/gl46/quads.frag", VkShaderSource.defs().props(this.properties)
+                .defIf("VOXY_VULKAN_SAMPLE_MASK_DISCARD", this.ctx.vk().needsSampleMaskDiscard)
                 .def("TRANSLUCENT").build());
         translucent.colorFormat = cf;
         translucent.depthFormat = df;

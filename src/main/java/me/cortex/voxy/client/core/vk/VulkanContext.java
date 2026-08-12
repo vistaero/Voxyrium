@@ -58,6 +58,17 @@ public final class VulkanContext {
     public final boolean subgroupArithmetic;
     public final int subgroupSize;
     public final String deviceName;
+    /**
+     * Older MoltenVK versions enable SPIRV-Cross' discarded-fragment store
+     * checks on every GPU.  On the non-Apple Mac GPU families those checks use
+     * helper-thread state that is not reliable: covered fragments can be
+     * classified as helpers, leaving depth behind without a colour store.
+     *
+     * The Vulkan terrain shader avoids OpKill on that hardware so MoltenVK
+     * never takes the affected conversion path.  Apple GPUs and every
+     * non-macOS Vulkan implementation keep the regular discard shader.
+     */
+    public final boolean needsSampleMaskDiscard;
     public final long commandPool;
     private VkPhysicalDeviceSubgroupProperties subgroupProps;
 
@@ -81,10 +92,12 @@ public final class VulkanContext {
                 && this.subgroupSize >= 16;
         this.subgroupArithmetic = ENABLE_SUBGROUP_PATHS && deviceSupportsSubgroups;
         String name;
+        int vendorId;
         try (MemoryStack stack = stackPush()) {
             var props = VkPhysicalDeviceProperties.calloc(stack);
             vkGetPhysicalDeviceProperties(this.physicalDevice, props);
             name = props.deviceNameString();
+            vendorId = props.vendorID();
             var cpci = VkCommandPoolCreateInfo.calloc(stack).sType$Default()
                     .flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT)
                     .queueFamilyIndex(this.queueFamily);
@@ -92,9 +105,12 @@ public final class VulkanContext {
             check(vkCreateCommandPool(this.device, cpci, null, pPool), "vkCreateCommandPool(adopted)");
             this.commandPool = pPool.get(0);
         }
+        boolean macOS = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("mac");
+        this.needsSampleMaskDiscard = macOS && vendorId != 0x106B;//Apple's PCI vendor id
         this.deviceName = name + " (MC host)";
         Logger.info("Voxy Vulkan context adopted Minecraft device: " + this.deviceName
                 + " (drawIndirectCount=" + this.hasDrawIndirectCount
+                + ", sampleMaskDiscard=" + this.needsSampleMaskDiscard
                 + ", subgroupArithmetic=" + this.subgroupArithmetic
                 + " (deviceCapable=" + deviceSupportsSubgroups + ", gate=" + ENABLE_SUBGROUP_PATHS + ")"
                 + ", subgroupSize=" + this.subgroupSize + ")");

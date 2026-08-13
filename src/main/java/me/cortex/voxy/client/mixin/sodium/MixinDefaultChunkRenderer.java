@@ -44,16 +44,15 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
 
     @Inject(method = "render", at = @At(value = "INVOKE", target = "Lnet/caffeinemc/mods/sodium/client/render/chunk/ShaderChunkRenderer;end(Lnet/caffeinemc/mods/sodium/client/render/chunk/terrain/TerrainRenderPass;)V", shift = At.Shift.BEFORE))
     private void voxy$injectRender(ChunkRenderMatrices matrices, ChunkRenderListIterable renderLists, TerrainRenderPass renderPass, CameraTransform camera, FogParameters parameters, boolean indexedRenderingEnabled, GpuSampler terrainSampler, GpuBufferSlice uniformData, GpuBuffer sectionTimeInfo, CallbackInfo ci) {
-        this.doRender(matrices, renderPass, camera, parameters);
-    }
-
-    @Inject(method = "render", at = @At("HEAD"))
-    private void voxy$injectOpaqueBlaze3dRender(ChunkRenderMatrices matrices, ChunkRenderListIterable renderLists, TerrainRenderPass renderPass, CameraTransform camera, FogParameters parameters, boolean indexedRenderingEnabled, GpuSampler terrainSampler, GpuBufferSlice uniformData, GpuBuffer sectionTimeInfo, CallbackInfo ci) {
-        if (renderPass == DefaultTerrainRenderPasses.SOLID
+        // Match the native renderer's ordering: Sodium's solid and cutout terrain must populate
+        // the depth target before Voxy draws. Rendering at the head of SOLID made coincident LoD
+        // surfaces fight with the blocks that Sodium rendered immediately afterwards.
+        if (renderPass == DefaultTerrainRenderPasses.CUTOUT
                 && VoxyConfig.CONFIG.isBlaze3dRenderingEnabled()) {
             var target = renderPass.getTarget();
-            VoxyBlaze3DProbeRenderer.renderOpaque(matrices, target.getColorTextureView(), target.getDepthTextureView(), camera);
+            VoxyBlaze3DProbeRenderer.renderOpaque(matrices, target.getColorTextureView(), target.getDepthTextureView(), camera, parameters);
         }
+        this.doRender(matrices, renderPass, camera, parameters);
     }
 
     @Unique
@@ -91,7 +90,7 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
         if (renderPass == DefaultTerrainRenderPasses.TRANSLUCENT
                 && VoxyConfig.CONFIG.isBlaze3dRenderingEnabled()) {
             var target = renderPass.getTarget();
-            VoxyBlaze3DProbeRenderer.renderWater(matrices, target.getColorTextureView(), target.getDepthTextureView(), camera);
+            VoxyBlaze3DProbeRenderer.renderWater(matrices, target.getColorTextureView(), target.getDepthTextureView(), camera, fogParameters);
         }
     }
 }

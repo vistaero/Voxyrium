@@ -29,11 +29,11 @@ void main() {
     if (color.a == 0.0) {
         discard;
     }
-
     float fogValue = 0.0;
-    if (FogEnvironmentalEnd > FogEnvironmentalStart) {
-        fogValue = clamp((sphericalDistance - FogEnvironmentalStart)
-                / (FogEnvironmentalEnd - FogEnvironmentalStart), 0.0, 1.0);
+    // ModelOffset.yz are copied from Sodium's active fog parameters. The Java side selects
+    // render-distance fog in normal air and preserves short environmental fog for dense media.
+    if (ModelOffset.z > ModelOffset.y) {
+        fogValue = clamp((sphericalDistance - ModelOffset.y) / (ModelOffset.z - ModelOffset.y), 0.0, 1.0);
     }
     color.rgb = mix(color.rgb, FogColor.rgb, fogValue * FogColor.a);
     fragColor = color * ColorModulator;

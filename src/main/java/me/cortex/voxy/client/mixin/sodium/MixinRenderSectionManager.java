@@ -39,6 +39,7 @@ public class MixinRenderSectionManager {
     @Inject(method = "<init>", at = @At("TAIL"))
     private void voxy$resetChunkTracker(ClientLevel level, int renderDistance, SortBehavior sortBehavior, CallbackInfo ci) {
         this.bottomSectionY = this.level.getMinY()>>4;
+        VoxyBlaze3DProbeRenderer.setSodiumRenderDistanceChunks(renderDistance);
     }
 
     @Inject(method = "renderOutOfGraph", at = @At("HEAD"))

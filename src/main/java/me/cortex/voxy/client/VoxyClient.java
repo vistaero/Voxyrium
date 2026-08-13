@@ -146,8 +146,10 @@ public class VoxyClient implements ClientModInitializer {
                 dispatcher.register(VoxyCommands.register());
                 dispatcher.register(VoxyCommands.registerToggleTestCube());
                 dispatcher.register(VoxyCommands.registerSetVoxyQualityLevel());
+                dispatcher.register(VoxyCommands.registerSetQualityVoxyLevel());
                 dispatcher.register(VoxyCommands.registerToggleVoxyProfiler());
                 dispatcher.register(VoxyCommands.registerVoxyLodDebug());
+                dispatcher.register(VoxyCommands.registerSetVoxyVanillaTransition());
             }
         });
 

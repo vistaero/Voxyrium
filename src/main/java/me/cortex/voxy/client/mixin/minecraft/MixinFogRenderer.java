@@ -37,10 +37,9 @@ public class MixinFogRenderer {
                 data.environmentalStart = 99999999;
                 data.environmentalEnd = 99999999;
             }
-            // Match the OpenGL backend: Voxy owns environmental fog and suppresses only the
-            // vanilla render-distance component so its extended terrain is not clipped twice.
-            data.renderDistanceStart = 999999999;
-            data.renderDistanceEnd = 999999999;
+            // The pure Blaze3D path renders directly into Minecraft's target instead of applying
+            // native Voxy's later composite fog pass. Preserve Sodium/Minecraft's actual render
+            // distance values so its terrain shader can extend fog to the configured horizon.
             return;
         }
 

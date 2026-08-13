@@ -40,7 +40,13 @@ public class VoxyCommands {
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> registerSetVoxyQualityLevel() {
         return ClientCommands.literal("setVoxyQualityLevel")
-                .then(ClientCommands.argument("level", IntegerArgumentType.integer(0, 4))
+                .then(ClientCommands.argument("level", IntegerArgumentType.integer(-1, 4))
+                        .executes(VoxyCommands::setVoxyQualityLevel));
+    }
+
+    public static LiteralArgumentBuilder<FabricClientCommandSource> registerSetQualityVoxyLevel() {
+        return ClientCommands.literal("setQualityVoxyLevel")
+                .then(ClientCommands.argument("level", IntegerArgumentType.integer(-1, 4))
                         .executes(VoxyCommands::setVoxyQualityLevel));
     }
 
@@ -52,6 +58,12 @@ public class VoxyCommands {
     public static LiteralArgumentBuilder<FabricClientCommandSource> registerVoxyLodDebug() {
         return ClientCommands.literal("voxyLodDebug")
                 .executes(VoxyCommands::voxyLodDebug);
+    }
+
+    public static LiteralArgumentBuilder<FabricClientCommandSource> registerSetVoxyVanillaTransition() {
+        return ClientCommands.literal("setVoxyVanillaTransition")
+                .then(ClientCommands.argument("chunks", IntegerArgumentType.integer(0, 4))
+                        .executes(VoxyCommands::setVoxyVanillaTransition));
     }
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> register() {
@@ -128,8 +140,12 @@ public class VoxyCommands {
     private static int setVoxyQualityLevel(CommandContext<FabricClientCommandSource> ctx) {
         int requestedLevel = IntegerArgumentType.getInteger(ctx, "level");
         int lodLevel = VoxyBlaze3DProbeRenderer.setLodQualityLevel(requestedLevel);
-        ctx.getSource().sendFeedback(Component.literal("Voxy dynamic LoD minimum level set to " + lodLevel
-                + " (refinement stops at one voxel per " + (1 << lodLevel) + " blocks)."));
+        if (lodLevel < 0) {
+            ctx.getSource().sendFeedback(Component.literal("Voxy LoD selection restored to automatic screen-space mode."));
+        } else {
+            ctx.getSource().sendFeedback(Component.literal("Voxy forced to LoD " + lodLevel + " for the entire loaded world"
+                    + " (one voxel per " + (1 << lodLevel) + " blocks; LoD 0 is the finest)."));
+        }
         return 1;
     }
 
@@ -143,6 +159,15 @@ public class VoxyCommands {
         String summary = VoxyBlaze3DProbeRenderer.getLodDebugSummary();
         Logger.info("Blaze3D " + summary);
         ctx.getSource().sendFeedback(Component.literal(summary));
+        return 1;
+    }
+
+    private static int setVoxyVanillaTransition(CommandContext<FabricClientCommandSource> ctx) {
+        int chunks = VoxyBlaze3DProbeRenderer.setVanillaTransitionChunks(
+                IntegerArgumentType.getInteger(ctx, "chunks"));
+        ctx.getSource().sendFeedback(Component.literal("Voxy transition uses " + chunks
+                + " chunk" + (chunks == 1 ? "" : "s")
+                + " at the outer edge of Sodium's render distance."));
         return 1;
     }
 

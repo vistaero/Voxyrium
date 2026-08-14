@@ -10,7 +10,7 @@ A fork of Voxy with native OpenGL/Vulkan renderers and an experimental Blaze3D c
 * Fixed gaps between blocks in **flowing water and flowing lava** in Voxy chunks.
 * Added an alternative **Blaze3D-only renderer**, written from scratch without direct OpenGL or Vulkan calls.
 
-## Blaze3D Renderer
+## Blaze3D Renderer (Experimental)
 
 The alternative renderer uses only Minecraft 26.2's public **Blaze3D API**. It should therefore run on any device capable of Minecraft's minimum graphics requirements, including **OpenGL 3.3** hardware.
 

@@ -1,6 +1,7 @@
 package me.cortex.voxy.client;
 
 import com.mojang.blaze3d.systems.GpuDevice;
+import me.cortex.voxy.client.compat.IrisBackendCompat;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.backend.VoxyGraphicsBackend;
 import me.cortex.voxy.client.core.gl.Capabilities;
@@ -10,6 +11,7 @@ import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 
@@ -24,11 +26,11 @@ import java.util.function.Function;
 public class VoxyClient implements ClientModInitializer {
     private static final HashSet<String> FREX = new HashSet<>();
     private static FileLock EXCLUSIVE_LOCK;
+    private static String pendingRendererNotice;
 
     public static void initVoxyClient(GpuDevice device) {
         VoxyGraphicsBackend.initialize(device);
-        var rendererMode = VoxyConfig.CONFIG.getRendererBackendMode();
-        selectRenderer(rendererMode);
+        selectRenderer(VoxyConfig.CONFIG.getRendererBackendMode());
         VoxyCommon.setInstanceFactory(VoxyClientInstance::new);
 
         if (VoxyGraphicsBackend.current() == VoxyGraphicsBackend.VULKAN) {
@@ -48,15 +50,30 @@ public class VoxyClient implements ClientModInitializer {
     }
 
     public static void selectRenderer(VoxyGraphicsBackend.RendererMode rendererMode) {
+        VoxyGraphicsBackend.RendererMode requestedMode = rendererMode == null
+                ? VoxyGraphicsBackend.RendererMode.AUTO
+                : rendererMode;
+        VoxyGraphicsBackend.RendererMode effectiveMode = requestedMode;
+
+        if (requestedMode != VoxyGraphicsBackend.RendererMode.NATIVE
+                && IrisBackendCompat.shouldAvoidBlaze3dRenderer()) {
+            effectiveMode = VoxyGraphicsBackend.RendererMode.NATIVE;
+            VoxyConfig.CONFIG.setRendererBackendMode(effectiveMode);
+            VoxyConfig.CONFIG.save();
+            pendingRendererNotice = "Iris shaders are active, but Voxy's Blaze3D renderer does not yet support shaderpack G-buffers; changing renderer mode from "
+                    + requestedMode.name().toLowerCase(java.util.Locale.ROOT) + " to native.";
+            Logger.warn(pendingRendererNotice);
+        }
+
         boolean nativeAvailable = false;
-        if (rendererMode != VoxyGraphicsBackend.RendererMode.BLAZE3D) {
+        if (effectiveMode != VoxyGraphicsBackend.RendererMode.BLAZE3D) {
             nativeAvailable = switch (VoxyGraphicsBackend.current()) {
                 case VULKAN -> VulkanBackend.shouldUseVulkan();
                 case OPENGL -> probeNativeOpenGlRenderer();
                 case UNKNOWN -> false;
             };
         }
-        VoxyGraphicsBackend.resolveRenderer(rendererMode, nativeAvailable);
+        VoxyGraphicsBackend.resolveRenderer(effectiveMode, nativeAvailable);
         Logger.info("Selected Voxy renderer: " + VoxyGraphicsBackend.statusLine());
     }
 
@@ -140,6 +157,14 @@ public class VoxyClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         DebugEntries.init();
+
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (pendingRendererNotice != null && client.player != null) {
+                String notice = pendingRendererNotice;
+                pendingRendererNotice = null;
+                Logger.showInHUD(notice);
+            }
+        });
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             if (VoxyCommon.isAvailable()) {

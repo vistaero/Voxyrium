@@ -48,7 +48,8 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
         // the depth target before Voxy draws. Rendering at the head of SOLID made coincident LoD
         // surfaces fight with the blocks that Sodium rendered immediately afterwards.
         if (renderPass == DefaultTerrainRenderPasses.CUTOUT
-                && VoxyConfig.CONFIG.isBlaze3dRenderingEnabled()) {
+                && VoxyConfig.CONFIG.isBlaze3dRenderingEnabled()
+                && !IrisUtil.irisShadowActive()) {
             var target = renderPass.getTarget();
             VoxyBlaze3DProbeRenderer.renderOpaque(matrices, target.getColorTextureView(), target.getDepthTextureView(), camera, parameters);
         }
@@ -88,9 +89,12 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
         }
 
         if (renderPass == DefaultTerrainRenderPasses.TRANSLUCENT
-                && VoxyConfig.CONFIG.isBlaze3dRenderingEnabled()) {
+                && VoxyConfig.CONFIG.isBlaze3dRenderingEnabled()
+                && !IrisUtil.irisShadowActive()) {
             var target = renderPass.getTarget();
             VoxyBlaze3DProbeRenderer.renderWater(matrices, target.getColorTextureView(), target.getDepthTextureView(), camera, fogParameters);
+            VoxyBlaze3DProbeRenderer.renderGlobalFog(
+                    matrices, target.getColorTextureView(), target.getDepthTextureView(), fogParameters);
         }
     }
 }

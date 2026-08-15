@@ -21,20 +21,29 @@ uniform sampler2D Sampler0;
 in vec2 texCoord0;
 in vec4 vertexColor;
 in float sphericalDistance;
+in float cylindricalDistance;
 
 out vec4 fragColor;
+
+float linearFogValue(float fogDistance, float start, float end) {
+    if (fogDistance <= start) {
+        return 0.0;
+    }
+    if (fogDistance >= end) {
+        return 1.0;
+    }
+    return (fogDistance - start) / (end - start);
+}
 
 void main() {
     vec4 color = texture(Sampler0, texCoord0) * vertexColor;
     if (color.a == 0.0) {
         discard;
     }
-    float fogValue = 0.0;
-    // ModelOffset.yz are copied from Sodium's active fog parameters. The Java side selects
-    // render-distance fog in normal air and preserves short environmental fog for dense media.
-    if (ModelOffset.z > ModelOffset.y) {
-        fogValue = clamp((sphericalDistance - ModelOffset.y) / (ModelOffset.z - ModelOffset.y), 0.0, 1.0);
-    }
+    // Render-distance fog is deliberately disabled for both Sodium and Voxy and applied once
+    // from their combined depth. Environmental fog stays per geometry, matching Sodium.
+    float fogValue = linearFogValue(
+            sphericalDistance, FogEnvironmentalStart, FogEnvironmentalEnd);
     color.rgb = mix(color.rgb, FogColor.rgb, fogValue * FogColor.a);
     fragColor = color * ColorModulator;
 }

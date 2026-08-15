@@ -9,8 +9,10 @@ import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.api.v0.IrisApi;
 import net.irisshaders.iris.gl.IrisRenderSystem;
 import net.irisshaders.iris.shadows.ShadowRenderer;
+import net.irisshaders.iris.vertices.ImmediateState;
 
 import java.io.IOException;
+import java.util.function.Supplier;
 
 public class IrisUtil {
 
@@ -42,6 +44,25 @@ public class IrisUtil {
 
     public static boolean irisShadowActive() {
         return IRIS_INSTALLED && irisShadowActive0();
+    }
+
+    public static <T> T runWithoutVertexFormatExtension(Supplier<T> action) {
+        if (!IRIS_INSTALLED) return action.get();
+        return runWithoutVertexFormatExtension0(action);
+    }
+
+    private static <T> T runWithoutVertexFormatExtension0(Supplier<T> action) {
+        Boolean previous = ImmediateState.skipExtension.get();
+        ImmediateState.skipExtension.set(true);
+        try {
+            return action.get();
+        } finally {
+            if (previous == null) {
+                ImmediateState.skipExtension.remove();
+            } else {
+                ImmediateState.skipExtension.set(previous);
+            }
+        }
     }
 
     public static void clearIrisSamplers() {

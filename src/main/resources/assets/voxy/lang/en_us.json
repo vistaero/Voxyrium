@@ -20,7 +20,7 @@
   "voxy.config.general.rendering.tooltip": "Enables or disables voxy rendering",
 
   "voxy.config.general.renderer_backend": "Renderer backend",
-  "voxy.config.general.renderer_backend.tooltip": "Selects Voxy's renderer. Auto uses the native Vulkan/OpenGL renderer when available and falls back to Blaze3D otherwise.",
+  "voxy.config.general.renderer_backend.tooltip": "Selects Voxy's renderer. Auto uses the native Vulkan/OpenGL renderer when available and falls back to Blaze3D otherwise. When Iris shaders are active, Voxy automatically selects Native because its Blaze3D renderer does not yet support shaderpack G-buffers.",
   "voxy.config.general.renderer_backend.auto": "Auto",
   "voxy.config.general.renderer_backend.native": "Native",
   "voxy.config.general.renderer_backend.blaze3d": "Blaze3D",

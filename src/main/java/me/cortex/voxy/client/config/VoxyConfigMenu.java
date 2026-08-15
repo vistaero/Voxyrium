@@ -135,6 +135,10 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
                                         .setImpact(OptionImpact.MEDIUM)
                         ), new Group(
                                 new BoolOption(
+                                        "voxy:render_fog",
+                                        Component.translatable("voxy.config.general.render_fog"),
+                                        ()->CFG.useRenderFog, v->CFG.useRenderFog=v),
+                                new BoolOption(
                                         "voxy:eviromental_fog",
                                         Component.translatable("voxy.config.general.environmental_fog"),
                                         ()->CFG.useEnvironmentalFog, v->CFG.useEnvironmentalFog=v)

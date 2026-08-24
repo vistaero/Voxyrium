@@ -208,7 +208,7 @@ public class VkCompositor {
     public void composite(VkViewportRT rt) {
         var viewport = rt.viewport;
         boolean fogCoversAllRendering = viewport.fogParameters != null
-                && viewport.fogParameters.environmentalEnd() < VoxyRenderSystem.getRenderDistance();
+                && viewport.fogParameters.environmentalEnd() < VoxyRenderSystem.getVanillaRenderDistance();
         if (fogCoversAllRendering) {
             return;//mirrors the GL "fog covers everything -> skip blit" branch
         }
@@ -229,7 +229,7 @@ public class VkCompositor {
                 float endF = viewport.fogParameters.environmentalEnd();
                 if (Math.abs(endF - start) > 1) {
                     float invEndFogDelta = 1f / (endF - start);
-                    float endDistance = Math.max(VoxyRenderSystem.getRenderDistance(), 20 * 16) * (float) Math.sqrt(3);
+                    float endDistance = Math.max(VoxyRenderSystem.getVanillaRenderDistance(), 20 * 16) * (float) Math.sqrt(3);
                     float startDelta = -start * invEndFogDelta;
                     e0 = invEndFogDelta;
                     e1 = startDelta;

@@ -99,7 +99,7 @@ public class VkRenderCore {
             this.terrainRenderer = new VkTerrainRenderer(this.frameCtx, this.uploadStream, this.downloadStream,
                     this.properties, this.geometryData, this.modelStore);
             this.compositor = new VkCompositor(this.frameCtx, this.uploadStream, this.properties,
-                    VoxyConfig.CONFIG.useEnvironmentalFog);
+                    VoxyConfig.CONFIG.getFogMode().hasFog);
             this.ssao = new VkSSAO(this.frameCtx, this.uploadStream, this.properties, VoxyConfig.CONFIG.getSSAOMode());
             //Depth-bound culling: Sodium's visibility mixins feed the store; the bound
             // renderer rasters visible-chunk AABBs into the depth-bound image so the

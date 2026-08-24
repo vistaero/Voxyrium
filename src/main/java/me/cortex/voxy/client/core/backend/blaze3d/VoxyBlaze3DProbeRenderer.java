@@ -421,7 +421,7 @@ public final class VoxyBlaze3DProbeRenderer {
                 + "[" + Math.max(0, sodiumRenderDistanceChunks - vanillaTransitionChunks) * 16
                 + ".." + Math.max(1, sodiumRenderDistanceChunks) * 16 + " blocks]"
                 + ", vanillaFog=" + Math.round(sourceFogStart) + ".." + Math.round(sourceFogEnd)
-                + (VoxyConfig.CONFIG.useRenderFog
+                + (VoxyConfig.CONFIG.getFogMode().hasFog
                 ? ", globalFog=" + Math.round(sourceFogStart) + ".."
                 + Math.round(getTerrainFogEndBlocks(sourceFogStart))
                 : ", globalFog=off")
@@ -558,7 +558,7 @@ public final class VoxyBlaze3DProbeRenderer {
      */
     public static void renderGlobalFog(ChunkRenderMatrices matrices, GpuTextureView colorTarget,
                                        GpuTextureView depthTarget, FogParameters fogParameters) {
-        if (failed || IrisUtil.irisShadowActive() || !VoxyConfig.CONFIG.useRenderFog) {
+        if (failed || IrisUtil.irisShadowActive() || !VoxyConfig.CONFIG.getFogMode().hasFog) {
             return;
         }
 
@@ -725,7 +725,7 @@ public final class VoxyBlaze3DProbeRenderer {
         float environmentalStart = fogParameters.environmentalStart();
         float environmentalEnd = fogParameters.environmentalEnd();
         boolean forceVeryCloseFog = Float.isFinite(environmentalEnd) && environmentalEnd < 10.0f;
-        activeDenseFog = (VoxyConfig.CONFIG.useEnvironmentalFog || forceVeryCloseFog)
+        activeDenseFog = (VoxyConfig.CONFIG.getFogMode().hasFog || forceVeryCloseFog)
                 && Float.isFinite(environmentalEnd)
                 && environmentalEnd > environmentalStart
                 && (!Float.isFinite(renderEnd) || environmentalEnd < Math.min(renderEnd * 0.25f, 128.0f));

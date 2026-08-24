@@ -311,7 +311,7 @@ public class VoxyRenderSystem {
         this.pipeline.preSetup(viewport);
 
         TimingStatistics.E.start();
-        if ((!VoxyClient.disableSodiumChunkRender())&&!IrisUtil.irisShadowActive()) {
+        if (this.visbleSectionStream != null && (!VoxyClient.disableSodiumChunkRender()) && !IrisUtil.irisShadowActive()) {
             if (VoxyClient.isFrexActive()!=(this.columnStreamedBoundStore!=null)) {
                 if (this.columnStreamedBoundStore == null) {
                     this.columnStreamedBoundStore = new ColumnStreamedBoundStore();
@@ -451,7 +451,7 @@ public class VoxyRenderSystem {
         }
     }
 
-    public static float getRenderDistance() {
+    public static float getVanillaRenderDistance() {
         return Minecraft.getInstance().options.getEffectiveRenderDistance()*16;
     }
 
@@ -494,7 +494,7 @@ public class VoxyRenderSystem {
         var rawMCProj = Minecraft.getInstance().gameRenderer.gameRenderState().levelRenderState.cameraRenderState.projectionMatrix;
         var extraProjection = rawMCProj.invert(new Matrix4f()).mul(base);
 
-        float near = getRenderDistance()<=32.0f?8f:16f;
+        float near = getVanillaRenderDistance()<=32.0f?8f:16f;
         near = VoxyClient.disableSodiumChunkRender()?0.1f:near;
 
         float far = 16*3000;
@@ -596,7 +596,9 @@ public class VoxyRenderSystem {
             }
 
             this.boundOutlineRenderer.free();
-            this.visbleSectionStream.free();
+            if (this.visbleSectionStream != null) {
+                this.visbleSectionStream.free();
+            }
             if (this.columnStreamedBoundStore != null) {
                 this.columnStreamedBoundStore.free();
                 this.columnStreamedBoundStore = null;

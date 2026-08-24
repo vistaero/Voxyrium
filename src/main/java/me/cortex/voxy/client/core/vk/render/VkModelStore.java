@@ -2,7 +2,6 @@ package me.cortex.voxy.client.core.vk.render;
 
 import me.cortex.voxy.client.core.model.IModelStore;
 import me.cortex.voxy.client.core.model.ModelFactory;
-import me.cortex.voxy.client.core.model.ModelStore;
 import me.cortex.voxy.client.core.rendering.util.IDeviceBuffer;
 import me.cortex.voxy.client.core.vk.VkBuffer;
 import me.cortex.voxy.client.core.vk.VkFrameCtx;
@@ -34,7 +33,7 @@ public class VkModelStore implements IModelStore {
     public VkModelStore(VkFrameCtx ctx, VkUploadStream uploadStream) {
         this.ctx = ctx;
         this.uploadStream = uploadStream;
-        this.modelBuffer = new VkBuffer(ctx, ModelStore.MODEL_SIZE * (1L << 16)).zero();
+        this.modelBuffer = new VkBuffer(ctx, IModelStore.MODEL_SIZE * (1L << 16)).zero();
         this.modelColourBuffer = new VkBuffer(ctx, 4L * (1 << 16)).zero();
         this.atlas = new VkImage2D(ctx,
                 ModelFactory.MODEL_TEXTURE_SIZE * 3 * 256,

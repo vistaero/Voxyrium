@@ -38,16 +38,10 @@ public class VoxyCommands {
                 .executes(VoxyCommands::toggleTestCube);
     }
 
-    public static LiteralArgumentBuilder<FabricClientCommandSource> registerSetVoxyQualityLevel() {
-        return ClientCommands.literal("setVoxyQualityLevel")
-                .then(ClientCommands.argument("level", IntegerArgumentType.integer(-1, 4))
-                        .executes(VoxyCommands::setVoxyQualityLevel));
-    }
-
-    public static LiteralArgumentBuilder<FabricClientCommandSource> registerSetQualityVoxyLevel() {
-        return ClientCommands.literal("setQualityVoxyLevel")
-                .then(ClientCommands.argument("level", IntegerArgumentType.integer(-1, 4))
-                        .executes(VoxyCommands::setVoxyQualityLevel));
+    public static LiteralArgumentBuilder<FabricClientCommandSource> registerSetMinimumVoxyLod() {
+        return ClientCommands.literal("setMinimumVoxyLOD")
+                .then(ClientCommands.argument("level", IntegerArgumentType.integer(0, 4))
+                        .executes(VoxyCommands::setMinimumVoxyLod));
     }
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> registerToggleVoxyProfiler() {
@@ -137,15 +131,12 @@ public class VoxyCommands {
         return 1;
     }
 
-    private static int setVoxyQualityLevel(CommandContext<FabricClientCommandSource> ctx) {
+    private static int setMinimumVoxyLod(CommandContext<FabricClientCommandSource> ctx) {
         int requestedLevel = IntegerArgumentType.getInteger(ctx, "level");
-        int lodLevel = VoxyBlaze3DProbeRenderer.setLodQualityLevel(requestedLevel);
-        if (lodLevel < 0) {
-            ctx.getSource().sendFeedback(Component.literal("Voxy LoD selection restored to automatic screen-space mode."));
-        } else {
-            ctx.getSource().sendFeedback(Component.literal("Voxy forced to LoD " + lodLevel + " for the entire loaded world"
-                    + " (one voxel per " + (1 << lodLevel) + " blocks; LoD 0 is the finest)."));
-        }
+        int lodLevel = VoxyBlaze3DProbeRenderer.setMinimumLodLevel(requestedLevel);
+        ctx.getSource().sendFeedback(Component.literal("Voxy minimum terrain detail set to LoD " + lodLevel
+                + " (one voxel per " + (1 << lodLevel) + " blocks). Screen-space selection may refine"
+                + " visible terrain further toward LoD 0; a full hierarchy refresh has been scheduled."));
         return 1;
     }
 

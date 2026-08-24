@@ -23,7 +23,7 @@ import static org.lwjgl.opengl.GL43.GL_SHADER_STORAGE_BUFFER;
 import static org.lwjgl.opengl.GL45.glBindTextureUnit;
 
 public class ModelStore implements IModelStore {
-    public static final int MODEL_SIZE = 64;
+    public static final int MODEL_SIZE = IModelStore.MODEL_SIZE;
     private Cleaner.Cleanable ref;
     final GlBuffer modelBuffer;
     final GlBuffer modelColourBuffer;

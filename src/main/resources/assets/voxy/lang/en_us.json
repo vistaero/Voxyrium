@@ -25,11 +25,14 @@
   "voxy.config.general.renderer_backend.native": "Native",
   "voxy.config.general.renderer_backend.blaze3d": "Blaze3D",
 
-  "voxy.config.general.subDivisionSize": "Pixels^2 of subdivision size",
-  "voxy.config.general.subDivisionSize.tooltip": "Maximum size in pixels (squared) of screenspace AABB before subdiving to smaller LoDs (Smaller being higher quality)",
+  "voxy.config.general.subDivisionSize": "Subdivision size (pixels)",
+  "voxy.config.general.subDivisionSize.tooltip": "Maximum screen-space size before subdividing to a finer LoD. Smaller values increase quality and memory use.",
 
   "voxy.config.general.renderDistance": "Render distance",
   "voxy.config.general.renderDistance.tooltip": "Render distance of voxy in chunks",
+
+  "voxy.config.general.blaze3d_memory_estimate": "Estimated Blaze3D requirement: about %s of free VRAM and %s of free RAM. This includes expanded Cortex geometry and transition staging.",
+  "voxy.config.general.blaze3d_memory_estimate.limit": "This exceeds Blaze3D's 8 GiB geometry safety limit; it will retain coarser LoDs where necessary instead of stopping or leaving holes.",
 
   "voxy.config.general.environmental_fog": "Enable environmental fog",
   "voxy.config.general.environmental_fog.tooltip": "Enables or disables voxy rendering environmental fog",

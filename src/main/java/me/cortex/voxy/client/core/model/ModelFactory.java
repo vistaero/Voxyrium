@@ -8,7 +8,6 @@ import it.unimi.dsi.fastutil.objects.ObjectSet;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.GlTexture;
 import me.cortex.voxy.client.core.model.bakery.SoftwareModelTextureBakery;
-import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.util.Pair;
@@ -43,7 +42,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static me.cortex.voxy.client.core.model.ModelStore.MODEL_SIZE;
+import static me.cortex.voxy.client.core.model.IModelStore.MODEL_SIZE;
 import static org.lwjgl.opengl.ARBDirectStateAccess.nglTextureSubImage2D;
 import static org.lwjgl.opengl.GL11.*;
 
@@ -332,7 +331,7 @@ public class ModelFactory {
             upload = this.uploadResults.poll();
         } while (upload != null);
         this.storage.endTextureUploads();
-        AbstractUploadStream.INSTANCE().commit();
+        this.storage.finishUploads();
     }
 
     private interface ResultUploader {
@@ -350,16 +349,7 @@ public class ModelFactory {
         public @Nullable MemoryBuffer biomeUpload;
 
         public void upload(IModelStore store) {//Uploads and resets for reuse
-            this.model.cpyTo(AbstractUploadStream.INSTANCE().upload(store.modelBufferHandle(), (long) this.modelId * MODEL_SIZE, MODEL_SIZE));
-            if (this.biomeUploadIndex != -1) {
-                this.biomeUpload.cpyTo(AbstractUploadStream.INSTANCE().upload(store.colourBufferHandle(), this.biomeUploadIndex * 4L, this.biomeUpload.size));
-                this.biomeUploadIndex = -1;
-                this.biomeUpload.free();
-                this.biomeUpload = null;
-            }
-
-            store.uploadModelTexture(this.modelId, this.texture);
-
+            store.uploadModelData(this.modelId, this.model, this.biomeUploadIndex, this.biomeUpload, this.texture);
             this.modelId = -1;
         }
 
@@ -669,6 +659,10 @@ public class ModelFactory {
 
         //glGenerateTextureMipmap(this.textures.id);
 
+        // Publish the complete CPU model before exposing the mapping to RenderDataFactory.
+        this.storage.stageModelData(modelId, uploadResult.model, uploadResult.biomeUploadIndex,
+                uploadResult.biomeUpload, uploadResult.texture);
+
         //Set the mapping at the very end
         this.idMappings[blockId] = modelId;
 
@@ -699,21 +693,7 @@ public class ModelFactory {
         }
 
         public void upload(IModelStore store) {
-            this.upload(store.modelBufferHandle(), store.colourBufferHandle());
-        }
-
-        public void upload(me.cortex.voxy.client.core.rendering.util.IDeviceBuffer modelBuffer, me.cortex.voxy.client.core.rendering.util.IDeviceBuffer modelColourBuffer) {
-            this.biomeColourBuffer.cpyTo(AbstractUploadStream.INSTANCE().upload(modelColourBuffer, 0, this.biomeColourBuffer.size));
-
-            //TODO: optimize this to like a compute scatter update or something
-            long ptr = this.modelBiomeIndexPairs.address;
-            for (long offset = 0; offset < this.modelBiomeIndexPairs.size; offset += 8) {
-                long v = MemoryUtil.memGetLong(ptr);ptr += 8;
-                MemoryUtil.memPutInt(AbstractUploadStream.INSTANCE().upload(modelBuffer, (MODEL_SIZE*(v&((1L<<32)-1)))+ 4*6 + 4, 4), (int) (v>>>32));
-            }
-
-            this.biomeColourBuffer.free();
-            this.modelBiomeIndexPairs.free();
+            store.uploadBiomeData(this.biomeColourBuffer, this.modelBiomeIndexPairs);
         }
 
         public void free() {
@@ -764,6 +744,7 @@ public class ModelFactory {
             }
         }
 
+        this.storage.stageBiomeData(result.biomeColourBuffer, result.modelBiomeIndexPairs);
         return result;
     }
 

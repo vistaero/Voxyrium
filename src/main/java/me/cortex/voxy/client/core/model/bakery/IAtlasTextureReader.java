@@ -29,6 +29,17 @@ public abstract class IAtlasTextureReader {
         INSTANCE = instance;
     }
 
+    /**
+     * Temporarily replaces the process-wide reader and returns the previous one.
+     * Renderer transitions may already have initialized the OpenGL reader; callers
+     * that only need a scoped reader must restore the returned instance in finally.
+     */
+    public static IAtlasTextureReader replaceInstance(IAtlasTextureReader instance) {
+        IAtlasTextureReader previous = INSTANCE;
+        INSTANCE = instance;
+        return previous;
+    }
+
     public static void clearInstance() {
         INSTANCE = null;
     }

@@ -1384,12 +1384,16 @@ public final class VoxyBlaze3DProbeRenderer {
             if (instance == null) {
                 throw new IllegalStateException("Voxy instance disappeared during Blaze3D mesher startup");
             }
-            IAtlasTextureReader.setInstance(new CapturedAtlasTextureReader(pixels, width, height));
+            // Native OpenGL may already have initialized the global reader before the player
+            // changes renderer mid-session. Use the captured atlas only while this bakery is
+            // constructed, then restore Native's reader instead of leaving the singleton empty.
+            IAtlasTextureReader previousAtlasReader = IAtlasTextureReader.replaceInstance(
+                    new CapturedAtlasTextureReader(pixels, width, height));
             try {
                 store = new Blaze3dModelStore();
                 bakery = new ModelBakerySubsystem(world.getMapper(), store);
             } finally {
-                IAtlasTextureReader.clearInstance();
+                IAtlasTextureReader.replaceInstance(previousAtlasReader);
             }
 
             for (Mapper.BiomeEntry biome : world.getMapper().getBiomeEntries()) {

@@ -36,7 +36,6 @@ sourceSets.main.java {
     exclude 'me/cortex/voxy/client/mixin/minecraft/MixinDebugScreenEntryList.java'
     exclude 'me/cortex/voxy/client/mixin/minecraft/MixinFogRenderer.java'
     exclude 'me/cortex/voxy/client/mixin/minecraft/MixinLevelExtractor.java'
-    exclude 'me/cortex/voxy/client/mixin/minecraft/MixinRenderSystem.java'
     exclude 'me/cortex/voxy/client/mixin/minecraft/util/MixinGlDebug.java'
     exclude 'me/cortex/voxy/client/mixin/minecraft/util/MixinGPUSelect.java'
     exclude 'me/cortex/voxy/client/mixin/sodium/AccessorChunkTracker.java'

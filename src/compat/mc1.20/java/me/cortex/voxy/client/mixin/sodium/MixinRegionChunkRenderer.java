@@ -2,7 +2,7 @@ package me.cortex.voxy.client.mixin.sodium;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
-import me.cortex.voxy.client.core.compat.FogParameters;
+import me.cortex.voxy.client.core.compat.LegacyFogState;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import me.jellysquid.mods.sodium.client.gl.device.CommandList;
 import me.jellysquid.mods.sodium.client.render.chunk.ChunkCameraContext;
@@ -33,10 +33,7 @@ public final class MixinRegionChunkRenderer {
         }
 
         float[] colour = RenderSystem.getShaderFogColor();
-        float start = RenderSystem.getShaderFogStart();
-        float end = RenderSystem.getShaderFogEnd();
-        var fog = new FogParameters(colour[0], colour[1], colour[2], colour[3],
-                start, end, start, end);
+        var fog = LegacyFogState.createTerrainFogParameters(colour);
         var target = Minecraft.getInstance().getMainRenderTarget();
         var viewport = renderer.setupViewport(matrices.projection(), matrices.modelView(), fog,
                 target.width, target.height, camera.posX, camera.posY, camera.posZ);

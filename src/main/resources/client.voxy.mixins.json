@@ -11,7 +11,8 @@
     "minecraft.session.MixinMinecraft",
     "minecraft.util.MixinBlockableEventLoop",
     "sodium.MixinDefaultChunkRenderer",
-    "sodium.MixinRenderSectionManager"
+    "sodium.MixinRenderSectionManager",
+    "sodium.MixinSodiumOptionsGUI"
   ],
   "injectors": {
     "defaultRequire": 1

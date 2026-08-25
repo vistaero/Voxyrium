@@ -1,0 +1,55 @@
+{
+  "voxy.config.title": "Voxy",
+
+  "voxy.config.general": "General",
+  "voxy.config.rendering": "Renderizado",
+
+  "voxy.config.general.enabled": "Activar Voxy",
+  "voxy.config.general.enabled.tooltip": "Activa o desactiva Voxy por completo",
+
+  "voxy.config.general.serviceThreads": "Hilos de servicio",
+  "voxy.config.general.serviceThreads.tooltip": "Número de hilos que puede usar ServiceThreadPool",
+
+  "voxy.config.general.useSodiumBuilder": "Usar hilos de Sodium",
+  "voxy.config.general.useSodiumBuilder.tooltip": "Usa los hilos de construcción de Sodium como parte del grupo de hilos de Voxy; puede reducir los tirones y el retraso al moverse rápidamente con una distancia de renderizado alta",
+
+  "voxy.config.general.ingest": "Ingesta de chunks",
+  "voxy.config.general.ingest.tooltip": "Activa o desactiva la capacidad de Voxy para convertir nuevos chunks en LoD",
+
+  "voxy.config.general.rendering": "Renderizado de Voxy",
+  "voxy.config.general.rendering.tooltip": "Activa o desactiva el renderizado de Voxy",
+
+  "voxy.config.general.renderer_backend": "Motor de renderizado",
+  "voxy.config.general.renderer_backend.tooltip": "Selecciona el motor de renderizado de Voxy. Nativo usa el renderizador Vulkan/OpenGL de Voxy. Blaze3D usa la API pública de renderizado de Minecraft.",
+  "voxy.config.general.renderer_backend.native": "Nativo",
+  "voxy.config.general.renderer_backend.blaze3d": "Blaze3D",
+
+  "voxy.confirm.iris_blaze3d.title": "Shaderpack de Iris activo",
+  "voxy.confirm.iris_blaze3d.message": "Blaze3D podría tener problemas visuales con este shaderpack de Iris.\n\nRecomendado: seguir usando Nativo.",
+  "voxy.confirm.iris_blaze3d.native": "Mantener Nativo",
+  "voxy.confirm.iris_blaze3d.blaze3d": "Usar Blaze3D",
+  "voxy.confirm.iris_blaze3d.dont_show_again": "No volver a mostrar",
+
+  "voxy.config.general.subDivisionSize": "Tamaño de subdivisión (píxeles)",
+  "voxy.config.general.subDivisionSize.tooltip": "Tamaño máximo en pantalla antes de subdividir a un LoD más detallado. Los valores menores aumentan la calidad y el uso de memoria.",
+
+  "voxy.config.general.renderDistance": "Distancia de renderizado",
+  "voxy.config.general.renderDistance.tooltip": "Distancia de renderizado de Voxy en chunks",
+
+  "voxy.config.general.blaze3d_memory_estimate": "Requisitos estimados de Blaze3D: aproximadamente %s de VRAM libre y %s de RAM libre. Incluye la geometría Cortex expandida y la preparación de transiciones.",
+  "voxy.config.general.blaze3d_memory_estimate.limit": "Esto supera el límite de seguridad de 8 GiB de geometría de Blaze3D; conservará LoD menos detallados cuando sea necesario en lugar de detenerse o dejar huecos.",
+
+  "voxy.config.general.environmental_fog": "Efecto de niebla y desvanecimiento",
+  "voxy.config.general.environmental_fog.tooltip": "Configura los efectos de niebla ambiental y desvanecimiento",
+  "voxy.config.general.environmental_fog.fog_and_fade": "Niebla y desvanecimiento",
+  "voxy.config.general.environmental_fog.fog": "Solo niebla",
+  "voxy.config.general.environmental_fog.fade": "Solo desvanecimiento",
+  "voxy.config.general.environmental_fog.off": "Desactivado",
+
+  "voxy.config.general.ssao_mode": "Modo SSAO",
+  "voxy.config.general.ssao_mode.tooltip": "El modo usado para la oclusión ambiental en espacio de pantalla (Automático intenta elegir la mejor opción reduciendo el impacto en el rendimiento)",
+  "voxy.config.general.ssao_mode.auto": "Automático",
+  "voxy.config.general.ssao_mode.basic": "Básico",
+  "voxy.config.general.ssao_mode.better": "Mejor",
+  "voxy.config.general.ssao_mode.best": "Óptimo"
+}

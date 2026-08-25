@@ -1,23 +1,47 @@
 {
   "schemaVersion": 1,
-  "id": "voxelmon",
+  "id": "voxy",
   "version": "${version}",
-  "name": "voxelmon",
-  "description": "",
-  "authors": [],
+  "custom": {
+    "commit": "${commit}",
+    "buildtime": "${buildtime}"
+  },
+  "name": "Voxy",
+  "description": "Far distance rendering mod utilising LoDs",
+  "authors": [
+    "Cortex"
+  ],
   "contact": {
   },
   "license": "All-Rights-Reserved",
-  "icon": "assets/voxelmon/icon.png",
-  "environment": "client",
+  "icon": "assets/voxy/icon.png",
+  "environment": "*",
   "entrypoints": {
-    "client": ["me.cortex.voxelmon.Voxelmon"]
+    "client": [
+      "me.cortex.voxy.client.VoxyClient"
+    ],
+    "modmenu": [
+      "me.cortex.voxy.client.config.ModMenuIntegration"
+    ],
+    "main": [
+      "me.cortex.voxy.commonImpl.VoxyCommon"
+    ]
   },
   "mixins": [
-    "voxelmon.mixins.json"
+    {
+      "config": "client.voxy.mixins.json",
+      "environment": "client"
+    },
+    "common.voxy.mixins.json"
   ],
   "depends": {
-    "fabricloader": ">=0.14.22"
+    "minecraft": "${allowed_mc_version}",
+    "fabricloader": ">=0.14.22",
+    "fabric-api": "${minimum_fabric_api_version}",
+    "sodium": "${allowed_sodium_versions}"
   },
-  "accessWidener": "voxelmon.accesswidener"
+  "breaks": {
+    "voxyworldgenv2": "=2.2.2"
+  },
+  "accessWidener": "voxy.accesswidener"
 }

@@ -1,0 +1,49 @@
+#version 450 core
+//Pure-VK HiZ mip reduction: one dispatch per destination mip level. Mirrors the
+// GL blit.fsh conservative 2x2 reduction, sampling the source at the NORMALISED
+// destination-texel centre (textureGather over [0,1]) so the reduction rescales
+// correctly for ANY source:destination ratio.
+//
+// This matters at level 0, where the source is the full-screen depth image
+// (e.g. 1920x1197) and the destination is the power-of-two pyramid base
+// (1024x1024) -- NOT an exact 2:1 halving. The previous integer `pos*2` fetch
+// assumed src == 2*dst, so it squished the full-res depth into the top-left
+// ~58% of the base level and mis-aligned every occlusion test: distant LODs
+// near the horizon were sampled against unrelated foreground depth (marked NEAR
+// by the stencil-depth setup, i.e. a full occluder) and got wrongly culled, the
+// holes shifting as the camera moved. Levels >=1 are exact 2:1 (powers of two)
+// so this produces identical results there.
+//
+// REDUCTION comes from depthutils (min for reverse-Z: keep the FURTHEST value so
+// occlusion tests stay conservative).
+#import <voxy:util/depthutils.glsl>
+
+layout(local_size_x=8, local_size_y=8) in;
+
+layout(binding = 0) uniform sampler2D srcLevel;
+layout(binding = 1, r32f) uniform restrict writeonly image2D dstLevel;
+
+layout(push_constant) uniform PushConstants {
+    ivec2 dstSize;
+    ivec2 srcSize;//unused: normalised gather handles the rescale
+};
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pos, dstSize))) {
+        return;
+    }
+    //Normalised centre of this destination texel; the sampler maps [0,1] across
+    // the whole source level, exactly like the GL fullscreen-quad blit.
+    vec2 uv = (vec2(pos) + 0.5) / vec2(dstSize);
+    vec4 depths = textureGather(srcLevel, uv, 0);
+
+    //Hole patch, kept identical to blit.fsh for parity (a no-op for min/max REDUCTION).
+    bvec4 cv = equal(vec4(FAR), depths);
+    if (any(cv)) {
+        depths = mix(vec4(NEAR), depths, cv);
+    }
+
+    float res = REDUCTION(REDUCTION(depths.x, depths.y), REDUCTION(depths.z, depths.w));
+    imageStore(dstLevel, pos, vec4(res));
+}

@@ -293,8 +293,6 @@ dependencies {
     //modRuntimeOnlyMsk "drouarb:nvidium:0.4.1-beta4:1.21.6@jar"
     //compileOnly("drouarb:nvidium:0.4.1-beta4:1.21.6@jar")
 
-    smartDependency("modmenu_version", true)
-    modImplementation "me.shedaniel.cloth:cloth-config-fabric:${project.cloth_config_version}"
     smartDependency("lithium_version", true)
     smartDependency("iris_version")
     smartDependency("chunky_version")

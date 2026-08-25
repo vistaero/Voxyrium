@@ -10,12 +10,17 @@ layout(binding = LIST_BUFFER_BINDING, std430) restrict readonly buffer SetListBu
     uint[] ids;
 };
 
+#ifdef VOXY_VULKAN
+layout(push_constant) uniform PushConstants { uint count; uint setTo; };
+#else
 layout(location=0) uniform uint count;
 layout(location=1) uniform uint setTo;
+#endif
 void main() {
     uint id = gl_GlobalInvocationID.x;
     if (count <= id) {
         return;
     }
-    visiblity[ids[id]] = setTo;
+    uint pos = ids[id];
+    visiblity[pos&((1u<<31)-1)] = mix(setTo, uint(-1), (pos&(1u<<31)) == 0);
 }

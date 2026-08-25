@@ -1,28 +1,8 @@
-#line 1
-
 layout(binding = 0, std140) uniform SceneUniform {
     mat4 MVP;
     ivec3 baseSectionPos;
     uint frameId;
     vec3 cameraSubPos;
-};
-
-struct BlockModel {
-    uint faceData[6];
-    uint flagsA;
-    uint colourTint;
-    uint _pad[8];
-};
-
-struct SectionMeta {
-    uint posA;
-    uint posB;
-    uint AABB;
-    uint ptr;
-    uint cntA;
-    uint cntB;
-    uint cntC;
-    uint cntD;
 };
 
 //TODO: see if making the stride 2*4*4 bytes or something cause you get that 16 byte write
@@ -63,8 +43,8 @@ layout(binding = DRAW_COUNT_BUFFER_BINDING, std430) restrict buffer DrawCommandC
 
     uint opaqueDrawCount;
     uint translucentDrawCount;
+    uint temporalOpaqueDrawCount;
 
-    uint pad_A;
     DrawCommand cullDrawIndirectCommand;
 };
 #endif
@@ -110,15 +90,5 @@ layout(binding = MODEL_COLOUR_BUFFER_BINDING, std430) readonly restrict buffer M
 layout(binding = POSITION_SCRATCH_BINDING, std430) POSITION_SCRATCH_ACCESS restrict buffer PositionScratchBuffer {
     uvec2 positionBuffer[];
 };
-#endif
-
-#ifdef LIGHTING_SAMPLER_BINDING
-
-layout(binding = LIGHTING_SAMPLER_BINDING) uniform sampler2D lightSampler;
-
-vec4 getLighting(uint index) {
-    int i2 = int(index);
-    return texture(lightSampler, vec2((i2>>4)&0xF, i2&0xF)/16.0f);
-}
 #endif
 

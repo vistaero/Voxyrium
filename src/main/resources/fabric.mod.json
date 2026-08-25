@@ -21,22 +21,27 @@
       "me.cortex.voxy.client.VoxyClient"
     ],
     "modmenu": [
-      "me.cortex.voxy.client.config.VoxyConfigScreenFactory"
+      "me.cortex.voxy.client.config.ModMenuIntegration"
     ],
     "main": [
       "me.cortex.voxy.commonImpl.VoxyCommon"
     ]
   },
   "mixins": [
-    "client.voxy.mixins.json",
+    {
+      "config": "client.voxy.mixins.json",
+      "environment": "client"
+    },
     "common.voxy.mixins.json"
   ],
   "depends": {
-    "minecraft": "1.20.6",
+    "minecraft": "${allowed_mc_version}",
     "fabricloader": ">=0.14.22",
     "fabric-api": ">=0.91.1",
-    "cloth-config": ">=13",
-    "sodium": "*"
+    "sodium": "${allowed_sodium_versions}"
+  },
+  "breaks": {
+    "voxyworldgenv2": "=2.2.2"
   },
   "accessWidener": "voxy.accesswidener"
 }

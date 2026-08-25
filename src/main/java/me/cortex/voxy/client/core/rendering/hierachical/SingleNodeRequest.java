@@ -42,4 +42,7 @@ class SingleNodeRequest {
     public boolean hasChildExistenceSet() {
         return (this.setMsk&2)!=0;
     }
+    public boolean hasMeshSet() {
+        return (this.setMsk&1)!=0;
+    }
 }

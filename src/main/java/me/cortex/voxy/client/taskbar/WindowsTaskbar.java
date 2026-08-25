@@ -1,10 +1,9 @@
 package me.cortex.voxy.client.taskbar;
 
 import com.sun.jna.Pointer;
-import com.sun.jna.platform.win32.*;
 import com.sun.jna.platform.win32.COM.COMInvoker;
+import com.sun.jna.platform.win32.*;
 import com.sun.jna.ptr.PointerByReference;
-import me.cortex.voxy.common.util.TrackedObject;
 import org.lwjgl.glfw.GLFWNativeWin32;
 
 public class WindowsTaskbar extends COMInvoker implements Taskbar.ITaskbar {

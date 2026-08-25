@@ -1,16 +1,22 @@
 package me.cortex.voxy.client.core.gl;
 
+import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.util.TrackedObject;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.system.MemoryUtil;
 
+import static org.lwjgl.opengl.ARBSparseBuffer.GL_SPARSE_STORAGE_BIT_ARB;
 import static org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE;
 import static org.lwjgl.opengl.GL15.glDeleteBuffers;
-import static org.lwjgl.opengl.GL44C.glBufferStorage;
 import static org.lwjgl.opengl.GL45C.*;
 
-public class GlBuffer extends TrackedObject {
+public class GlBuffer extends TrackedObject implements me.cortex.voxy.client.core.rendering.IRenderList, me.cortex.voxy.client.core.rendering.util.IDeviceBuffer {
     public final int id;
     private final long size;
+    private final int flags;
+
+    @Override public int glId() { return this.id; }
+    @Override public long sizeBytes() { return this.size; }
 
     private static int COUNT;
     private static long TOTAL_SIZE;
@@ -19,11 +25,30 @@ public class GlBuffer extends TrackedObject {
         this(size, 0);
     }
 
+    public GlBuffer(MemoryBuffer buffer) {
+        this(buffer.size, 0, false, buffer.address);
+    }
+
+    public GlBuffer(long size, boolean zero) {
+        this(size, 0, zero);
+    }
+
     public GlBuffer(long size, int flags) {
+        this(size, flags, true);
+    }
+
+    public GlBuffer(long size, int flags, boolean zero) {
+        this(size, flags, zero, 0);
+    }
+
+    private GlBuffer(long size, int flags, boolean zero, long data) {
+        this.flags = flags;
         this.id = glCreateBuffers();
         this.size = size;
-        glNamedBufferStorage(this.id, size, flags);
-        this.zero();
+        nglNamedBufferStorage(this.id, size, data, flags);
+        if ((flags&GL_SPARSE_STORAGE_BIT_ARB)==0 && zero) {
+            this.zero();
+        }
 
         COUNT++;
         TOTAL_SIZE += size;
@@ -38,6 +63,10 @@ public class GlBuffer extends TrackedObject {
         TOTAL_SIZE -= this.size;
     }
 
+    public boolean isSparse() {
+        return (this.flags&GL_SPARSE_STORAGE_BIT_ARB)!=0;
+    }
+
     public long size() {
         return this.size;
     }
@@ -47,13 +76,19 @@ public class GlBuffer extends TrackedObject {
         return this;
     }
 
+    public GlBuffer zeroRange(long offset, long size) {
+        nglClearNamedBufferSubData(this.id, GL_R8UI, offset, size, GL_RED_INTEGER, GL_UNSIGNED_BYTE, 0);
+        return this;
+    }
+
     public GlBuffer fill(int data) {
         //Clear unpack values
         //Fixed in mesa commit a5c3c452
         glPixelStorei(GL11.GL_UNPACK_SKIP_ROWS, 0);
         glPixelStorei(GL11.GL_UNPACK_SKIP_PIXELS, 0);
 
-        glClearNamedBufferData(this.id, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, new int[]{data});
+        MemoryUtil.memPutInt(SCRATCH, data);
+        nglClearNamedBufferData(this.id, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, SCRATCH);
         return this;
     }
 
@@ -68,4 +103,6 @@ public class GlBuffer extends TrackedObject {
     public GlBuffer name(String name) {
         return GlDebug.name(name, this);
     }
+
+    private static final long SCRATCH = MemoryUtil.nmemAlloc(4);
 }

@@ -5,9 +5,11 @@ import me.cortex.voxy.commonImpl.VoxyCommon;
 
 import java.lang.ref.Cleaner;
 
+import static me.cortex.voxy.common.util.GlobalCleaner.CLEANER;
+
 public abstract class TrackedObject {
     //TODO: maybe make this false? for performance overhead?
-    public static final boolean TRACK_OBJECT_ALLOCATIONS = VoxyCommon.isVerificationFlagOn("ensureTrackedObjectsAreFreed");
+    public static final boolean TRACK_OBJECT_ALLOCATIONS = VoxyCommon.isVerificationFlagOn("ensureTrackedObjectsAreFreed", true);
     public static final boolean TRACK_OBJECT_ALLOCATION_STACKS = VoxyCommon.isVerificationFlagOn("trackObjectAllocationStacks");
 
     private final Ref ref;
@@ -49,14 +51,6 @@ public abstract class TrackedObject {
 
     public record Ref(Cleaner.Cleanable cleanable, boolean[] freedRef) {}
 
-    private static final Cleaner cleaner;
-    static {
-        if (TRACK_OBJECT_ALLOCATIONS) {
-            cleaner = Cleaner.create();
-        } else {
-            cleaner = null;
-        }
-    }
     public static Ref register(boolean track, Object obj) {
         boolean[] freed = new boolean[1];
         Cleaner.Cleanable cleanable = null;
@@ -69,7 +63,7 @@ public abstract class TrackedObject {
             } else {
                 trace = null;
             }
-            cleanable = cleaner.register(obj, () -> {
+            cleanable = CLEANER.register(obj, () -> {
                 if (!freed[0]) {
                     Logger.error("Object named: " + clazz + " was not freed, location at:\n", trace==null?"Enable allocation stack tracing":trace);
                 }

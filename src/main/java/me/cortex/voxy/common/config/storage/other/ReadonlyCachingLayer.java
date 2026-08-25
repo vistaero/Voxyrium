@@ -1,8 +1,8 @@
 package me.cortex.voxy.common.config.storage.other;
 
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
-import me.cortex.voxy.common.config.storage.StorageBackend;
 import me.cortex.voxy.common.config.ConfigBuildCtx;
+import me.cortex.voxy.common.config.storage.StorageBackend;
 import me.cortex.voxy.common.config.storage.StorageConfig;
 import me.cortex.voxy.common.util.MemoryBuffer;
 
@@ -33,7 +33,7 @@ public class ReadonlyCachingLayer extends StorageBackend {
     }
 
     @Override
-    public void iterateStoredSectionPositions(LongConsumer consumer) {
+    public void iteratePositions(int level , LongConsumer consumer) {
         throw new IllegalStateException("Not yet implemented");
     }
 

@@ -1,28 +1,37 @@
 package me.cortex.voxy.common.world.other;
 
+import com.mojang.serialization.Dynamic;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.config.IMappingStorage;
-import me.cortex.voxy.common.config.section.SectionStorage;
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.nbt.NbtCompound;
+import me.cortex.voxy.common.util.Pair;
+import net.minecraft.SharedConstants;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.NbtOps;
-import net.minecraft.nbt.NbtSizeTracker;
-import net.minecraft.registry.entry.RegistryEntry;
-import net.minecraft.util.Pair;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.EmptyBlockView;
-import net.minecraft.world.biome.Biome;
+import net.minecraft.util.datafix.DataFixers;
+import net.minecraft.util.datafix.fixes.References;
+import net.minecraft.world.level.EmptyBlockGetter;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.LeavesBlock;
+import net.minecraft.world.level.block.state.BlockState;
 import org.lwjgl.system.MemoryUtil;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
 
@@ -36,9 +45,13 @@ public class Mapper {
     public static final long UNKNOWN_MAPPING = -1;
     public static final long AIR = 0;
 
-    private final Map<BlockState, StateEntry> block2stateEntry = new ConcurrentHashMap<>(2000,0.75f, 10);
+    private final ReentrantLock blockLock = new ReentrantLock();
+    private final ConcurrentHashMap<BlockState, StateEntry> block2stateEntry = new ConcurrentHashMap<>(2000,0.75f, 10);
     private final ObjectArrayList<StateEntry> blockId2stateEntry = new ObjectArrayList<>();
-    private final Map<String, BiomeEntry> biome2biomeEntry = new ConcurrentHashMap<>(2000,0.75f, 10);
+
+
+    private final ReentrantLock biomeLock = new ReentrantLock();
+    private final ConcurrentHashMap<String, BiomeEntry> biome2biomeEntry = new ConcurrentHashMap<>(2000,0.75f, 10);
     private final ObjectArrayList<BiomeEntry> biomeId2biomeEntry = new ObjectArrayList<>();
 
     private Consumer<StateEntry> newStateCallback;
@@ -46,7 +59,7 @@ public class Mapper {
     public Mapper(IMappingStorage storage) {
         this.storage = storage;
         //Insert air since its a special entry (index 0)
-        var airEntry = new StateEntry(0, Blocks.AIR.getDefaultState());
+        var airEntry = new StateEntry(0, Blocks.AIR.defaultBlockState());
         this.block2stateEntry.put(airEntry.state, airEntry);
         this.blockId2stateEntry.add(airEntry);
 
@@ -55,9 +68,8 @@ public class Mapper {
 
 
     public static boolean isAir(long id) {
-        int bId = getBlockId(id);
         //Note: air can mean void, cave or normal air, as the block state is remapped during ingesting
-        return bId == 0;
+        return (id&(((1L<<20)-1)<<27)) == 0;
     }
 
     public static int getBlockId(long id) {
@@ -73,7 +85,15 @@ public class Mapper {
     }
 
     public static long withLight(long id, int light) {
-        return (id&(~(0xFFL<<56)))|(Integer.toUnsignedLong(light)<<56);
+        return (id&(~(0xFFL<<56)))|(Integer.toUnsignedLong(light&0xFF)<<56);
+    }
+
+    public static long withBlockBiome(long id, int block, int biome) {
+        return (id&(0xFFL<<56))|(Integer.toUnsignedLong(block)<<27)|(Integer.toUnsignedLong(biome)<<47);
+    }
+
+    public static long airWithLight(int light) {
+        return Integer.toUnsignedLong(light&0xFF)<<56;
     }
 
     public void setStateCallback(Consumer<StateEntry> stateCallback) {
@@ -85,26 +105,31 @@ public class Mapper {
     }
 
     private void loadFromStorage() {
+        //TODO: FIXME: have/store the minecraft version the mappings are from (the data version)
+        // SharedConstants.getGameVersion().dataVersion().id()
+        // then use this to create an update path instead
+
         var mappings = this.storage.getIdMappingsData();
         List<StateEntry> sentries = new ArrayList<>();
         List<BiomeEntry> bentries = new ArrayList<>();
         List<Pair<byte[], Integer>> sentryErrors = new ArrayList<>();
 
-
+        boolean[] forceResave = new boolean[1];
         for (var entry : mappings.int2ObjectEntrySet()) {
             int entryType = entry.getIntKey()>>>30;
             int id = entry.getIntKey() & ((1<<30)-1);
             if (entryType == BLOCK_STATE_TYPE) {
-                var sentry = StateEntry.deserialize(id, entry.getValue());
+                var sentry = StateEntry.deserialize(id, entry.getValue(), forceResave);
                 if (sentry.state.isAir()) {
-                    System.err.println("Deserialization was air, removed block");
+                    Logger.error("Deserialization was air, removed block");
                     sentryErrors.add(new Pair<>(entry.getValue(), id));
                     continue;
                 }
                 sentries.add(sentry);
-                var oldEntry = this.block2stateEntry.put(sentry.state, sentry);
+                var oldEntry = this.block2stateEntry.putIfAbsent(sentry.state, sentry);
                 if (oldEntry != null) {
-                    throw new IllegalStateException("Multiple mappings for blockstate");
+                    //forceResave[0] |= true;
+                    Logger.warn("Multiple mappings for blockstate, using old state, expect things to possibly go really badly. " + oldEntry.id + ":" + sentry.id + ":" + sentry.state );
                 }
             } else if (entryType == BIOME_TYPE) {
                 var bentry = BiomeEntry.deserialize(id, entry.getValue());
@@ -117,12 +142,13 @@ public class Mapper {
             }
         }
 
-        {
+        if (!sentryErrors.isEmpty()) {
+            forceResave[0] |= true;
             //Insert garbage types into the mapping for those blocks, TODO:FIXME: Need to upgrade the type or have a solution to error blocks
             var rand = new Random();
             for (var error : sentryErrors) {
                 while (true) {
-                    var state = new StateEntry(error.getRight(), Block.STATE_IDS.get(rand.nextInt(Block.STATE_IDS.size() - 1)));
+                    var state = new StateEntry(error.right(), Block.BLOCK_STATE_REGISTRY.byId(rand.nextInt(Block.BLOCK_STATE_REGISTRY.size() - 1)));
                     if (this.block2stateEntry.put(state.state, state) == null) {
                         sentries.add(state);
                         break;
@@ -146,12 +172,28 @@ public class Mapper {
             this.biomeId2biomeEntry.add(entry);
         });
 
+        if (forceResave[0]) {
+            Logger.warn("Forced state resave triggered");
+            this.forceResaveStates();
+        }
     }
 
-    private synchronized StateEntry registerNewBlockState(BlockState state) {
-        StateEntry entry = new StateEntry(this.blockId2stateEntry.size(), state);
-        //this.block2stateEntry.put(state, entry);
+    public final int getBlockStateCount() {
+        return this.blockId2stateEntry.size();
+    }
+
+    private StateEntry registerNewBlockState(BlockState state) {
+        this.blockLock.lock();
+        var entry = this.block2stateEntry.get(state);
+        if (entry != null) {
+            this.blockLock.unlock();
+            return entry;
+        }
+
+        entry = new StateEntry(this.blockId2stateEntry.size(), state);
         this.blockId2stateEntry.add(entry);
+        this.block2stateEntry.put(state, entry);
+        this.blockLock.unlock();
 
         byte[] serialized = entry.serialize();
         ByteBuffer buffer = MemoryUtil.memAlloc(serialized.length);
@@ -159,15 +201,23 @@ public class Mapper {
         buffer.rewind();
         this.storage.putIdMapping(entry.id | (BLOCK_STATE_TYPE<<30), buffer);
         MemoryUtil.memFree(buffer);
+        //this.storage.flush();
 
         if (this.newStateCallback!=null)this.newStateCallback.accept(entry);
         return entry;
     }
 
-    private synchronized BiomeEntry registerNewBiome(String biome) {
-        BiomeEntry entry = new BiomeEntry(this.biomeId2biomeEntry.size(), biome);
-        //this.biome2biomeEntry.put(biome, entry);
+    private BiomeEntry registerNewBiome(String biome) {
+        this.biomeLock.lock();
+        var entry = this.biome2biomeEntry.get(biome);
+        if (entry != null) {
+            this.biomeLock.unlock();
+            return entry;
+        }
+        entry = new BiomeEntry(this.biomeId2biomeEntry.size(), biome);
         this.biomeId2biomeEntry.add(entry);
+        this.biome2biomeEntry.put(biome, entry);
+        this.biomeLock.unlock();
 
         byte[] serialized = entry.serialize();
         ByteBuffer buffer = MemoryUtil.memAlloc(serialized.length);
@@ -175,6 +225,7 @@ public class Mapper {
         buffer.rewind();
         this.storage.putIdMapping(entry.id | (BIOME_TYPE<<30), buffer);
         MemoryUtil.memFree(buffer);
+        //this.storage.flush();
 
         if (this.newBiomeCallback!=null)this.newBiomeCallback.accept(entry);
         return entry;
@@ -182,8 +233,8 @@ public class Mapper {
 
 
     //TODO:FIXME: IS VERY SLOW NEED TO MAKE IT LOCK FREE, or at minimum use a concurrent map
-    public long getBaseId(byte light, BlockState state, RegistryEntry<Biome> biome) {
-        if (state.isAir()) return ((long)light)<<56;//Special case and fast return for air, dont care about the biome
+    public long getBaseId(byte light, BlockState state, Holder<Biome> biome) {
+        if (state.isAir()) return Byte.toUnsignedLong(light) <<56;//Special case and fast return for air, dont care about the biome
         return composeMappingId(light, this.getIdForBlockState(state), this.getIdForBiome(biome));
     }
 
@@ -191,12 +242,15 @@ public class Mapper {
         return this.blockId2stateEntry.get(blockId).state;
     }
 
-    //TODO: replace lambda with a class cached lambda ref (cause doing this:: still does a lambda allocation)
     public int getIdForBlockState(BlockState state) {
         if (state.isAir()) {
             return 0;
         }
-        return this.block2stateEntry.computeIfAbsent(state, this::registerNewBlockState).id;
+        var mapping = this.block2stateEntry.get(state);
+        if (mapping == null) {
+            mapping = this.registerNewBlockState(state);
+        }
+        return mapping.id;
     }
 
     public int getBlockStateOpacity(long mappingId) {
@@ -207,10 +261,13 @@ public class Mapper {
         return this.blockId2stateEntry.get(blockId).opacity;
     }
 
-    //TODO: replace lambda with a class cached lambda ref (cause doing this:: still does a lambda allocation)
-    public int getIdForBiome(RegistryEntry<Biome> biome) {
-        String biomeId = biome.getKey().get().getValue().toString();
-        return this.biome2biomeEntry.computeIfAbsent(biomeId, this::registerNewBiome).id;
+    public int getIdForBiome(Holder<Biome> biome) {
+        String biomeId = biome.unwrapKey().orElseThrow().location().toString();
+        var entry = this.biome2biomeEntry.get(biomeId);
+        if (entry == null) {
+            entry = this.registerNewBiome(biomeId);
+        }
+        return entry.id;
     }
 
     public static long composeMappingId(byte light, int blockId, int biomeId) {
@@ -222,6 +279,7 @@ public class Mapper {
 
     //TODO: fixme: synchronize access to this.blockId2stateEntry
     public StateEntry[] getStateEntries() {
+        this.blockLock.lock();
         var set = new ArrayList<>(this.blockId2stateEntry);
         StateEntry[] out = new StateEntry[set.size()];
         int i = 0;
@@ -231,11 +289,13 @@ public class Mapper {
             }
             out[i-1] = entry;
         }
+        this.blockLock.unlock();
         return out;
     }
 
     //TODO: fixme: synchronize access to this.biomeId2biomeEntry
     public BiomeEntry[] getBiomeEntries() {
+        this.biomeLock.lock();
         var set = new ArrayList<>(this.biomeId2biomeEntry);
         BiomeEntry[] out = new BiomeEntry[set.size()];
         int i = 0;
@@ -245,6 +305,7 @@ public class Mapper {
             }
             out[i-1] = entry;
         }
+        this.biomeLock.unlock();
         return out;
     }
 
@@ -296,12 +357,17 @@ public class Mapper {
         public StateEntry(int id, BlockState state) {
             this.id = id;
             this.state = state;
-            this.opacity = state.getOpacity(EmptyBlockView.INSTANCE, BlockPos.ORIGIN);
+            //Override opacity of leaves to be solid
+            if (state.getBlock() instanceof LeavesBlock) {
+                this.opacity = 15;
+            } else {
+                this.opacity = state.getLightBlock(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
+            }
         }
 
         public byte[] serialize() {
             try {
-                var serialized = new NbtCompound();
+                var serialized = new CompoundTag();
                 serialized.putInt("id", this.id);
                 serialized.put("block_state", BlockState.CODEC.encodeStart(NbtOps.INSTANCE, this.state).result().get());
                 var out = new ByteArrayOutputStream();
@@ -312,14 +378,31 @@ public class Mapper {
             }
         }
 
-        public static StateEntry deserialize(int id, byte[] data) {
+        public static StateEntry deserialize(int id, byte[] data, boolean[] forceResave) {
             try {
-                var compound = NbtIo.readCompressed(new ByteArrayInputStream(data), NbtSizeTracker.ofUnlimitedBytes());
+                var compound = NbtIo.readCompressed(new ByteArrayInputStream(data), NbtAccounter.unlimitedHeap());
                 if (compound.getInt("id") != id) {
                     throw new IllegalStateException("Encoded id != expected id");
                 }
-                BlockState state = BlockState.CODEC.parse(NbtOps.INSTANCE, compound.getCompound("block_state")).getOrThrow();
-                return new StateEntry(id, state);
+                var bsc = compound.getCompound("block_state");
+                var state = BlockState.CODEC.parse(NbtOps.INSTANCE, bsc);
+                if (state.isError()) {
+                    Logger.info("Could not decode blockstate, attempting fixes, error: "+ state.error().get().message());
+                    bsc = (CompoundTag) DataFixers.getDataFixer().update(References.BLOCK_STATE,
+                            new Dynamic<>(NbtOps.INSTANCE, bsc), 0,
+                            SharedConstants.getCurrentVersion().getDataVersion().getVersion()).getValue();
+                    state = BlockState.CODEC.parse(NbtOps.INSTANCE, bsc);
+                    if (state.isError()) {
+                        Logger.error("Could not decode blockstate setting to air. id:" + id + " error: " + state.error().get().message());
+                        return new StateEntry(id, Blocks.AIR.defaultBlockState());
+                    } else {
+                        Logger.info("Fixed blockstate to: " + state.getOrThrow());
+                        forceResave[0] |= true;
+                        return new StateEntry(id, state.getOrThrow());
+                    }
+                } else {
+                    return new StateEntry(id, state.getOrThrow());
+                }
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -337,7 +420,7 @@ public class Mapper {
 
         public byte[] serialize() {
             try {
-                var serialized = new NbtCompound();
+                var serialized = new CompoundTag();
                 serialized.putInt("id", this.id);
                 serialized.putString("biome_id", this.biome);
                 var out = new ByteArrayOutputStream();
@@ -350,7 +433,7 @@ public class Mapper {
 
         public static BiomeEntry deserialize(int id, byte[] data) {
             try {
-                var compound = NbtIo.readCompressed(new ByteArrayInputStream(data), NbtSizeTracker.ofUnlimitedBytes());
+                var compound = NbtIo.readCompressed(new ByteArrayInputStream(data), NbtAccounter.unlimitedHeap());
                 if (compound.getInt("id") != id) {
                     throw new IllegalStateException("Encoded id != expected id");
                 }

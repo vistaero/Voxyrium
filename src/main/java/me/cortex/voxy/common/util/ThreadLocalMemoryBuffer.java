@@ -1,9 +1,8 @@
 package me.cortex.voxy.common.util;
 
-import java.lang.ref.Cleaner;
+import static me.cortex.voxy.common.util.GlobalCleaner.CLEANER;
 
 public class ThreadLocalMemoryBuffer {
-    private static final Cleaner CLEANER = Cleaner.create();
     private static MemoryBuffer createMemoryBuffer(long size) {
         var buffer = new MemoryBuffer(size);
         var ref = MemoryBuffer.createUntrackedUnfreeableRawFrom(buffer.address, buffer.size);
@@ -16,6 +15,10 @@ public class ThreadLocalMemoryBuffer {
 
     public ThreadLocalMemoryBuffer(long size) {
         this.threadLocal = ThreadLocal.withInitial(()->createMemoryBuffer(size));
+    }
+
+    public static MemoryBuffer create(long size) {
+        return createMemoryBuffer(size);
     }
 
     public MemoryBuffer get() {

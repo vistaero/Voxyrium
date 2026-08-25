@@ -17,7 +17,11 @@ layout(binding = VISIBILITY_BUFFER_BINDING, std430) restrict buffer VisibilityBu
     uint[] visibility;
 };
 
+#ifdef VOXY_VULKAN
+layout(push_constant) uniform PushConstants { uint visibilityCounter; };
+#else
 layout(location=0) uniform uint visibilityCounter;
+#endif
 void main() {
     uint id = minVisIds[gl_LocalInvocationID.x];
     uvec4 node = nodes[id];

@@ -9,6 +9,8 @@ import net.fabricmc.loader.api.ModContainer;
 
 public class VoxyCommon implements ModInitializer {
     public static final String MOD_VERSION;
+    public static final long BUILD_NUMBER;
+    public static final String BUILD_ID;
     public static final boolean IS_DEDICATED_SERVER;
     public static final boolean IS_IN_MINECRAFT;
 
@@ -18,21 +20,29 @@ public class VoxyCommon implements ModInitializer {
             IS_IN_MINECRAFT = false;
             Logger.error("Running voxy without minecraft");
             MOD_VERSION = "<UNKNOWN>";
+            BUILD_NUMBER = -1L;
+            BUILD_ID = MOD_VERSION + "+unknown";
             IS_DEDICATED_SERVER = false;
         } else {
             IS_IN_MINECRAFT = true;
             var version = mod.getMetadata().getVersion().getFriendlyString();
             var commit = mod.getMetadata().getCustomValue("commit").getAsString();
-            MOD_VERSION = version + "-" + commit;
+            MOD_VERSION = version + "-" + commit.substring(0,7);
+            var buildTime = mod.getMetadata().getCustomValue("buildtime");
+            BUILD_NUMBER = buildTime == null ? -1L : buildTime.getAsNumber().longValue();
+            BUILD_ID = MOD_VERSION + "+build." + BUILD_NUMBER;
             IS_DEDICATED_SERVER = FabricLoader.getInstance().getEnvironmentType() == EnvType.SERVER;
             Serialization.init();
         }
     }
 
     //This is hardcoded like this because people do not understand what they are doing
-    private static final boolean GlobalVerificationDisableOverride = true;//System.getProperty("voxy.verificationDisableOverride", "false").equals("true");
     public static boolean isVerificationFlagOn(String name) {
-        return (!GlobalVerificationDisableOverride) && System.getProperty("voxy."+name, "true").equals("true");
+        return isVerificationFlagOn(name, false);
+    }
+
+    public static boolean isVerificationFlagOn(String name, boolean defaultOn) {
+        return System.getProperty("voxy."+name, defaultOn?"true":"false").equals("true");
     }
 
     public static void breakpoint() {
@@ -41,6 +51,7 @@ public class VoxyCommon implements ModInitializer {
 
     @Override
     public void onInitialize() {
+
     }
 
     public interface IInstanceFactory {VoxyInstance create();}
@@ -60,18 +71,31 @@ public class VoxyCommon implements ModInitializer {
 
     public static void shutdownInstance() {
         if (INSTANCE != null) {
-            INSTANCE.shutdown();
-            INSTANCE = null;
+            var instance = INSTANCE;
+            INSTANCE = null;//Make it null before shutdown
+            instance.shutdown();
         }
     }
 
     public static void createInstance() {
+        if (FACTORY == null) {
+            //Logger.info("Voxy factory");
+            return;
+        }
         if (INSTANCE != null) {
             throw new IllegalStateException("Cannot create multiple instances");
         }
-        if (FACTORY == null) {
-            throw new IllegalStateException("Instance factory null");
+        try {
+            INSTANCE = FACTORY.create();
+        } catch (DontCreateInstance e) {
+            Logger.info("Not creating instance due to DontCreateInstance");
         }
-        INSTANCE = FACTORY.create();
     }
+
+    //Is voxy available in any capacity
+    public static boolean isAvailable() {
+        return FACTORY != null;
+    }
+
+    public static final boolean IS_MINE_IN_ABYSS = false;
 }

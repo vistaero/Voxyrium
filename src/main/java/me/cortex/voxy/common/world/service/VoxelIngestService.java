@@ -1,133 +1,235 @@
 package me.cortex.voxy.common.world.service;
 
 import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.common.thread.Service;
+import me.cortex.voxy.common.thread.ServiceManager;
 import me.cortex.voxy.common.voxelization.ILightingSupplier;
 import me.cortex.voxy.common.voxelization.VoxelizedSection;
 import me.cortex.voxy.common.voxelization.WorldConversionFactory;
+import me.cortex.voxy.common.voxelization.WorldVoxilizedSectionMipper;
 import me.cortex.voxy.common.world.WorldEngine;
-import me.cortex.voxy.common.thread.ServiceSlice;
-import me.cortex.voxy.common.thread.ServiceThreadPool;
-import me.cortex.voxy.commonImpl.IVoxyWorld;
-import net.minecraft.util.math.ChunkSectionPos;
-import net.minecraft.world.LightType;
-import net.minecraft.world.chunk.ChunkNibbleArray;
-import net.minecraft.world.chunk.ChunkSection;
-import net.minecraft.world.chunk.WorldChunk;
+import me.cortex.voxy.common.world.WorldUpdater;
+import me.cortex.voxy.commonImpl.VoxyCommon;
+import me.cortex.voxy.commonImpl.WorldIdentifier;
+import net.minecraft.core.SectionPos;
+import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.chunk.DataLayer;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.lighting.LayerLightSectionStorage;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.concurrent.ConcurrentLinkedDeque;
 
 public class VoxelIngestService {
     private static final ThreadLocal<VoxelizedSection> SECTION_CACHE = ThreadLocal.withInitial(VoxelizedSection::createEmpty);
-    private final ServiceSlice threads;
-    private record IngestSection(int cx, int cy, int cz, WorldEngine world, ChunkSection section, ChunkNibbleArray blockLight, ChunkNibbleArray skyLight){}
+    private final Service service;
+    private record IngestSection(int cx, int cy, int cz, WorldEngine world, LevelChunkSection section, DataLayer blockLight, DataLayer skyLight){}
     private final ConcurrentLinkedDeque<IngestSection> ingestQueue = new ConcurrentLinkedDeque<>();
 
-    public VoxelIngestService(ServiceThreadPool pool) {
-        this.threads = pool.createServiceNoCleanup("Ingest service", 100, ()-> this::processJob);
+    public VoxelIngestService(ServiceManager pool) {
+        this.service = pool.createServiceNoCleanup(()->this::processJob, 5000, "Ingest service");
     }
 
     private void processJob() {
         var task = this.ingestQueue.pop();
-        var section = task.section;
-        var vs = SECTION_CACHE.get().setPosition(task.cx, task.cy, task.cz);
+        try {
+            var section = task.section;
+            var vs = SECTION_CACHE.get().setPosition(task.cx, task.cy, task.cz);
 
-        if (section.isEmpty() && task.blockLight==null && task.skyLight==null) {//If the chunk section has lighting data, propagate it
-            task.world.insertUpdate(vs.zero());
-        } else {
-            ILightingSupplier supplier = (x,y,z) -> (byte) 0;
-            var sla = task.skyLight;
-            var bla = task.blockLight;
-            boolean sl = sla != null && !sla.isUninitialized();
-            boolean bl = bla != null && !bla.isUninitialized();
-            if (sl || bl) {
-                if (sl && bl) {
-                    supplier = (x,y,z)-> {
-                        int block = Math.min(15,bla.get(x, y, z));
-                        int sky = Math.min(15,sla.get(x, y, z));
-                        return (byte) (sky|(block<<4));
-                    };
-                } else if (bl) {
-                    supplier = (x,y,z)-> {
-                        int block = Math.min(15,bla.get(x, y, z));
-                        int sky = 0;
-                        return (byte) (sky|(block<<4));
-                    };
-                } else {
-                    supplier = (x,y,z)-> {
-                        int block = 0;
-                        int sky = Math.min(15,sla.get(x, y, z));
-                        return (byte) (sky|(block<<4));
-                    };
-                }
+            if (section.hasOnlyAir() && task.blockLight == null && task.skyLight == null) {//If the chunk section has lighting data, propagate it
+                WorldUpdater.insertUpdate(task.world, vs.zero());
+            } else {
+                VoxelizedSection csec = WorldConversionFactory.convert(
+                        vs,
+                        task.world.getMapper(),
+                        section.getStates(),
+                        section.getBiomes(),
+                        getLightingSupplier(task)
+                );
+                WorldVoxilizedSectionMipper.mipSection(csec, task.world.getMapper());
+                WorldUpdater.insertUpdate(task.world, csec);
             }
-            VoxelizedSection csec = WorldConversionFactory.convert(
-                    SECTION_CACHE.get(),
-                    task.world.getMapper(),
-                    section.getBlockStateContainer(),
-                    section.getBiomeContainer(),
-                    supplier
-            );
-            WorldConversionFactory.mipSection(csec, task.world.getMapper());
-            task.world.insertUpdate(csec);
+        } finally {
+            //Release the ref we had acquired for the world
+            task.world.releaseRef();
         }
     }
 
-    private static boolean shouldIngestSection(ChunkSection section, int cx, int cy, int cz) {
+    @NotNull
+    private static ILightingSupplier getLightingSupplier(IngestSection task) {
+        ILightingSupplier supplier = (x,y,z) -> (byte) 0;
+        var sla = task.skyLight;
+        var bla = task.blockLight;
+        boolean sl = sla != null && !sla.isEmpty();
+        boolean bl = bla != null && !bla.isEmpty();
+        if (sl || bl) {
+            if (sl && bl) {
+                supplier = (x,y,z)-> {
+                    int block = Math.min(15,bla.get(x, y, z));
+                    int sky = Math.min(15,sla.get(x, y, z));
+                    return (byte) (sky|(block<<4));
+                };
+            } else if (bl) {
+                supplier = (x,y,z)-> {
+                    int block = Math.min(15,bla.get(x, y, z));
+                    int sky = 0;
+                    return (byte) (sky|(block<<4));
+                };
+            } else {
+                supplier = (x,y,z)-> {
+                    int block = 0;
+                    int sky = Math.min(15,sla.get(x, y, z));
+                    return (byte) (sky|(block<<4));
+                };
+            }
+        }
+        return supplier;
+    }
+
+    private static boolean shouldIngestSection(LevelChunkSection section, int cx, int cy, int cz) {
         return true;
     }
 
-    public void enqueueIngest(WorldChunk chunk, boolean ignoreOnNullWorld) {
-        var engine = ((IVoxyWorld)chunk.getWorld()).getWorldEngine();
-        if (engine == null) {
-            if (!ignoreOnNullWorld) {
-                Logger.error("Could not ingest chunk as does not have world engine");
-            }
-            return;
+    public boolean enqueueIngest(WorldEngine engine, LevelChunk chunk) {
+        if (!this.service.isLive()) {
+            return false;
         }
-        this.enqueueIngest(engine, chunk);
-    }
-
-    public void enqueueIngest(WorldEngine engine, WorldChunk chunk) {
         if (!engine.isLive()) {
             throw new IllegalStateException("Tried inserting chunk into WorldEngine that was not alive");
         }
-        var lightingProvider = chunk.getWorld().getLightingProvider();
-        var blp = lightingProvider.get(LightType.BLOCK);
-        var slp = lightingProvider.get(LightType.SKY);
 
-        int i = chunk.getBottomSectionCoord() - 1;
-        for (var section : chunk.getSectionArray()) {
+        engine.markActive();
+
+        var lightingProvider = chunk.getLevel().getLightEngine();
+        boolean gotLighting = false;
+
+        int i = chunk.getMinSection() - 1;
+        boolean allEmpty = true;
+        for (var section : chunk.getSections()) {
+            i++;
+            if (section == null || !shouldIngestSection(section, chunk.getPos().x, i, chunk.getPos().z)) continue;
+            allEmpty&=section.hasOnlyAir();
+            //if (section.isEmpty()) continue;
+            var pos = SectionPos.of(chunk.getPos(), i);
+            if (lightingProvider.getDebugSectionType(LightLayer.SKY, pos) != LayerLightSectionStorage.SectionType.LIGHT_AND_DATA && lightingProvider.getDebugSectionType(LightLayer.BLOCK, pos) != LayerLightSectionStorage.SectionType.LIGHT_AND_DATA)
+                continue;
+            gotLighting = true;
+        }
+
+        if (allEmpty&&!gotLighting) {
+            //Special case all empty chunk columns, we need to clear it out
+            i = chunk.getMinSection() - 1;
+            for (var section : chunk.getSections()) {
+                i++;
+                if (section == null || !shouldIngestSection(section, chunk.getPos().x, i, chunk.getPos().z)) continue;
+                engine.acquireRef();
+                this.ingestQueue.add(new IngestSection(chunk.getPos().x, i, chunk.getPos().z, engine, section, null, null));
+                try {
+                    this.service.execute();
+                } catch (Exception e) {
+                    Logger.error("Executing had an error: assume shutting down, aborting",e);
+                    engine.releaseRef();//we must manually release
+                    break;
+                }
+            }
+        }
+
+        if (!gotLighting) {
+            return false;
+        }
+
+        var blp = lightingProvider.getLayerListener(LightLayer.BLOCK);
+        var slp = lightingProvider.getLayerListener(LightLayer.SKY);
+
+
+        i = chunk.getMinSection() - 1;
+        for (var section : chunk.getSections()) {
             i++;
             if (section == null || !shouldIngestSection(section, chunk.getPos().x, i, chunk.getPos().z)) continue;
             //if (section.isEmpty()) continue;
-            var pos = ChunkSectionPos.from(chunk.getPos(), i);
-            var bl = blp.getLightSection(pos);
-            if (!(bl == null || bl.isUninitialized())) {
+            var pos = SectionPos.of(chunk.getPos(), i);
+
+            var bl = blp.getDataLayerData(pos);
+            if (bl != null) {
                 bl = bl.copy();
-            } else {
-                bl = null;
             }
-            var sl = slp.getLightSection(pos);
-            if (!(sl == null || sl.isUninitialized())) {
+
+            var sl = slp.getDataLayerData(pos);
+            if (sl != null) {
                 sl = sl.copy();
-            } else {
-                sl = null;
             }
 
-            if ((bl == null && sl == null) && section.isEmpty()) {
-                continue;
+            //If its null for either, assume failure to obtain lighting and ignore section
+            //if (blNone && slNone) {
+            //    continue;
+            //}
+            engine.acquireRef();//This is not great but dont really have a better solution as all the others have there own problem
+            this.ingestQueue.add(new IngestSection(chunk.getPos().x, i, chunk.getPos().z, engine, section, bl, sl));//TODO: fixme, this is technically not safe todo on the chunk load ingest, we need to copy the section data so it cant be modified while being read
+            try {
+                this.service.execute();
+            } catch (Exception e) {
+                Logger.error("Executing had an error: assume shutting down, aborting",e);
+                engine.releaseRef();//we must manually release
+                break;
             }
-
-            this.ingestQueue.add(new IngestSection(chunk.getPos().x, i, chunk.getPos().z, engine, section, bl, sl));
-            this.threads.execute();
         }
+        return true;
     }
 
     public int getTaskCount() {
-        return this.threads.getJobCount();
+        return this.service.numJobs();
     }
 
     public void shutdown() {
-        this.threads.shutdown();
+        this.service.shutdown();
+        while (!this.ingestQueue.isEmpty()) {
+            //We need to manually release all our world locks
+            this.ingestQueue.pop().world.releaseRef();
+        }
+
+    }
+
+    //Utility method to ingest a chunk into the given WorldIdentifier or world
+    public static boolean tryIngestChunk(WorldIdentifier worldId, LevelChunk chunk) {
+        if (worldId == null) return false;
+        var instance = VoxyCommon.getInstance();
+        if (instance == null) return false;
+        if (!instance.isIngestEnabled(worldId)) return false;
+        var engine = instance.getOrCreate(worldId);
+        if (engine == null) return false;
+        return instance.getIngestService().enqueueIngest(engine, chunk);
+    }
+
+    //Try to automatically ingest the chunk into the correct world
+    public static boolean tryAutoIngestChunk(LevelChunk chunk) {
+        return tryIngestChunk(WorldIdentifier.of(chunk.getLevel()), chunk);
+    }
+
+    private boolean rawIngest0(WorldEngine engine, LevelChunkSection section, int x, int y, int z, DataLayer bl, DataLayer sl) {
+        engine.acquireRef();
+        this.ingestQueue.add(new IngestSection(x, y, z, engine, section, bl, sl));
+        try {
+            this.service.execute();
+            return true;
+        } catch (Exception e) {
+            Logger.error("Executing had an error: assume shutting down, aborting",e);
+            engine.releaseRef();//we must manually release
+            return false;
+        }
+    }
+
+    public static boolean rawIngest(WorldIdentifier id, LevelChunkSection section, int x, int y, int z, DataLayer bl, DataLayer sl) {
+        if (id == null) return false;
+        var engine = id.getOrCreateEngine();
+        if (engine == null) return false;
+        return rawIngest(engine, section, x, y, z, bl, sl);
+    }
+
+    public static boolean rawIngest(WorldEngine engine, LevelChunkSection section, int x, int y, int z, DataLayer bl, DataLayer sl) {
+        if (!shouldIngestSection(section, x, y, z)) return false;
+        if (engine.instanceIn == null) return false;
+        if (!engine.instanceIn.isIngestEnabled(null)) return false;//TODO: dont pass in null
+        return engine.instanceIn.getIngestService().rawIngest0(engine, section, x, y, z, bl, sl);
     }
 }

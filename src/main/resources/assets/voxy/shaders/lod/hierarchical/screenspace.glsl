@@ -12,25 +12,50 @@
 // substantually for performance (for both persistent threads and incremental)
 
 
-layout(binding = HIZ_BINDING) uniform sampler2DShadow hizDepthSampler;
+#import <voxy:util/depthutils.glsl>
+
+layout(binding = HIZ_BINDING) uniform sampler2D hizDepthSampler;
 
 //TODO: maybe do spher bounds aswell? cause they have different accuracies but are both over estimates (liberals (non conservative xD))
 // so can do &&
 
-vec3 minBB;
-vec3 maxBB;
-vec2 size;
-float zThing;
+bool within(vec2 a, vec2 b, vec2 c) {
+    return all(lessThan(a,b)) && all(lessThan(b, c));
+}
 
-uint BASE_IDX = gl_LocalInvocationID.x*8;
-shared vec2[LOCAL_SIZE*8] screenPoints;
+bool within(vec3 a, vec3 b, vec3 c) {
+    return all(lessThan(a,b)) && all(lessThan(b, c));
+}
 
+bool within(float a, float b, float c) {
+    return a<b && b<c;
+}
+
+float crossMag(vec2 a, vec2 b) {
+    return abs(a.x*b.y-b.x*a.y);
+}
+
+bool checkPointInView(vec4 point) {
+    return within(vec3(-point.w,-point.w,0.0f), point.xyz, vec3(point.w));
+}
+
+vec3 _minBB = vec3(0.0f);
+vec3 _maxBB = vec3(0.0f);
+bool _frustumCulled = false;
+
+float _screenSize = 0.0f;
+
+#ifdef TAA
+vec2 getTAA();
+#endif
+
+UnpackedNode node22;
 //Sets up screenspace with the given node id, returns true on success false on failure/should not continue
 //Accesses data that is setup in the main traversal and is just shared to here
 void setupScreenspace(in UnpackedNode node) {
     //TODO: Need to do aabb size for the nodes, it must be an overesimate of all the children
 
-
+    node22 = node;
     /*
     Transform transform = transforms[getTransformIndex(node)];
 
@@ -38,102 +63,135 @@ void setupScreenspace(in UnpackedNode node) {
                     + (transform.worldPos.xyz-camChunkPos))-camSubChunk);
                     */
 
-    vec4 base = VP*vec4(vec3(((node.pos<<node.lodLevel)-camSecPos)<<5)-camSubSecPos, 1);
 
-    //TODO: AABB SIZES not just a max cube
+    vec3 basePos = vec3(((node.pos<<node.lodLevel)-camSecPos)<<5)-camSubSecPos;
 
-    //vec3 minPos = minSize + basePos;
-    //vec3 maxPos = maxSize + basePos;
+    _frustumCulled = outsideFrustum(frustum, basePos, float(32<<node.lodLevel));
 
-    minBB = base.xyz/base.w;
-    maxBB = minBB;
-    zThing = -999999999999.0f;
-
-    screenPoints[BASE_IDX+0] = minBB.xy*0.5f+0.5f;
-    for (int i = 1; i < 8; i++) {
-        //NOTE!: cant this be precomputed and put in an array?? in the scene uniform??
-        vec4 pPoint = (VP*vec4(vec3((i&1)!=0,(i&2)!=0,(i&4)!=0)*(32<<node.lodLevel),1));//Size of section is 32x32x32 (need to change it to a bounding box in the future)
-        pPoint += base;
-        vec3 point = pPoint.xyz/pPoint.w;
-        zThing = max(point.z, zThing);
-        //TODO: CLIP TO VIEWPORT
-        minBB = min(minBB, point);
-        maxBB = max(maxBB, point);
-        screenPoints[BASE_IDX+i] = point.xy*0.5f+0.5f;
+    //Fast exit
+    if (_frustumCulled) {
+        return;
     }
 
-    //TODO: MORE ACCURATLY DETERMIN SCREENSPACE AREA, this can be done by computing and adding
-    //  the projected surface area of each face/quad which winding order faces the camera
-    //  (this is just the dot product of 2 projected vectors)
+    //TODO: CHECK THIS IS AT ALL RIGHT
+    vec4 P000 = MVP * vec4(basePos, 1);
+    mat3x4 Axis = mat3x4(MVP)*float(32<<node.lodLevel);
+    vec4 P100 = Axis[0] + P000;
+    vec4 P001 = Axis[2] + P000;
+    vec4 P101 = Axis[2] + P100;
+    vec4 P010 = Axis[1] + P000;
+    vec4 P110 = Axis[1] + P100;
+    vec4 P011 = Axis[1] + P001;
+    vec4 P111 = Axis[1] + P101;
 
-    //can do a funny by not doing the perspective divide except on the output of the area
+    //vec4 P000 = MVP * vec4(basePos, 1);
+    //vec4 P100 = MVP * vec4(basePos+vec3(1,0,0)*(32<<node.lodLevel), 1);
+    //vec4 P001 = MVP * vec4(basePos+vec3(0,0,1)*(32<<node.lodLevel), 1);
+    //vec4 P101 = MVP * vec4(basePos+vec3(1,0,1)*(32<<node.lodLevel), 1);
+    //vec4 P010 = MVP * vec4(basePos+vec3(0,1,0)*(32<<node.lodLevel), 1);
+    //vec4 P110 = MVP * vec4(basePos+vec3(1,1,0)*(32<<node.lodLevel), 1);
+    //vec4 P011 = MVP * vec4(basePos+vec3(0,1,1)*(32<<node.lodLevel), 1);
+    //vec4 P111 = MVP * vec4(basePos+vec3(1,1,1)*(32<<node.lodLevel), 1);
 
-    //printf("Screenspace MIN: %f, %f, %f  MAX: %f, %f, %f", minBB.x,minBB.y,minBB.z, maxBB.x,maxBB.y,maxBB.z);
 
-    //Convert to screenspace
-    maxBB = maxBB*0.5f+0.5f;
-    minBB = minBB*0.5f+0.5f;
+    //Perspective divide + convert to screenspace (i.e. range 0->1 if within viewport)
+    vec3 p000 = NDC2SCREEN(P000.xyz/P000.w);
+    vec3 p100 = NDC2SCREEN(P100.xyz/P100.w);
+    vec3 p001 = NDC2SCREEN(P001.xyz/P001.w);
+    vec3 p101 = NDC2SCREEN(P101.xyz/P101.w);
+    vec3 p010 = NDC2SCREEN(P010.xyz/P010.w);
+    vec3 p110 = NDC2SCREEN(P110.xyz/P110.w);
+    vec3 p011 = NDC2SCREEN(P011.xyz/P011.w);
+    vec3 p111 = NDC2SCREEN(P111.xyz/P111.w);
 
-    size = clamp(maxBB.xy - minBB.xy, vec2(0), vec2(1));
 
+    {//Compute exact screenspace size
+        float ssize = 0;
+        {//Faces from 0,0,0
+
+            vec2 A = p100.xy-p000.xy;
+            vec2 B = p010.xy-p000.xy;
+            vec2 C = p001.xy-p000.xy;
+            ssize += crossMag(A,B);
+            ssize += crossMag(A,C);
+            ssize += crossMag(C,B);
+        }
+        {//Faces from 1,1,1
+            vec2 A = p011.xy-p111.xy;
+            vec2 B = p101.xy-p111.xy;
+            vec2 C = p110.xy-p111.xy;
+            ssize += crossMag(A,B);
+            ssize += crossMag(A,C);
+            ssize += crossMag(C,B);
+        }
+        ssize *= 0.5f;//Half the size since we did both back and front area
+        _screenSize = ssize;
+    }
+
+    _minBB = min(min(min(p000, p100), min(p001, p101)), min(min(p010, p110), min(p011, p111)));
+    _maxBB = max(max(max(p000, p100), max(p001, p101)), max(max(p010, p110), max(p011, p111)));
+
+
+    #ifdef TAA
+    vec2 taaValue = getTAA()*0.5f;//Note! this might be need tobe *0.5f
+    _minBB.xy += taaValue;
+    _maxBB.xy += taaValue;
+    #endif
+
+    _minBB = clamp(_minBB, vec3(0), vec3(1));
+    _maxBB = clamp(_maxBB, vec3(0), vec3(1));
 }
 
 //Checks if the node is implicitly culled (outside frustum)
 bool outsideFrustum() {
-    return any(lessThanEqual(maxBB, vec3(0.0f))) || any(lessThanEqual(vec3(1.0f), minBB)) || zThing < 0;//
+    return _frustumCulled;// maxW < 16 is a trick where 16 is the near plane
 
     //|| any(lessThanEqual(minBB, vec3(0.0f, 0.0f, 0.0f))) || any(lessThanEqual(vec3(1.0f, 1.0f, 1.0f), maxBB));
 }
 
 bool isCulledByHiz() {
-    //if (minBB.z < 0) {//Minpoint is behind the camera, its always going to pass
-    //    return false;//Just cull it for now cause other culling isnt working, TODO: FIXME
-    //}
+    //if (node22.lodLevel!=0) return false;
 
+    //Things start breaking down if the area is the entire scree, no idea why, just abort if we hit this case
+    //if ((maxBB.xy-minBB.xy)==vec2(1.0f)) return false;
+    if (any(lessThan(abs(_maxBB.xy-_minBB.xy-vec2(1.0f)), vec2(0.000001f)))) return false;
 
-    vec2 ssize = size * vec2(screenW, screenH);
-    float miplevel = ceil(log2(max(max(ssize.x, ssize.y),1)));
-    miplevel = clamp(miplevel, 1, 20);
-    vec2 midpoint = (maxBB.xy + minBB.xy)*0.5f;
-    //TODO: maybe get rid of clamp
-    //Todo: replace with some rasterization, e.g. especially for request back to cpu
-    midpoint = clamp(midpoint, vec2(0), vec2(1));
-    bool culled = textureLod(hizDepthSampler, vec3(midpoint, minBB.z), miplevel) < 0.0001f;
+    ivec2 ssize = ivec2(packedHizSize>>16,packedHizSize&0xFFFF);
+    vec2 size = (_maxBB.xy-_minBB.xy)*ssize;
+    float miplevel = log2(max(max(size.x, size.y),1));
 
-    if (culled) {
-        printf("HiZ sample point culled: (%f,%f)@%f against %f", midpoint.x, midpoint.y, miplevel, minBB.z);
+    miplevel = floor(miplevel)-1;
+    //miplevel = clamp(miplevel, 0, 0);
+    miplevel = clamp(miplevel, 0, textureQueryLevels(hizDepthSampler)-1);
+
+    int ml = int(miplevel);
+    ssize = max(ivec2(1), ssize>>ml);
+    ivec2 mxbb = min(ivec2(ceil(_maxBB.xy*ssize)),ssize-1);
+    ivec2 mnbb = ivec2(floor(_minBB.xy*ssize));
+
+    float pointSample = (NEAR*3.0f)-1.0f;
+    //float pointSample2 = 0.0f;
+    for (int x = mnbb.x; x<=mxbb.x; x++) {
+        for (int y = mnbb.y; y<=mxbb.y; y++) {
+            float sp = texelFetch(hizDepthSampler, ivec2(x, y), ml).r;
+            //pointSample2 = max(sp, pointSample2);
+            //sp = mix(sp, pointSample, 0.9999999f<=sp);
+            pointSample = REDUCTION(sp, pointSample);
+        }
     }
-
-    return culled;
+    //pointSample = mix(pointSample, pointSample2, pointSample<=0.000001f);
+    float depthTestAgainst;
+    #ifdef USE_REVERSE_Z
+    depthTestAgainst = _maxBB.z;
+    #else
+    depthTestAgainst = _minBB.z;
+    #endif
+    return DEPTH_SCALAR_COMPARE_EQUAL(pointSample,depthTestAgainst);
 }
 
 
-float crossMag(vec2 a, vec2 b) {
-    return abs(a.x*b.y-b.x*a.y);
-}
 
 //Returns if we should decend into its children or not
 bool shouldDecend() {
-    float size = 0;
-    {//Faces from 0,0,0
-        vec2 base = screenPoints[BASE_IDX+0];
-        vec2 A = screenPoints[BASE_IDX+1]-base;
-        vec2 B = screenPoints[BASE_IDX+2]-base;
-        vec2 C = screenPoints[BASE_IDX+4]-base;
-        size += crossMag(A,B);
-        size += crossMag(A,C);
-        size += crossMag(C,B);
-    }
-    {//Faces from 1,1,1
-        vec2 base = screenPoints[BASE_IDX+7];
-        vec2 A = screenPoints[BASE_IDX+3]-base;
-        vec2 B = screenPoints[BASE_IDX+5]-base;
-        vec2 C = screenPoints[BASE_IDX+6]-base;
-        size += crossMag(A,B);
-        size += crossMag(A,C);
-        size += crossMag(C,B);
-    }
-    size *= 0.5f;//Half the size since we did both back and front area
-
-    return size > minSSS;
+    return _screenSize > minSSS;
 }

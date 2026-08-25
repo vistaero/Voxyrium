@@ -1,7 +1,7 @@
 package me.cortex.voxy.common.config.storage.other;
 
-import me.cortex.voxy.common.config.storage.StorageBackend;
 import me.cortex.voxy.common.config.ConfigBuildCtx;
+import me.cortex.voxy.common.config.storage.StorageBackend;
 import me.cortex.voxy.common.config.storage.StorageConfig;
 import org.apache.commons.lang3.NotImplementedException;
 

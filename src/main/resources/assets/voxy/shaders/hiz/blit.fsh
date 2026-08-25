@@ -1,18 +1,25 @@
 #version 450
 
+#import <voxy:util/depthutils.glsl>
 
 layout(location = 0) in vec2 uv;
 layout(binding = 0) uniform sampler2D depthTex;
+#ifdef OUTPUT_COLOUR
+layout(location=0) out vec4 colour;
+#endif
 void main() {
     vec4 depths = textureGather(depthTex, uv, 0); // Get depth values from all surrounding texels.
 
-    //TODO: fully fix this system
-
-    //TODO, do it so that for the first 2,3 levels if 1 (or maybe even 2 (on the first layer)) pixels are air, just ignore that
-    // this is to stop issues with 1 pixel gaps
-    bvec4 cv = lessThanEqual(vec4(0.99999999), depths);
-    if (any(cv) && !all(cv)) {
-        depths = mix(vec4(1.0f), depths, cv);
+    bvec4 cv = equal(vec4(FAR), depths);
+    if (any(cv)) {//Patch holes (its very dodgy but should work :tm:, should clamp it to the first 3 levels)
+        depths = mix(vec4(NEAR), depths, cv);
     }
-    gl_FragDepth = max(max(depths.x, depths.y), max(depths.z, depths.w)); // Write conservative depth.
+
+    float res = REDUCTION(REDUCTION(depths.x, depths.y), REDUCTION(depths.z, depths.w));
+
+    #ifdef OUTPUT_COLOUR
+    colour = vec4(res);
+    #else
+    gl_FragDepth = res; // Write conservative depth.
+    #endif
 }

@@ -1,5 +1,8 @@
 package me.cortex.voxy.common.util;
 
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import it.unimi.dsi.fastutil.ints.IntSet;
+
 import java.util.Random;
 
 public class HierarchicalBitSet {
@@ -40,6 +43,10 @@ public class HierarchicalBitSet {
         idx =  Long.numberOfTrailingZeros(~dp) + 64*idx;
         int ret = idx;
 
+        //if (this.isSet(ret)) {
+        //    throw new IllegalStateException();
+        //}
+
         dp |= 1L<<(idx&0x3f);
         this.D[idx>>6] = dp;
         if (dp==-1) {
@@ -62,6 +69,10 @@ public class HierarchicalBitSet {
     }
 
     private void set(int idx) {
+        //if (this.isSet(idx)) {
+        //    throw new IllegalStateException();
+        //}
+
         this.endId += idx==(this.endId+1)?1:0;
         long dp = this.D[idx>>6] |= 1L<<(idx&0x3f);
         if (dp==-1) {
@@ -71,6 +82,7 @@ public class HierarchicalBitSet {
                 idx >>= 6;
                 long bp = this.B[idx>>6] |= 1L<<(idx&0x3f);
                 if (bp==-1) {
+                    idx >>= 6;
                     this.A |= 1L<<(idx&0x3f);
                 }
             }
@@ -109,7 +121,7 @@ public class HierarchicalBitSet {
         if (this.A==-1) {
             return -1;
         }
-        if (this.cnt+count>this.limit) {
+        if (this.cnt+count>=this.limit) {
             return -2;//Limit reached
         }
         long chkMsk = ((1L<<count)-1);
@@ -177,7 +189,7 @@ public class HierarchicalBitSet {
     }
 
 
-    public static void main(String[] args)  {
+    public static void main3(String[] args)  {
         var h = new HierarchicalBitSet(1<<19);
         for (int i = 0; i < 1<<19; i++) {
             if (h.allocateNext() != i) {
@@ -232,5 +244,56 @@ public class HierarchicalBitSet {
         }
 
         h.allocateNextConsecutiveCounted(10);
+    }
+
+
+    public static void main(String[] args) {
+        for (int i = 0; i < 100; i++) {
+            var r = new Random(i*12345L);
+            var h = new HierarchicalBitSet();
+            IntSet set = new IntOpenHashSet(10000);
+            for (int j = 0; j < 100_000; j++) {
+                int q = h.allocateNext();
+                if (q != j || !set.add(q)) {
+                    throw new IllegalStateException();
+                }
+            }
+            for (int j = 0; j < 100_000; j++) {
+                int op = r.nextInt(5);
+                int extra = r.nextInt(8)+1;
+                if (op == 0) {
+                    int v = h.allocateNext();
+                    if (v < 0) {
+                        throw new IllegalStateException();
+                    }
+                    if (!set.add(v)) {
+                        throw new IllegalStateException();
+                    }
+                } else if (op == 1) {
+                    int base = h.allocateNextConsecutiveCounted(extra);
+                    if (base < 0) {
+                        throw new IllegalStateException();
+                    }
+                    for (int q = 0; q < extra; q++) {
+                        if (!set.add(q+base)) {
+                            throw new IllegalStateException();
+                        }
+                    }
+                } else if (op < 5 && !set.isEmpty()) {
+                    int rr = r.nextInt(set.size());
+                    var s = set.iterator();
+                    if (rr != 0) {
+                        s.skip(rr);
+                    }
+
+                    int q = s.nextInt();
+                    s.remove();
+
+                    if (!h.free(q)) {
+                        throw new IllegalStateException();
+                    }
+                }
+            }
+        }
     }
 }

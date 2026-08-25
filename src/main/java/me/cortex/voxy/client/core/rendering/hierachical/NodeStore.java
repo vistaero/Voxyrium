@@ -6,7 +6,7 @@ import org.lwjgl.system.MemoryUtil;
 public final class NodeStore {
     public static final int EMPTY_GEOMETRY_ID = -1;
     public static final int NODE_ID_MSK = ((1<<24)-1);
-    public static final int REQUEST_ID_MSK = ((1<<16)-1);
+    public static final int REQUEST_ID_MSK = ((1<<19)-1);
     public static final int GEOMETRY_ID_MSK = (1<<24)-1;
     public static final int MAX_GEOMETRY_ID = (1<<24)-3;
     private static final int SENTINEL_NULL_GEOMETRY_ID = (1<<24)-1;
@@ -177,9 +177,11 @@ public final class NodeStore {
     }
 
     public void setNodeRequest(int node, int requestId) {
+        if (requestId < 0 || requestId>REQUEST_ID_MSK)
+            throw new IllegalStateException("Too many requests to happen at once!");
         int id = id2idx(node)+2;
         long data = this.localNodeData[id];
-        data &= ~REQUEST_ID_MSK;
+        data &= ~(Integer.toUnsignedLong(REQUEST_ID_MSK));
         data |= requestId;
         this.localNodeData[id] = data;
     }
@@ -196,6 +198,16 @@ public final class NodeStore {
     }
     public boolean isNodeRequestInFlight(int nodeId) {
         return ((this.localNodeData[id2idx(nodeId)+1]>>63)&1)!=0;
+    }
+
+    //TODO: Implement this in node manager
+    public void setAllChildrenAreLeaf(int nodeId, boolean state) {
+        this.localNodeData[id2idx(nodeId)+2] &= ~(1L<<19);
+        this.localNodeData[id2idx(nodeId)+2] |= state?1L<<19:0;
+    }
+
+    public boolean getAllChildrenAreLeaf(int nodeId) {
+        return ((this.localNodeData[id2idx(nodeId)+2]>>19)&1)!=0;
     }
 
     public void markNodeGeometryInFlight(int nodeId) {
@@ -253,8 +265,6 @@ public final class NodeStore {
         if (!this.nodeExists(nodeId)) {
             MemoryUtil.memPutLong(ptr, -1);
             MemoryUtil.memPutLong(ptr + 8, -1);
-            MemoryUtil.memPutLong(ptr + 16, -1);
-            MemoryUtil.memPutLong(ptr + 24, -1);
             return;
         }
         long pos = this.nodePosition(nodeId);
@@ -265,8 +275,14 @@ public final class NodeStore {
         int w = 0;
 
         short flags = 0;
-        flags |= (short) (this.isNodeRequestInFlight(nodeId)?1:0);
-        flags |= (short) ((this.getChildPtrCount(nodeId)-1)<<2);
+        flags |= (short) (this.isNodeRequestInFlight(nodeId)?1:0);//1 bit
+        flags |= (short) ((this.getChildPtrCount(nodeId)-1)<<2);//3 bit
+
+        boolean isEligibleForCleaning = false;
+        isEligibleForCleaning |= this.getAllChildrenAreLeaf(nodeId);
+        //isEligibleForCleaning |= this.getNodeType()
+
+        flags |= (short) (isEligibleForCleaning?1<<5:0);//1 bit
 
         {
             int geometry = this.getNodeGeometry(nodeId);

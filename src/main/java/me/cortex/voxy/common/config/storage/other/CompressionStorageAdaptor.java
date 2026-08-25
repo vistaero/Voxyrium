@@ -1,9 +1,9 @@
 package me.cortex.voxy.common.config.storage.other;
 
-import me.cortex.voxy.common.config.storage.StorageBackend;
-import me.cortex.voxy.common.config.compressors.StorageCompressor;
-import me.cortex.voxy.common.config.compressors.CompressorConfig;
 import me.cortex.voxy.common.config.ConfigBuildCtx;
+import me.cortex.voxy.common.config.compressors.CompressorConfig;
+import me.cortex.voxy.common.config.compressors.StorageCompressor;
+import me.cortex.voxy.common.config.storage.StorageBackend;
 import me.cortex.voxy.common.util.MemoryBuffer;
 
 //Compresses the section data
@@ -29,7 +29,7 @@ public class CompressionStorageAdaptor extends DelegatingStorageAdaptor {
     public void setSectionData(long key, MemoryBuffer data) {
         var cdata = this.compressor.compress(data);
         this.delegate.setSectionData(key, cdata);
-        cdata.free();
+        //Note that the data isnt freed (data cache in the compressors are used)
     }
 
     @Override

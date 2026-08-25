@@ -2,12 +2,10 @@ package me.cortex.voxy.client.core.rendering.hierachical;
 
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
-import it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap;
-import it.unimi.dsi.fastutil.longs.Long2IntFunction;
-import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.*;
 import me.cortex.voxy.client.core.rendering.ISectionWatcher;
 import me.cortex.voxy.client.core.rendering.building.BuiltSection;
-import me.cortex.voxy.client.core.rendering.section.AbstractSectionGeometryManager;
+import me.cortex.voxy.client.core.rendering.section.geometry.AbstractSectionGeometryManager;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.HierarchicalBitSet;
 import me.cortex.voxy.common.util.MemoryBuffer;
@@ -41,9 +39,15 @@ public class TestNodeManager {
                 this.removeSection(oldId);
             }
             int newId = this.allocation.allocateNext();
+            if (newId == -1) {
+                Logger.error("Allocator full: "+this.allocation.getCount()+" " +section, new Throwable());
+                section.free();
+                return -1;
+            }
             var entry = new Entry(section.position, section.geometryBuffer.size);
-            if (this.sections.put(newId, entry) != null) {
-                throw new IllegalStateException();
+            var old = this.sections.put(newId, entry);
+            if (old != null) {
+                throw new IllegalStateException(oldId + ","+newId+" "+old+","+entry);
             }
             this.memoryInUse += entry.size;
             section.free();
@@ -141,7 +145,7 @@ public class TestNodeManager {
         }
 
         private static String[] getPrettyTypes(int msk) {
-            if ((msk&~UPDATE_FLAGS)!=0) {
+            if ((msk&~(DEFAULT_UPDATE_FLAGS|UPDATE_TYPE_DONT_SAVE))!=0) {
                 throw new IllegalStateException();
             }
             String[] types = new String[Integer.bitCount(msk)];
@@ -151,6 +155,9 @@ public class TestNodeManager {
             }
             if ((msk&UPDATE_TYPE_CHILD_EXISTENCE_BIT)!=0) {
                 types[i++] = "CHILD";
+            }
+            if ((msk&UPDATE_TYPE_DONT_SAVE)!=0) {
+                types[i++] = "DONT_SAVE";
             }
             return types;
         }
@@ -185,7 +192,7 @@ public class TestNodeManager {
             if (geometrySize != 0) {
                 buff = new MemoryBuffer(geometrySize);
             }
-            var builtGeometry = new BuiltSection(pos, (byte) childExistence, -2, buff, null);
+            var builtGeometry = new BuiltSection(pos, (byte) childExistence, -2, buff, null, null);
             this.nodeManager.processGeometryResult(builtGeometry);
         }
 
@@ -236,6 +243,10 @@ public class TestNodeManager {
         public void verifyIntegrity() {
             this.nodeManager.verifyIntegrity(this.watcher.updateTypes.keySet(), this.cleaner.active);
         }
+
+        public void remTopPos(long pos) {
+            this.nodeManager.removeTopLevelNode(pos);
+        }
     }
 
     private static void fillInALl(TestBase test, long pos, Long2IntFunction converter) {
@@ -266,7 +277,7 @@ public class TestNodeManager {
         private final long pos;
         private final Node[] children = new Node[8];
         private byte childExistenceMask;
-        private boolean hasMesh;
+        private int meshId;
         private Node(long pos) {
             this.pos = pos;
         }
@@ -274,60 +285,103 @@ public class TestNodeManager {
 
     public static void main(String[] args) {
         Logger.INSERT_CLASS = false;
-        int ITER_COUNT = 50_000;
-        int INNER_ITER_COUNT = 500_000;
+        int ITER_COUNT = 5_000;
+        int INNER_ITER_COUNT = 1_000_000;
         boolean GEO_REM = true;
+        boolean LIMIT_REQUEST_SEC_ALLOCATION = true;
 
         AtomicInteger finished = new AtomicInteger();
         HashSet<List<StackTraceElement>> seenTraces = new HashSet<>();
 
+        Logger.SHUTUP_INFO = true;
         Logger.SHUTUP = true;
 
         if (false) {
             for (int q = 0; q < ITER_COUNT; q++) {
                 //Logger.info("Iteration "+ q);
-                if (runTest(INNER_ITER_COUNT, q, seenTraces, GEO_REM)) {
+                if (runTest(INNER_ITER_COUNT, q, seenTraces, GEO_REM, LIMIT_REQUEST_SEC_ALLOCATION)) {
                     finished.incrementAndGet();
                 }
             }
         } else {
             IntStream.range(0, ITER_COUNT).parallel().forEach(i->{
-                if (runTest(INNER_ITER_COUNT, i, seenTraces, GEO_REM)) {
+                if (runTest(INNER_ITER_COUNT, i, seenTraces, GEO_REM, LIMIT_REQUEST_SEC_ALLOCATION)) {
                     finished.incrementAndGet();
                 }
             });
         }
         System.out.println("Finished " + finished.get() + " iterations out of " + ITER_COUNT);
     }
-    private static long rPos(Random r) {
+    private static long rPos(Random r, LongList tops) {
         int lvl = r.nextInt(5);
+        long top = tops.getLong(r.nextInt(tops.size()));
         if (lvl==4) {
-            return WorldEngine.getWorldSectionId(4,0,0,0);
+            return top;
         }
         int bound = 16>>lvl;
-        return WorldEngine.getWorldSectionId(lvl, r.nextInt(bound), r.nextInt(bound), r.nextInt(bound));
+        return WorldEngine.getWorldSectionId(lvl, r.nextInt(bound)+(WorldEngine.getX(top)<<4), r.nextInt(bound)+(WorldEngine.getY(top)<<4), r.nextInt(bound)+(WorldEngine.getZ(top)<<4));
     }
 
-    private static boolean runTest(int ITERS, int testIdx, Set<List<StackTraceElement>> traces, boolean geoRemoval) {
-        long POS_A = WorldEngine.getWorldSectionId(4, 0, 0, 0);
-
+    private static boolean runTest(int ITERS, int testIdx, Set<List<StackTraceElement>> traces, boolean geoRemoval, boolean requestLimiter) {
         Random r = new Random(testIdx * 1234L);
         try {
             var test = new TestBase();
+            LongList tops = new LongArrayList();
+
+            int R = 1;
+            if (r.nextBoolean()) {
+                R++;
+                if (r.nextBoolean()) {
+                    R++;
+                    if (r.nextBoolean()) {
+                        R++;
+                    }
+                }
+            }
+
             //Fuzzy bruteforce everything
-            test.putTopPos(POS_A);
+            for (int x = -R; x<=R; x++) {
+                for (int z = -R; z<=R; z++) {
+                    for (int y = -1; y<=0; y++) {
+                        tops.add(WorldEngine.getWorldSectionId(4, x, y, z));
+                    }
+                }
+            }
+
+            for (long p : tops) {
+                test.putTopPos(p);
+                test.meshUpdate(p, -1, 18);
+                fillInALl(test, p, a->-1);
+                test.printNodeChanges();
+                test.verifyIntegrity();
+            }
             for (int i = 0; i < ITERS; i++) {
-                long pos = rPos(r);
-                int op = r.nextInt(4);
+                long pos = rPos(r, tops);
+                int op = r.nextInt(5);
                 int extra = r.nextInt(256);
+                boolean geoAddOk = ((!requestLimiter)||(test.geometryManager.allocation.getLimit()-test.geometryManager.allocation.getCount())>1000);
                 boolean hasGeometry = r.nextBoolean();
-                if (op == 0) {
+                boolean addRemTLN = r.nextInt(64) == 0;
+                boolean extraBool = r.nextBoolean();
+                if (op == 0 && addRemTLN) {
+                    pos = WorldEngine.getWorldSectionId(4, r.nextInt(5)-2, r.nextInt(2)-1, r.nextInt(5)-2);//r.nextInt(16)-8//for y
+                    boolean cont = tops.contains(pos);
+                    if (cont&&extraBool&&tops.size()>1) {
+                        extraBool = true;
+                        test.remTopPos(pos);
+                        tops.rem(pos);
+                    } else if ((!cont)&&geoAddOk) {
+                        extraBool = false;
+                        test.putTopPos(pos);
+                        tops.add(pos);
+                    }
+                } else if (op == 0&&geoAddOk) {
                     test.request(pos);
                 }
                 if (op == 1) {
                     test.childUpdate(pos, extra);
                 }
-                if (op == 2) {
+                if (op == 2&&((!hasGeometry)||geoAddOk)) {
                     test.meshUpdate(pos, extra, hasGeometry ? 100 : 0);
                 }
                 if (op == 3 && geoRemoval) {
@@ -336,8 +390,20 @@ public class TestNodeManager {
                 test.printNodeChanges();
                 test.verifyIntegrity();
             }
-            test.childUpdate(POS_A, 0);
-            test.meshUpdate(POS_A, 0, 0);
+            for (long top : tops) {
+                test.remTopPos(top);
+            }
+            test.printNodeChanges();
+            test.verifyIntegrity();
+            if (test.nodeManager.getCurrentMaxNodeId() != -1) {
+                throw new IllegalStateException();
+            }
+            if (!test.cleaner.active.isEmpty()) {
+                throw new IllegalStateException();
+            }
+            if (!test.watcher.updateTypes.isEmpty()) {
+                throw new IllegalStateException();
+            }
             if (test.geometryManager.memoryInUse != 0) {
                 throw new IllegalStateException();
             }
@@ -535,10 +601,9 @@ public class TestNodeManager {
         test.printNodeChanges();
         Logger.info("\n\n");
 
-        var positions = new ArrayList<>(aa.keySet().stream().filter(k->{
+        var positions = new ArrayList<>(aa.keySet().longStream().filter(k->{
             return WorldEngine.getLevel(k)!=0;
-        }).toList());
-        positions.sort(Long::compareTo);
+        }).sorted().mapToObj(Long::valueOf).toList());
         Collections.shuffle(positions, r);
 
         Logger.info("Removing", WorldEngine.pprintPos(positions.get(0)));

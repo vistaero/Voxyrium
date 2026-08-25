@@ -58,6 +58,8 @@ public class RawDownloadStream {
     }
 
     public void tick() {
+        this.submit();
+
         while (!this.frames.isEmpty()) {
             //If the first element is not signaled, none of the others will be signaled so break
             if (!this.frames.peek().fence.signaled()) {
@@ -78,6 +80,17 @@ public class RawDownloadStream {
     }
 
     public void free() {
+        glFinish();
+        this.tick();
+        GlFence fence = new GlFence();
+        while (!fence.signaled()) {
+            glFinish();
+        }
+        fence.free();
+        this.tick();
+        if (this.frames.size() != 0) {
+            throw new IllegalStateException();
+        }
         this.frames.forEach(a->a.fence.free());
         this.downloadBuffer.free();
     }

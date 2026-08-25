@@ -1,19 +1,19 @@
 package me.cortex.voxy.commonImpl;
 
-import me.cortex.voxy.common.thread.ServiceThreadPool;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.commonImpl.importers.IDataImporter;
-import me.cortex.voxy.commonImpl.importers.WorldImporter;
-import net.minecraft.world.World;
 
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.function.BooleanSupplier;
-import java.util.function.IntConsumer;
 import java.util.function.Supplier;
 
 public class ImportManager {
+    //TODO:
+    //Taskbar.INSTANCE.setProgress(0,10000);
+    //Taskbar.INSTANCE.setIsProgression();
+    //Taskbar.INSTANCE.setProgress(a, Math.max(1, b));
+    //Taskbar.INSTANCE.setIsNone();
+
     private final Map<WorldEngine, ImportTask> activeImporters = new HashMap<>();
 
     protected class ImportTask {
@@ -83,12 +83,17 @@ public class ImportManager {
     }
 
     public boolean makeAndRunIfNone(WorldEngine engine, Supplier<IDataImporter> factory) {
-        synchronized (this) {
-            if (this.activeImporters.containsKey(engine)) {
-                return false;
+        try {
+            engine.acquireRef();
+            synchronized (this) {
+                if (this.activeImporters.containsKey(engine)) {
+                    return false;
+                }
             }
+            return this.tryRunImport(factory.get());
+        } finally {
+            engine.releaseRef();
         }
-        return this.tryRunImport(factory.get());
     }
 
     public boolean cancelImport(WorldEngine engine) {

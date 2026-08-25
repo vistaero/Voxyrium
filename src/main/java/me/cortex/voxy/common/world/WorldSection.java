@@ -5,12 +5,10 @@ import me.cortex.voxy.commonImpl.VoxyCommon;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
-import java.util.ArrayDeque;
 import java.util.Arrays;
-import java.util.Deque;
 import java.util.concurrent.ConcurrentLinkedDeque;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 //Represents a loaded world section at a specific detail level
 // holds a 32x32x32 region of detail
@@ -22,12 +20,16 @@ public final class WorldSection {
     static final VarHandle ATOMIC_STATE_HANDLE;
     private static final VarHandle NON_EMPTY_CHILD_HANDLE;
     private static final VarHandle NON_EMPTY_BLOCK_HANDLE;
+    private static final VarHandle IN_SAVE_QUEUE_HANDLE;
+    private static final VarHandle IS_DIRTY_HANDLE;
 
     static {
         try {
             ATOMIC_STATE_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "atomicState", int.class);
             NON_EMPTY_CHILD_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "nonEmptyChildren", byte.class);
             NON_EMPTY_BLOCK_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "nonEmptyBlockCount", int.class);
+            IN_SAVE_QUEUE_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "inSaveQueue", boolean.class);
+            IS_DIRTY_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "isDirty", boolean.class);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new RuntimeException(e);
         }
@@ -51,11 +53,13 @@ public final class WorldSection {
     //Serialized states
     long metadata;
     long[] data = null;
-    volatile int nonEmptyBlockCount = 0;
+    volatile int nonEmptyBlockCount = 0;//Note: only needed for level 0 sections
     volatile byte nonEmptyChildren;
 
-    private final ActiveSectionTracker tracker;
-    public final AtomicBoolean inSaveQueue = new AtomicBoolean();
+    final ActiveSectionTracker tracker;
+    volatile boolean inSaveQueue;
+    volatile boolean isDirty;
+    private final AtomicLong renderRevision = new AtomicLong();
 
     //When the first bit is set it means its loaded
     @SuppressWarnings("all")
@@ -118,11 +122,9 @@ public final class WorldSection {
     }
 
     public int acquire(int count) {
-        int state =((int)  ATOMIC_STATE_HANDLE.getAndAdd(this, count<<1)) + (count<<1);
-        if (VERIFY_WORLD_SECTION_EXECUTION) {
-            if ((state & 1) == 0) {
-                throw new IllegalStateException("Tried to acquire unloaded section");
-            }
+        int state = ((int)  ATOMIC_STATE_HANDLE.getAndAdd(this, count<<1)) + (count<<1);
+        if ((state & 1) == 0) {
+            throw new IllegalStateException("Tried to acquire unloaded section: " + WorldEngine.pprintPos(this.key) + " obj: " + System.identityHashCode(this));
         }
         return state>>1;
     }
@@ -131,20 +133,28 @@ public final class WorldSection {
         return ((int)ATOMIC_STATE_HANDLE.get(this))>>1;
     }
 
-    //TODO: add the ability to hint to the tracker that yes the section is unloaded, try to cache it in a secondary cache since it will be reused/needed later
     public int release() {
+        return release(true, 0);
+    }
+
+
+    public static int RELEASE_HINT_POSSIBLE_REUSE = 1;
+    //Unload but specify possible reuse hints
+    public int release(int hints) {
+        return release(true, hints);
+    }
+
+    int release(boolean unload, int hints) {
         int state = ((int) ATOMIC_STATE_HANDLE.getAndAdd(this, -2)) - 2;
-        if (VERIFY_WORLD_SECTION_EXECUTION) {
-            if (state < 1) {
-                throw new IllegalStateException("Section got into an invalid state");
-            }
-            if ((state & 1) == 0) {
-                throw new IllegalStateException("Tried releasing a freed section");
-            }
+        if (state < 1) {
+            throw new IllegalStateException("Section got into an invalid state");
         }
-        if ((state>>1)==0) {
+        if ((state & 1) == 0) {
+            throw new IllegalStateException("Tried releasing a freed section");
+        }
+        if ((state>>1)==0 && unload) {
             if (this.tracker != null) {
-                this.tracker.tryUnload(this);
+                this.tracker.tryUnload(this, hints);
             } else {
                 //This should _ONLY_ ever happen when its an untracked section
                 // If it is, try release it
@@ -159,10 +169,11 @@ public final class WorldSection {
     //Returns true on success, false on failure
     boolean trySetFreed() {
         int witness = (int) ATOMIC_STATE_HANDLE.compareAndExchange(this, 1, 0);
-        if (VERIFY_WORLD_SECTION_EXECUTION) {
-            if ((witness & 1) == 0 && witness != 0) {
-                throw new IllegalStateException("Section marked as free but has refs");
-            }
+        if ((witness & 1) == 0 && witness != 0) {
+            throw new IllegalStateException("Section marked as free but has refs");
+        }
+        if (witness == 1 && (this.isDirty || this.inSaveQueue)) {
+            throw new IllegalStateException("Section freed while marked as dirty or in the save queue: " + (this.isDirty?"dirty, ":"") + (this.inSaveQueue?"saveQueue":""));
         }
         return witness == 1;
     }
@@ -198,6 +209,7 @@ public final class WorldSection {
     }
 
     public long set(int x, int y, int z, long id) {
+        //TODO: this needs to update the block counts
         int idx = getIndex(x,y,z);
         long old = this.data[idx];
         this.data[idx] = id;
@@ -276,5 +288,36 @@ public final class WorldSection {
 
     public static WorldSection _createRawUntrackedUnsafeSection(int lvl, int x, int y, int z) {
         return new WorldSection(lvl, x, y, z, null);
+    }
+
+    public void markDirty() {
+        IS_DIRTY_HANDLE.getAndSet(this, true);
+        this.renderRevision.incrementAndGet();
+    }
+
+    /**
+     * Monotonic revision used by renderer backends to avoid rebuilding an
+     * unchanged section after it has been uploaded once.
+     */
+    public long getRenderRevision() {
+        return this.renderRevision.get();
+    }
+
+
+    public boolean exchangeIsInSaveQueue(boolean state) {
+        return ((boolean) IN_SAVE_QUEUE_HANDLE.compareAndExchange(this, !state, state)) == !state;
+    }
+
+    //Should only be called by the saving service
+    public boolean setNotDirty() {
+        return (boolean) IS_DIRTY_HANDLE.getAndSet(this, false);
+    }
+
+    public boolean shouldSave() {
+        return this.isDirty&&!this.inSaveQueue;
+    }
+
+    public boolean isFreed() {
+        return (((int)ATOMIC_STATE_HANDLE.get(this))&1)==0;
     }
 }

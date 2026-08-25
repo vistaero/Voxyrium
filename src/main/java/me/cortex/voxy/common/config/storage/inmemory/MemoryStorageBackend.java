@@ -5,17 +5,19 @@ import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectCollection;
-import me.cortex.voxy.common.config.storage.StorageBackend;
 import me.cortex.voxy.common.config.ConfigBuildCtx;
+import me.cortex.voxy.common.config.storage.StorageBackend;
 import me.cortex.voxy.common.config.storage.StorageConfig;
 import me.cortex.voxy.common.util.MemoryBuffer;
-import net.minecraft.util.math.random.RandomSeed;
+import me.cortex.voxy.common.world.WorldEngine;
+import net.minecraft.world.level.levelgen.RandomSupport;
 import org.apache.commons.lang3.stream.Streams;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;
 import java.util.function.LongConsumer;
 
+//TODO: replace synchronize with StampedLock
 public class MemoryStorageBackend extends StorageBackend {
     private final Long2ObjectMap<MemoryBuffer>[] maps;
     private final Int2ObjectMap<ByteBuffer> idMappings = new Int2ObjectOpenHashMap<>();
@@ -25,14 +27,22 @@ public class MemoryStorageBackend extends StorageBackend {
     }
 
     private Long2ObjectMap<MemoryBuffer> getMap(long key) {
-        return this.maps[(int) (RandomSeed.mixStafford13(RandomSeed.mixStafford13(key)^key)&(this.maps.length-1))];
+        return this.maps[(int) (RandomSupport.mixStafford13(RandomSupport.mixStafford13(key)^key)&(this.maps.length-1))];
     }
 
     @Override
-    public void iterateStoredSectionPositions(LongConsumer consumer) {
+    public void iteratePositions(int level, LongConsumer consumer) {
+        LongConsumer filtered = consumer;
+        if (level != -1) {
+            filtered = (key) -> {
+                if (WorldEngine.getLevel(key) == level) {
+                    consumer.accept(key);
+                }
+            };
+        }
         for (var map : this.maps) {
             synchronized (map) {
-                map.keySet().forEach(consumer);
+                map.keySet().forEach(filtered);
             }
         }
     }

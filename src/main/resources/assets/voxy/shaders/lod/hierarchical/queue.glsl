@@ -1,6 +1,10 @@
 #define SENTINAL_OUT_OF_BOUNDS uint(-1)
 
+#ifdef VOXY_VULKAN
+layout(push_constant) uniform PushConstants { uint queueIdx; };
+#else
 layout(location = NODE_QUEUE_INDEX_BINDING) uniform uint queueIdx;
+#endif
 
 layout(binding = NODE_QUEUE_META_BINDING, std430) restrict buffer NodeQueueMeta {
     uvec4 nodeQueueMetadata[MAX_ITERATIONS];
@@ -21,6 +25,8 @@ uint getCurrentNode() {
     return nodeQueueSource[gl_GlobalInvocationID.x];
 }
 
+
+//TODO: limit the size/writing out of bounds
 uint nodePushIndex = -1;
 void pushNodesInit(uint nodeCount) {
     //Debug

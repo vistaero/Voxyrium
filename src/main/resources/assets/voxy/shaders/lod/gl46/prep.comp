@@ -14,10 +14,17 @@ void main() {
 
     opaqueDrawCount = 0;
     translucentDrawCount = 0;
+    temporalOpaqueDrawCount = 0;
 
     cullDrawIndirectCommand.count = 6*2*3;
     cullDrawIndirectCommand.instanceCount = sectionCount;
+#ifdef VOXY_VULKAN
+    //VK shared index buffer stores the cube indices as uint16 (no ubyte index type);
+    // firstIndex is in u16 units at the same byte offset
+    cullDrawIndirectCommand.firstIndex = (1<<16)*6;
+#else
     cullDrawIndirectCommand.firstIndex = (1<<16)*6*2;
+#endif
     cullDrawIndirectCommand.baseVertex = 0;
     cullDrawIndirectCommand.baseInstance = 0;
 }

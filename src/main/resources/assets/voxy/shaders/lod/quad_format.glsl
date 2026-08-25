@@ -1,5 +1,4 @@
-#line 1
-#ifdef GL_ARB_gpu_shader_int64
+#ifdef QUAD_DATA_USE_64_BIT
 #define Quad uint64_t
 
 #define Eu32(data, amountBits, shift) (uint((data)>>(shift))&((1u<<(amountBits))-1))
@@ -11,6 +10,10 @@ vec3 extractPos(uint64_t quad) {
 
 ivec2 extractSize(uint64_t quad) {
     return ivec2(Eu32(quad, 4, 3), Eu32(quad, 4, 7)) + ivec2(1);//the + 1 is cause you cant actually have a 0 size quad
+}
+
+uint extractFluidCornerHeights(uint64_t quad) {
+    return Eu32(quad, 8, 3)|(Eu32(quad, 4, 42)<<8);
 }
 
 uint extractFace(uint64_t quad) {
@@ -57,13 +60,17 @@ ivec2 extractSize(ivec2 quad) {
     return ivec2(Eu32v(quad, 4, 3), Eu32v(quad, 4, 7)) + ivec2(1);//the + 1 is cause you cant actually have a 0 size quad
 }
 
+uint extractFluidCornerHeights(ivec2 quad) {
+    return Eu32v(quad, 8, 3)|(Eu32v(quad, 4, 42)<<8);
+}
+
 uint extractFace(ivec2 quad) {
     return Eu32v(quad, 3, 0);
 }
 
 uint extractStateId(ivec2 quad) {
-    //Eu32(quad, 20, 26);
-    return Eu32v(quad, 6, 26)|(Eu32v(quad, 14, 32)<<6);
+    //The CPU format and the uint64 path both allocate 16 bits to the model id.
+    return Eu32v(quad, 6, 26)|(Eu32v(quad, 10, 32)<<6);
 }
 
 uint extractBiomeId(ivec2 quad) {

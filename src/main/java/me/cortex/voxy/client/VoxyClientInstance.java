@@ -1,18 +1,51 @@
 package me.cortex.voxy.client;
 
 import me.cortex.voxy.client.config.VoxyConfig;
-import me.cortex.voxy.client.saver.ContextSelectionSystem;
-import me.cortex.voxy.common.world.WorldEngine;
-import me.cortex.voxy.commonImpl.IVoxyWorld;
+import me.cortex.voxy.client.core.RenderResourceReuse;
+import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.common.StorageConfigUtil;
+import me.cortex.voxy.common.config.ConfigBuildCtx;
+import me.cortex.voxy.common.config.section.SectionStorage;
+import me.cortex.voxy.common.config.section.SectionStorageConfig;
 import me.cortex.voxy.commonImpl.ImportManager;
 import me.cortex.voxy.commonImpl.VoxyInstance;
-import net.minecraft.client.world.ClientWorld;
+import me.cortex.voxy.commonImpl.WorldIdentifier;
+import net.minecraft.client.Minecraft;
+import net.minecraft.world.level.storage.LevelResource;
+
+import java.nio.file.Path;
 
 public class VoxyClientInstance extends VoxyInstance {
-    private static final ContextSelectionSystem SELECTOR = new ContextSelectionSystem();
+    private final Config config;
+    private final Path basePath;
+    private final boolean noIngestOverride;
 
     public VoxyClientInstance() {
-        super(VoxyConfig.CONFIG.serviceThreads);
+        this(createInit());
+    }
+
+    private VoxyClientInstance(Init init) {
+        super(!init.config.disabled);
+        this.basePath = init.basePath;
+        this.config = init.config;
+        this.noIngestOverride = false;
+        this.updateDedicatedThreads();
+    }
+
+    private static Init createInit() {
+        Path basePath = getBasePath().normalize();
+        Config config = StorageConfigUtil.getCreateStorageConfig(Config.class,
+                candidate -> candidate.version == 1 && candidate.sectionStorageConfig != null,
+                () -> DEFAULT_STORAGE_CONFIG, basePath);
+        return new Init(basePath, config);
+    }
+
+    private record Init(Path basePath, Config config) {
+    }
+
+    @Override
+    public void updateDedicatedThreads() {
+        this.setNumThreads(VoxyConfig.CONFIG.serviceThreads);
     }
 
     @Override
@@ -20,16 +53,69 @@ public class VoxyClientInstance extends VoxyInstance {
         return new ClientImportManager();
     }
 
-    public WorldEngine getOrMakeRenderWorld(ClientWorld world) {
-        var vworld = ((IVoxyWorld)world).getWorldEngine();
-        if (vworld == null) {
-            vworld = this.createWorld(SELECTOR.getBestSelectionOrCreate(world).createSectionStorageBackend());
-            ((IVoxyWorld)world).setWorldEngine(vworld);
+    @Override
+    protected SectionStorage createStorage(WorldIdentifier identifier) {
+        var ctx = new ConfigBuildCtx();
+        ctx.setProperty(ConfigBuildCtx.BASE_SAVE_PATH, this.basePath.toString());
+        ctx.setProperty(ConfigBuildCtx.WORLD_IDENTIFIER, identifier.getWorldId());
+        ctx.setProperty(ConfigBuildCtx.PLAYER_UUID, Minecraft.getInstance().getUser().getProfileId().toString().replace(':','-'));
+        ctx.pushPath(ConfigBuildCtx.DEFAULT_STORAGE_PATH);
+        return this.config.sectionStorageConfig.build(ctx);
+    }
+
+    public Path getStorageBasePath() {
+        return this.basePath;
+    }
+
+    @Override
+    public boolean isIngestEnabled(WorldIdentifier worldId) {
+        return (!this.noIngestOverride) && VoxyConfig.CONFIG.ingestEnabled;
+    }
+
+    @Override
+    public void shutdown() {
+        super.shutdown();
+        //Free the render resources cache since the entire instance is freed
+        RenderResourceReuse.clearResources();
+    }
+
+    private static class Config {
+        public int version = 1;
+        public boolean disabled = false;
+        public SectionStorageConfig sectionStorageConfig;
+    }
+
+    private static final Config DEFAULT_STORAGE_CONFIG;
+    static {
+        var config = new Config();
+        config.sectionStorageConfig = StorageConfigUtil.createDefaultSerializer();
+        DEFAULT_STORAGE_CONFIG = config;
+    }
+
+    private static Path getBasePath() {
+        Path basePath = Minecraft.getInstance().gameDirectory.toPath().resolve(".voxy").resolve("saves");
+        var iserver = Minecraft.getInstance().getSingleplayerServer();
+        if (iserver != null) {
+            basePath = iserver.getWorldPath(LevelResource.ROOT).resolve("voxy");
         } else {
-            if (!this.activeWorlds.contains(vworld)) {
-                throw new IllegalStateException("World referenced does not exist in instance");
+            var netHandle = Minecraft.getInstance().gameMode;
+            if (netHandle == null) {
+                Logger.error("Network handle null");
+                basePath = basePath.resolve("UNKNOWN");
+            } else {
+                var info = netHandle.connection.getServerData();
+                if (info == null) {
+                    Logger.error("Server info null");
+                    basePath = basePath.resolve("UNKNOWN");
+                } else {
+                    if (info.isRealm()) {
+                        basePath = basePath.resolve("realms");
+                    } else {
+                        basePath = basePath.resolve(info.ip.replace(":", "_"));
+                    }
+                }
             }
         }
-        return vworld;
+        return basePath.toAbsolutePath();
     }
 }

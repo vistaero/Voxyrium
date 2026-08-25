@@ -1,22 +1,55 @@
 {
-  "voxy.config.title": "Voxy config",
+  "voxy.config.title": "Voxy",
 
   "voxy.config.general": "General",
-  "voxy.config.threads": "Threads",
-  "voxy.config.storage": "Storage",
+  "voxy.config.rendering": "Rendering",
 
   "voxy.config.general.enabled": "Enable Voxy",
   "voxy.config.general.enabled.tooltip": "Fully enables or disables voxy",
 
-  "voxy.config.general.rendering": "Voxy Rendering",
-  "voxy.config.general.rendering.tooltip": "Enables or disables voxy rendering",
+  "voxy.config.general.serviceThreads": "Service threads",
+  "voxy.config.general.serviceThreads.tooltip": "Number of threads the ServiceThreadPool can use",
+
+  "voxy.config.general.useSodiumBuilder": "Use sodium threads",
+  "voxy.config.general.useSodiumBuilder.tooltip": "Uses sodium builder threads as part of voxys thread pool, can reduce stuttering and lag when moving quickly at high render distance",
 
   "voxy.config.general.ingest": "Chunk Ingest",
   "voxy.config.general.ingest.tooltip": "Enables or disables voxies ability to convert new chunks into LoDs",
 
-  "voxy.config.general.serviceThreads": "Service threads",
-  "voxy.config.general.serviceThreads.tooltip": "Number of threads the ServiceThreadPool can use",
+  "voxy.config.general.rendering": "Voxy Rendering",
+  "voxy.config.general.rendering.tooltip": "Enables or disables voxy rendering",
 
-  "voxy.config.general.subDivisionSize": "Pixels^2 of subdivision size",
-  "voxy.config.general.subDivisionSize.tooltip": "Maximum size in pixels (squared) of screenspace AABB before subdiving to smaller LoDs (Smaller being higher quality)"
+  "voxy.config.general.renderer_backend": "Renderer backend",
+  "voxy.config.general.renderer_backend.tooltip": "Selects Voxy's renderer. Native uses Voxy's Vulkan/OpenGL renderer. Blaze3D uses Minecraft's public rendering API.",
+  "voxy.config.general.renderer_backend.native": "Native",
+  "voxy.config.general.renderer_backend.blaze3d": "Blaze3D",
+
+  "voxy.confirm.iris_blaze3d.title": "Iris shaderpack active",
+  "voxy.confirm.iris_blaze3d.message": "Blaze3D may have visual issues with this Iris shaderpack.\n\nRecommended: Use Native.",
+  "voxy.confirm.iris_blaze3d.native": "Use Native",
+  "voxy.confirm.iris_blaze3d.blaze3d": "Use Blaze3D",
+  "voxy.confirm.iris_blaze3d.dont_show_again": "Don't Show Again",
+
+  "voxy.config.general.subDivisionSize": "Subdivision size (pixels)",
+  "voxy.config.general.subDivisionSize.tooltip": "Maximum screen-space size before subdividing to a finer LoD. Smaller values increase quality and memory use.",
+
+  "voxy.config.general.renderDistance": "Render distance",
+  "voxy.config.general.renderDistance.tooltip": "Render distance of voxy in chunks",
+
+  "voxy.config.general.blaze3d_memory_estimate": "Estimated Blaze3D requirement: about %s of free VRAM and %s of free RAM. This includes expanded Cortex geometry and transition staging.",
+  "voxy.config.general.blaze3d_memory_estimate.limit": "This exceeds Blaze3D's 8 GiB geometry safety limit; it will retain coarser LoDs where necessary instead of stopping or leaving holes.",
+
+  "voxy.config.general.environmental_fog": "Fog and fade effect",
+  "voxy.config.general.environmental_fog.tooltip": "Configures the environmental fog and fade effects",
+  "voxy.config.general.environmental_fog.fog_and_fade": "Fog and fade",
+  "voxy.config.general.environmental_fog.fog": "Fog only",
+  "voxy.config.general.environmental_fog.fade": "Fade only",
+  "voxy.config.general.environmental_fog.off": "Off",
+
+  "voxy.config.general.ssao_mode": "SSAO Mode",
+  "voxy.config.general.ssao_mode.tooltip": "The mode used for screenspace ambient occlusion (Auto attempts to pick the best option while reducing performance impact)",
+  "voxy.config.general.ssao_mode.auto": "Auto",
+  "voxy.config.general.ssao_mode.basic": "Basic",
+  "voxy.config.general.ssao_mode.better": "Better",
+  "voxy.config.general.ssao_mode.best": "Best"
 }

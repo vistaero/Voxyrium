@@ -1,8 +1,8 @@
 package me.cortex.voxy.common;
 
 import me.cortex.voxy.commonImpl.VoxyCommon;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.text.Text;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
 import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
@@ -12,7 +12,32 @@ import java.util.stream.Stream;
 public class Logger {
     public static boolean INSERT_CLASS = true;
     public static boolean SHUTUP = false;
+    public static boolean SHUTUP_INFO = false;
     private static final org.slf4j.Logger LOGGER = LoggerFactory.getLogger("Voxy");
+
+
+    private static String callClsName() {
+        String className = "";
+        if (INSERT_CLASS) {
+            var stackEntry = new Throwable().getStackTrace()[2];
+            className = stackEntry.getClassName();
+            var builder = new StringBuilder();
+            var parts = className.split("\\.");
+            for (int i = 0; i < parts.length; i++) {
+                var part = parts[i];
+                if (i < parts.length-1) {//-2
+                    builder.append(part.charAt(0)).append(part.charAt(part.length()-1));
+                } else {
+                    builder.append(part);
+                }
+                if (i!=parts.length-1) {
+                    builder.append(".");
+                }
+            }
+            className = builder.toString();
+        }
+        return className;
+    }
 
     public static void error(Object... args) {
         if (SHUTUP) {
@@ -24,11 +49,21 @@ public class Logger {
                 throwable = (Throwable) i;
             }
         }
-        var stackEntry = new Throwable().getStackTrace()[1];
-        String error = (INSERT_CLASS?("["+stackEntry.getClassName()+"]: "):"") + Stream.of(args).map(Logger::objToString).collect(Collectors.joining(" "));
+
+        String error = (INSERT_CLASS?("["+callClsName()+"]: "):"") + Stream.of(args).map(Logger::objToString).collect(Collectors.joining(" "));
         LOGGER.error(error, throwable);
         if (VoxyCommon.IS_IN_MINECRAFT && !VoxyCommon.IS_DEDICATED_SERVER) {
-            MinecraftClient.getInstance().executeSync(()->{var player = MinecraftClient.getInstance().player; if (player != null)  player.sendMessage(Text.literal(error), true);});
+            showInHUD(error);//This is done so that on dedicated server, the Minecraft client class isnt loaded
+        }
+    }
+
+    public static void showInHUD(String msg) {
+        var instance = Minecraft.getInstance();
+        if (instance != null) {
+            instance.executeIfPossible(() -> {
+                var player = Minecraft.getInstance().player;
+                if (player != null) instance.gui.getChat().addMessage(Component.literal(msg));
+            });
         }
     }
 
@@ -42,13 +77,12 @@ public class Logger {
                 throwable = (Throwable) i;
             }
         }
-        var stackEntry = new Throwable().getStackTrace()[1];
-        LOGGER.warn((INSERT_CLASS?("["+stackEntry.getClassName()+"]: "):"") + Stream.of(args).map(Logger::objToString).collect(Collectors.joining(" ")), throwable);
+        LOGGER.warn((INSERT_CLASS?("["+callClsName()+"]: "):"") + Stream.of(args).map(Logger::objToString).collect(Collectors.joining(" ")), throwable);
     }
 
-    public static void info(Object... args) {
-        if (SHUTUP) {
-            return;
+    public static String info(Object... args) {
+        if (SHUTUP||SHUTUP_INFO) {
+            return "";
         }
         Throwable throwable = null;
         for (var i : args) {
@@ -56,8 +90,9 @@ public class Logger {
                 throwable = (Throwable) i;
             }
         }
-        var stackEntry = new Throwable().getStackTrace()[1];
-        LOGGER.info((INSERT_CLASS?("["+stackEntry.getClassName()+"]: "):"") + Stream.of(args).map(Logger::objToString).collect(Collectors.joining(" ")), throwable);
+        var val = (INSERT_CLASS?("["+callClsName()+"]: "):"") + Stream.of(args).map(Logger::objToString).collect(Collectors.joining(" "));
+        LOGGER.info(val, throwable);
+        return val;
     }
 
     private static String objToString(Object obj) {

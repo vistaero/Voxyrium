@@ -1,7 +1,7 @@
 package me.cortex.voxy.common.config.storage.other;
 
-import me.cortex.voxy.common.config.storage.StorageBackend;
 import me.cortex.voxy.common.config.ConfigBuildCtx;
+import me.cortex.voxy.common.config.storage.StorageBackend;
 
 //Very simple config that adds a path to the config builder
 public class BasicPathInsertionConfig extends DelegateStorageConfig {

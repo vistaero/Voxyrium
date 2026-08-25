@@ -3,11 +3,12 @@ package me.cortex.voxy.common.config.storage.other;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
-import me.cortex.voxy.common.config.storage.StorageBackend;
+import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.config.ConfigBuildCtx;
+import me.cortex.voxy.common.config.storage.StorageBackend;
 import me.cortex.voxy.common.config.storage.StorageConfig;
 import me.cortex.voxy.common.util.MemoryBuffer;
-import net.minecraft.util.math.random.RandomSeed;
+import net.minecraft.world.level.levelgen.RandomSupport;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -29,12 +30,14 @@ public class FragmentedStorageBackendAdaptor extends StorageBackend {
     }
 
     private int getSegmentId(long key) {
-        return (int) (RandomSeed.mixStafford13(RandomSeed.mixStafford13(key)^key)&(this.backends.length-1));
+        return (int) (RandomSupport.mixStafford13(RandomSupport.mixStafford13(key)^key)&(this.backends.length-1));
     }
 
     @Override
-    public void iterateStoredSectionPositions(LongConsumer consumer) {
-        throw new IllegalStateException("Not yet implemented");
+    public void iteratePositions(int level, LongConsumer consumer) {
+        for (var backend : this.backends) {
+            backend.iteratePositions(level, consumer);
+        }
     }
 
     //TODO: reencode the key to be shifted one less OR
@@ -98,7 +101,7 @@ public class FragmentedStorageBackendAdaptor extends StorageBackend {
         }
 
         if (verification.size() != 1) {
-            System.err.println("Error id mapping not matching across all fragments, attempting to recover");
+            Logger.error("Error id mapping not matching across all fragments, attempting to recover");
             Object2IntMap.Entry<Int2ObjectOpenHashMap<EqualingArray>> maxEntry = null;
             for (var entry : verification.object2IntEntrySet()) {
                 if (maxEntry == null) { maxEntry = entry; }

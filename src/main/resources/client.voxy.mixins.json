@@ -5,6 +5,7 @@
   "client": [
     "minecraft.MixinClientChunkCache",
     "minecraft.MixinClientLevel",
+    "minecraft.MixinLegacyFogRenderer",
     "minecraft.MixinLevelRenderer",
     "minecraft.MixinRenderSystem",
     "minecraft.session.MixinClientPacketListener",

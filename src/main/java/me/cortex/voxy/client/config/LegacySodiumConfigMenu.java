@@ -1,6 +1,7 @@
 package me.cortex.voxy.client.config;
 
 import com.google.common.collect.ImmutableList;
+import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.NormalRenderPipeline;
 import me.cortex.voxy.client.core.SSAO;
 import me.cortex.voxy.common.util.cpu.CpuLayout;
@@ -23,7 +24,15 @@ import java.util.function.Function;
  * releases predate the public config API used by current Voxy.
  */
 public final class LegacySodiumConfigMenu {
-    private static final OptionStorage<VoxyConfig> STORAGE = new OptionStorage<>() {
+    private static final LegacyOptionStorage STORAGE = new LegacyOptionStorage();
+
+    private static final class LegacyOptionStorage implements OptionStorage<VoxyConfig> {
+        private NormalRenderPipeline.FogMode fogModeAtOpen;
+
+        public void beginEditing() {
+            this.fogModeAtOpen = VoxyConfig.CONFIG.getFogMode();
+        }
+
         @Override
         public VoxyConfig getData() {
             return VoxyConfig.CONFIG;
@@ -31,14 +40,27 @@ public final class LegacySodiumConfigMenu {
 
         @Override
         public void save() {
-            VoxyConfig.CONFIG.save();
+            var config = VoxyConfig.CONFIG;
+            var currentFogMode = config.getFogMode();
+            boolean reloadFogPipeline = this.fogModeAtOpen != currentFogMode;
+            config.save();
+            this.fogModeAtOpen = currentFogMode;
+
+            if (reloadFogPipeline) {
+                var holder = IVoxyRenderSystemHolder.getNullableHolder();
+                if (holder != null && holder.voxy$getRenderSystem() != null) {
+                    holder.voxy$shutdownRenderer();
+                    holder.voxy$createRenderer();
+                }
+            }
         }
-    };
+    }
 
     private LegacySodiumConfigMenu() {
     }
 
     public static OptionPage createPage() {
+        STORAGE.beginEditing();
         int coreCount = Math.max(1, CpuLayout.getCoreCount());
 
         var general = OptionGroup.createBuilder()

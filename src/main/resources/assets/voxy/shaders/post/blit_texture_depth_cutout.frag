@@ -24,6 +24,10 @@ void main() {
     }
 
     float depth = texture(depthTex, UV.xy).r;
+    if (depth == 0.0f) {
+        discard;
+    }
+
     depth = projDepth(rev3d(vec3(UV.xy, depth)));
     depth = min(1.0f-(2.0f/((1<<24)-1)), depth);
     depth = depth * 0.5f + 0.5f;

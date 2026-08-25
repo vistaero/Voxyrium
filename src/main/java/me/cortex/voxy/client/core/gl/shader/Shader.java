@@ -1,5 +1,8 @@
 package me.cortex.voxy.client.core.gl.shader;
 
+import me.cortex.voxy.client.core.gl.GlBuffer;
+import me.cortex.voxy.client.core.gl.GlDebug;
+import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.TrackedObject;
 import org.lwjgl.opengl.GL20C;
 
@@ -11,23 +14,8 @@ import static org.lwjgl.opengl.GL20.glUseProgram;
 
 public class Shader extends TrackedObject {
     private final int id;
-    private Shader(int program) {
+    Shader(int program) {
         id = program;
-    }
-
-    public static Builder make(IShaderProcessor... processors) {
-        List<IShaderProcessor> aa = new ArrayList<>(List.of(processors));
-        Collections.reverse(aa);
-        IShaderProcessor applicator = (type,source)->source;
-        for (IShaderProcessor processor : processors) {
-            IShaderProcessor finalApplicator = applicator;
-            applicator = (type, source) -> finalApplicator.process(type, processor.process(type, source));
-        }
-        return new Builder(applicator);
-    }
-
-    public static Builder make() {
-        return new Builder((aa,source)->source);
     }
 
     public int id() {
@@ -43,35 +31,81 @@ public class Shader extends TrackedObject {
         glDeleteProgram(this.id);
     }
 
-    public static class Builder {
-        private final Map<String, String> defines = new HashMap<>();
+
+    public Shader name(String name) {
+        return GlDebug.name(name, this);
+    }
+
+
+    public static Builder<Shader> make(IShaderProcessor... processor) {
+        return makeInternal((a,b)->new Shader(b), processor);
+    }
+
+    public static Builder<AutoBindingShader> makeAuto(IShaderProcessor... processor) {
+        return makeInternal(AutoBindingShader::new, processor);
+    }
+
+
+
+    static <T extends Shader> Builder<T> makeInternal(Builder.IShaderObjectConstructor<T> constructor, IShaderProcessor[] processors) {
+        List<IShaderProcessor> aa = new ArrayList<>(List.of(processors));
+        Collections.reverse(aa);
+        IShaderProcessor applicator = (type,source)->source;
+        for (IShaderProcessor processor : processors) {
+            IShaderProcessor finalApplicator = applicator;
+            applicator = (type, source) -> finalApplicator.process(type, processor.process(type, source));
+        }
+        return new Builder<>(constructor, applicator);
+    }
+
+    public static class Builder <T extends Shader> {
+        protected interface IShaderObjectConstructor <J extends Shader> {
+            J make(Builder<J> builder, int program);
+        }
+        final Map<String, String> defines = new HashMap<>();
         private final Map<ShaderType, String> sources = new HashMap<>();
         private final IShaderProcessor processor;
-        private Builder(IShaderProcessor processor) {
+        private final IShaderObjectConstructor<T> constructor;
+        private Builder(IShaderObjectConstructor<T> constructor, IShaderProcessor processor) {
+            this.constructor = constructor;
             this.processor = processor;
         }
 
-        public Builder define(String name) {
+        public Builder<T> define(String name) {
             this.defines.put(name, "");
             return this;
         }
 
-        public Builder define(String name, int value) {
+        //Useful for inline setting (such as debug)
+        public Builder<T> defineIf(String name, boolean condition) {
+            if (condition) {
+                this.defines.put(name, "");
+            }
+            return this;
+        }
+
+        public Builder<T> define(String name, int value) {
             this.defines.put(name, Integer.toString(value));
             return this;
         }
 
-        public Builder add(ShaderType type, String id) {
+        public Builder<T> define(String name, String value) {
+            this.defines.put(name, value);
+            return this;
+        }
+
+        public Builder<T> add(ShaderType type, String id) {
             this.addSource(type, ShaderLoader.parse(id));
             return this;
         }
 
-        public Builder addSource(ShaderType type, String source) {
+        public Builder<T> addSource(ShaderType type, String source) {
             this.sources.put(type, this.processor.process(type, source));
             return this;
         }
 
-        public Shader compile() {
+
+        private int compileToProgram() {
             int program = GL20C.glCreateProgram();
             int[] shaders = new int[this.sources.size()];
             {
@@ -99,15 +133,18 @@ public class Shader extends TrackedObject {
             }
             printProgramLinkLog(program);
             verifyProgramLinked(program);
-            return new Shader(program);
+            return program;
         }
 
+        public T compile() {
+            return this.constructor.make(this, this.compileToProgram());
+        }
 
         private static void printProgramLinkLog(int program) {
             String log = GL20C.glGetProgramInfoLog(program);
 
             if (!log.isEmpty()) {
-                System.err.println(log);
+                Logger.error(log);
             }
         }
 
@@ -140,5 +177,4 @@ public class Shader extends TrackedObject {
             return shader;
         }
     }
-
 }

@@ -1,26 +1,33 @@
 package me.cortex.voxy.client.core;
 
-import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
-import me.cortex.voxy.client.Voxy;
 import me.cortex.voxy.client.config.VoxyConfig;
+import me.cortex.voxy.client.core.gl.Capabilities;
+import me.cortex.voxy.client.core.gl.GlBuffer;
+import me.cortex.voxy.client.core.model.ModelBakerySubsystem;
 import me.cortex.voxy.client.core.rendering.*;
+import me.cortex.voxy.client.core.rendering.building.RenderDataFactory4;
 import me.cortex.voxy.client.core.rendering.building.RenderGenerationService;
 import me.cortex.voxy.client.core.rendering.post.PostProcessing;
-import me.cortex.voxy.client.core.util.DebugUtil;
+import me.cortex.voxy.client.core.rendering.util.DownloadStream;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.client.saver.ContextSelectionSystem;
+import me.cortex.voxy.client.taskbar.Taskbar;
+import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.world.WorldEngine;
-import me.cortex.voxy.client.importers.WorldImporter;
+import me.cortex.voxy.commonImpl.importers.WorldImporter;
+import me.cortex.voxy.common.thread.ServiceThreadPool;
+import me.cortex.voxy.common.world.WorldSection;
+import me.cortex.voxy.common.world.other.Mapper;
+import me.cortex.voxy.commonImpl.VoxyCommon;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.hud.BossBarHud;
 import net.minecraft.client.gui.hud.ClientBossBar;
 import net.minecraft.client.render.Camera;
 import net.minecraft.client.render.Frustum;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.boss.BossBar;
-import net.minecraft.entity.boss.ServerBossBar;
-import net.minecraft.registry.RegistryKeys;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.world.World;
@@ -30,9 +37,11 @@ import org.lwjgl.opengl.GL11;
 
 import java.io.File;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 
-import static org.lwjgl.opengl.GL30C.GL_DRAW_FRAMEBUFFER_BINDING;
-import static org.lwjgl.opengl.GL30C.GL_FRAMEBUFFER;
+import static org.lwjgl.opengl.GL30C.*;
 
 //Core class that ingests new data from sources and updates the required systems
 
@@ -48,184 +57,47 @@ import static org.lwjgl.opengl.GL30C.GL_FRAMEBUFFER;
 
 //There is strict forward only dataflow
 //Ingest -> world engine -> raw render data -> render data
+
+
+
+//REDESIGN THIS PIECE OF SHIT SPAGETTY SHIT FUCK
+// like Get rid of interactor and renderer being seperate just fucking put them together
+// fix the callback bullshit spagetti
+//REMOVE setRenderGen like holy hell
 public class VoxelCore {
     private final WorldEngine world;
-    private final DistanceTracker distanceTracker;
-    private final RenderGenerationService renderGen;
-    private final RenderTracker renderTracker;
+    public final ServiceThreadPool serviceThreadPool;
+    public final WorldImportWrapper importer;
 
-    private final AbstractFarWorldRenderer renderer;
-    private final ViewportSelector viewportSelector;
-    private final PostProcessing postProcessing;
-
-    //private final Thread shutdownThread = new Thread(this::shutdown);
-
-    private WorldImporter importer;
     public VoxelCore(ContextSelectionSystem.Selection worldSelection) {
-        this.world = worldSelection.createEngine();
         var cfg = worldSelection.getConfig();
-        System.out.println("Initializing voxy core");
+        this.serviceThreadPool = new ServiceThreadPool(VoxyConfig.CONFIG.serviceThreads);
 
-        //Trigger the shared index buffer loading
-        SharedIndexBuffer.INSTANCE.id();
-        Capabilities.init();//Ensure clinit is called
-        this.renderer = this.createRenderBackend();
-        this.viewportSelector = new ViewportSelector<>(this.renderer::createViewport);
-        System.out.println("Renderer initialized");
+        this.world = null;//worldSelection.createEngine(this.serviceThreadPool);
+        Logger.info("Initializing voxy core");
 
-        this.renderTracker = new RenderTracker(this.world, this.renderer);
-        this.renderGen = new RenderGenerationService(this.world, this.renderer.getModelManager(), VoxyConfig.CONFIG.renderThreads, this.renderTracker::processBuildResult, this.renderer.usesMeshlets());
-        this.world.setDirtyCallback(this.renderTracker::sectionUpdated);
-        this.renderTracker.setRenderGen(this.renderGen);
-        System.out.println("Render tracker and generator initialized");
+        this.importer = new WorldImportWrapper(this.serviceThreadPool, this.world);
 
-        //To get to chunk scale multiply the scale by 2, the scale is after how many chunks does the lods halve
-        int q = VoxyConfig.CONFIG.qualityScale;
-        int minY = MinecraftClient.getInstance().world.getBottomSectionCoord()/2;
-        int maxY = MinecraftClient.getInstance().world.getTopSectionCoord()/2;
+        Logger.info("Voxy core initialized");
 
-        if (cfg.minYOverride != Integer.MAX_VALUE) {
-            minY = cfg.minYOverride;
-        }
+        //this.verifyTopNodeChildren(0,0,0);
 
-        if (cfg.maxYOverride != Integer.MIN_VALUE) {
-            maxY = cfg.maxYOverride;
-        }
+        //this.testMeshingPerformance();
 
-        this.distanceTracker = new DistanceTracker(this.renderTracker, new int[]{q,q,q,q},
-                (VoxyConfig.CONFIG.renderDistance<0?VoxyConfig.CONFIG.renderDistance:((VoxyConfig.CONFIG.renderDistance+1)/2)),
-                minY, maxY);
-        System.out.println("Distance tracker initialized");
-
-        this.postProcessing = new PostProcessing();
-
-        this.world.getMapper().setCallbacks(this.renderer::addBlockState, this.renderer::addBiome);
-
-
-        ////Resave the db incase it failed a recovery
-        //this.world.getMapper().forceResaveStates();
-
-        var biomeRegistry = MinecraftClient.getInstance().world.getRegistryManager().get(RegistryKeys.BIOME);
-        for (var biome : this.world.getMapper().getBiomeEntries()) {
-            //this.renderer.getModelManager().addBiome(biome.id, biomeRegistry.get(new Identifier(biome.biome)));
-            this.renderer.addBiome(biome);
-        }
-
-        for (var state : this.world.getMapper().getStateEntries()) {
-            //this.renderer.getModelManager().addEntry(state.id, state.state);
-            this.renderer.addBlockState(state);
-        }
-        //this.renderer.getModelManager().updateEntry(0, Blocks.GRASS_BLOCK.getDefaultState());
-
-        System.out.println("Voxy core initialized");
-    }
-
-    private AbstractFarWorldRenderer<?,?> createRenderBackend() {
-        if (false) {
-            System.out.println("Using Gl46MeshletFarWorldRendering");
-            return new Gl46MeshletsFarWorldRenderer(VoxyConfig.CONFIG.geometryBufferSize, VoxyConfig.CONFIG.maxSections);
-        } else {
-            if (VoxyConfig.CONFIG.useMeshShaders()) {
-                System.out.println("Using NvMeshFarWorldRenderer");
-                return new NvMeshFarWorldRenderer(VoxyConfig.CONFIG.geometryBufferSize, VoxyConfig.CONFIG.maxSections);
-            } else {
-                System.out.println("Using Gl46FarWorldRenderer");
-                return new Gl46FarWorldRenderer(VoxyConfig.CONFIG.geometryBufferSize, VoxyConfig.CONFIG.maxSections);
-            }
-        }
-    }
-
-
-    public void enqueueIngest(WorldChunk worldChunk) {
-        this.world.ingestService.enqueueIngest(worldChunk);
-    }
-
-    boolean firstTime = true;
-    public void renderSetup(Frustum frustum, Camera camera) {
-        if (this.firstTime) {
-            this.distanceTracker.init(camera.getBlockPos().getX(), camera.getBlockPos().getZ());
-            this.firstTime = false;
-            //this.renderTracker.addLvl0(0,6,0);
-        }
-        this.distanceTracker.setCenter(camera.getBlockPos().getX(), camera.getBlockPos().getY(), camera.getBlockPos().getZ());
-        this.renderer.setupRender(frustum, camera);
-    }
-
-    private static Matrix4f makeProjectionMatrix(float near, float far) {
-        //TODO: use the existing projection matrix use mulLocal by the inverse of the projection and then mulLocal our projection
-
-        var projection = new Matrix4f();
-        var client = MinecraftClient.getInstance();
-        var gameRenderer = client.gameRenderer;
-
-        float fov = (float) gameRenderer.getFov(gameRenderer.getCamera(), client.getTickDelta(), true);
-
-        projection.setPerspective(fov * 0.01745329238474369f,
-                (float) client.getWindow().getFramebufferWidth() / (float)client.getWindow().getFramebufferHeight(),
-                near, far);
-        return projection;
-    }
-
-    private static Matrix4f computeProjectionMat() {
-        return new Matrix4f(RenderSystem.getProjectionMatrix()).mulLocal(
-                makeProjectionMatrix(0.05f, MinecraftClient.getInstance().gameRenderer.getFarPlaneDistance()).invert()
-        ).mulLocal(makeProjectionMatrix(16, 16*3000));
-    }
-
-    public void renderOpaque(MatrixStack matrices, double cameraX, double cameraY, double cameraZ) {
-        if (IrisUtil.irisShadowActive()) {
-            return;
-        }
-        matrices.push();
-        matrices.translate(-cameraX, -cameraY, -cameraZ);
-        DebugUtil.setPositionMatrix(matrices);
-        matrices.pop();
-        //this.renderer.getModelManager().updateEntry(0, Blocks.DIRT_PATH.getDefaultState());
-
-        //this.renderer.getModelManager().updateEntry(0, Blocks.COMPARATOR.getDefaultState());
-        //this.renderer.getModelManager().updateEntry(0, Blocks.OAK_LEAVES.getDefaultState());
-
-        //var fb = Iris.getPipelineManager().getPipelineNullable().getSodiumTerrainPipeline().getTerrainSolidFramebuffer();
-        //fb.bind();
-
-        var projection = computeProjectionMat();
-        //var projection = RenderSystem.getProjectionMatrix();//computeProjectionMat();
-        var viewport = this.viewportSelector.getViewport();
-        viewport
-                .setProjection(projection)
-                .setModelView(matrices.peek().getPositionMatrix())
-                .setCamera(cameraX, cameraY, cameraZ)
-                .setScreenSize(MinecraftClient.getInstance().getFramebuffer().textureWidth, MinecraftClient.getInstance().getFramebuffer().textureHeight);
-
-        int boundFB = GL11.glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING);
-        this.postProcessing.setup(MinecraftClient.getInstance().getFramebuffer().textureWidth, MinecraftClient.getInstance().getFramebuffer().textureHeight, boundFB);
-
-        this.renderer.renderFarAwayOpaque(viewport);
-
-        //Compute the SSAO of the rendered terrain
-        this.postProcessing.computeSSAO(projection, matrices);
-
-        //We can render the translucent directly after as it is the furthest translucent objects
-        this.renderer.renderFarAwayTranslucent(viewport);
-
-
-        this.postProcessing.renderPost(projection, RenderSystem.getProjectionMatrix(), boundFB);
-
+        //this.testDbPerformance();
+        //this.testFullMesh();
     }
 
     public void addDebugInfo(List<String> debug) {
         debug.add("");
         debug.add("");
-        debug.add("Voxy Core: " + Voxy.VERSION);
         /*
         debug.add("Ingest service tasks: " + this.world.ingestService.getTaskCount());
         debug.add("Saving service tasks: " + this.world.savingService.getTaskCount());
         debug.add("Render service tasks: " + this.renderGen.getTaskCount());
          */
-        debug.add("I/S/R tasks: " + this.world.ingestService.getTaskCount() + "/"+this.world.savingService.getTaskCount()+"/"+this.renderGen.getTaskCount());
-        debug.add("Loaded cache sizes: " + Arrays.toString(this.world.getLoadedSectionCacheSizes()));
-        debug.add("Mesh cache count: " + this.renderGen.getMeshCacheCount());
-        this.renderer.addDebugData(debug);
+        this.world.addDebugData(debug);
+
     }
 
     //Note: when doing translucent rendering, only need to sort when generating the geometry, or when crossing into the center zone
@@ -233,52 +105,204 @@ public class VoxelCore {
     // since they are AABBS crossing the normal is impossible without one of the axis being equal
 
     public void shutdown() {
+
         //if (Thread.currentThread() != this.shutdownThread) {
         //    Runtime.getRuntime().removeShutdownHook(this.shutdownThread);
         //}
 
         //this.world.getMapper().forceResaveStates();
-        if (this.importer != null) {
-            System.out.println("Shutting down importer");
-            try {this.importer.shutdown();this.importer = null;} catch (Exception e) {System.err.println(e);}
-        }
-        System.out.println("Shutting down voxel core");
-        try {this.renderGen.shutdown();} catch (Exception e) {System.err.println(e);}
-        System.out.println("Render gen shut down");
-        try {this.world.shutdown();} catch (Exception e) {System.err.println(e);}
-        System.out.println("World engine shut down");
-        try {this.renderer.shutdown(); this.viewportSelector.free();} catch (Exception e) {System.err.println(e);}
-        System.out.println("Renderer shut down");
-        if (this.postProcessing!=null){try {this.postProcessing.shutdown();} catch (Exception e) {System.err.println(e);}}
-        System.out.println("Voxel core shut down");
-    }
-
-    public boolean createWorldImporter(World mcWorld, File worldPath) {
-        if (this.importer != null) {
-            return false;
-        }
-        var importer = new WorldImporter(this.world, mcWorld);
-        var bossBar = new ClientBossBar(MathHelper.randomUuid(), Text.of("Voxy world importer"), 0.0f, BossBar.Color.GREEN, BossBar.Style.PROGRESS, false, false, false);
-        MinecraftClient.getInstance().inGameHud.getBossBarHud().bossBars.put(bossBar.getUuid(), bossBar);
-        importer.importWorldAsyncStart(worldPath, 4, (a,b)->
-                MinecraftClient.getInstance().executeSync(()-> {
-                    bossBar.setPercent(((float) a)/((float) b));
-                    bossBar.setName(Text.of("Voxy import: "+ a+"/"+b + " region files"));
-                }),
-                ()-> {
-                    MinecraftClient.getInstance().executeSync(()-> {
-                        MinecraftClient.getInstance().inGameHud.getBossBarHud().bossBars.remove(bossBar.getUuid());
-                        String msg = "Voxy world import finished";
-                        MinecraftClient.getInstance().inGameHud.getChatHud().addMessage(Text.literal(msg));
-                        System.err.println(msg);
-                    });
-                    this.importer = null;
-                });
-        this.importer = importer;
-        return true;
+        this.importer.shutdown();
+        Logger.info("Shutting down world engine");
+        try {this.world.free();} catch (Exception e) {Logger.error("Error shutting down world engine", e);}
+        Logger.info("Shutting down service thread pool");
+        this.serviceThreadPool.shutdown();
+        Logger.info("Voxel core shut down");
     }
 
     public WorldEngine getWorldEngine() {
         return this.world;
+    }
+
+
+
+
+
+    private void verifyTopNodeChildren(int X, int Y, int Z) {
+        for (int lvl = 0; lvl < 5; lvl++) {
+            for (int y = (Y<<5)>>lvl; y < ((Y+1)<<5)>>lvl; y++) {
+                for (int x = (X<<5)>>lvl; x < ((X+1)<<5)>>lvl; x++) {
+                    for (int z = (Z<<5)>>lvl; z < ((Z+1)<<5)>>lvl; z++) {
+                        if (lvl == 0) {
+                            var own = this.world.acquire(lvl, x, y, z);
+                            if ((own.getNonEmptyChildren() != 0) ^ (own.getNonEmptyBlockCount() != 0)) {
+                                Logger.error("Lvl 0 node not marked correctly " + WorldEngine.pprintPos(own.key));
+                            }
+                            own.release();
+                        } else {
+                            byte msk = 0;
+                            for (int child = 0; child < 8; child++) {
+                                var section = this.world.acquire(lvl-1, (child&1)+(x<<1), ((child>>2)&1)+(y<<1), ((child>>1)&1)+(z<<1));
+                                msk |= (byte) (section.getNonEmptyBlockCount()!=0?(1<<child):0);
+                                section.release();
+                            }
+                            var own = this.world.acquire(lvl, x, y, z);
+                            if (own.getNonEmptyChildren() != msk) {
+                                Logger.error("Section empty child mask not correct " + WorldEngine.pprintPos(own.key) + " got: " + String.format("%8s", Integer.toBinaryString(Byte.toUnsignedInt(own.getNonEmptyChildren()))).replace(' ', '0') + " expected: " + String.format("%8s", Integer.toBinaryString(Byte.toUnsignedInt(msk))).replace(' ', '0'));
+                            }
+                            own.release();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
+
+
+
+
+    private void testMeshingPerformance() {
+        var modelService = new ModelBakerySubsystem(this.world.getMapper());
+        var factory = new RenderDataFactory4(this.world, modelService.factory, false);
+
+        List<WorldSection> sections = new ArrayList<>();
+
+        System.out.println("Loading sections");
+        for (int x = -17; x <= 17; x++) {
+            for (int z = -17; z <= 17; z++) {
+                for (int y = -1; y <= 4; y++) {
+                    var section = this.world.acquire(0, x, y, z);
+
+                    int nonAir = 0;
+                    for (long state : section.copyData()) {
+                        nonAir += Mapper.isAir(state)?0:1;
+                        modelService.requestBlockBake(Mapper.getBlockId(state));
+                    }
+
+                    if (nonAir > 500 && Math.abs(x) <= 16 && Math.abs(z) <= 16) {
+                        sections.add(section);
+                    } else {
+                        section.release();
+                    }
+                }
+            }
+        }
+
+        System.out.println("Baking models");
+        {
+            //Bake everything
+            while (!modelService.areQueuesEmpty()) {
+                modelService.tick();
+                glFinish();
+            }
+        }
+
+        System.out.println("Ready!");
+
+        {
+            int iteration = 0;
+            while (true) {
+                long start = System.currentTimeMillis();
+                for (var section : sections) {
+                    var mesh = factory.generateMesh(section);
+
+                    mesh.free();
+                }
+                long delta = System.currentTimeMillis() - start;
+                System.out.println("Iteration: " + (iteration++) + " took " + delta + "ms, for an average of " + ((float)delta/sections.size()) + "ms per section");
+                //System.out.println("Quad count: " + factory.quadCount);
+            }
+        }
+
+    }
+
+
+    private void testDbPerformance() {
+        Random r = new Random(123456);
+        r.nextLong();
+        long start = System.currentTimeMillis();
+        int c = 0;
+        for (int i = 0; i < 500_000; i++) {
+            if (i == 20_000) {
+                c = 0;
+                start = System.currentTimeMillis();
+            }
+            c++;
+            int x = (r.nextInt(256*2+2)-256)>>1;//-32
+            int z = (r.nextInt(256*2+2)-256)>>1;//-32
+            int y = 0;
+            int lvl = 0;//r.nextInt(5);
+            this.world.acquire(WorldEngine.getWorldSectionId(lvl, x>>lvl, y>>lvl, z>>lvl)).release();
+        }
+        long delta = System.currentTimeMillis() - start;
+        System.out.println("Total "+delta+"ms " + ((double)delta/c) + "ms average" );
+    }
+
+
+
+    private void testFullMesh() {
+        var modelService = new ModelBakerySubsystem(this.world.getMapper());
+        var completedCounter = new AtomicInteger();
+        var generationService = new RenderGenerationService(this.world, modelService, this.serviceThreadPool, a-> {completedCounter.incrementAndGet(); a.free();}, false);
+
+
+        var r = new Random(12345);
+        {
+            for (int i = 0; i < 10_000; i++) {
+                int x = (r.nextInt(256*2+2)-256)>>1;//-32
+                int z = (r.nextInt(256*2+2)-256)>>1;//-32
+                int y = r.nextInt(10)-2;
+                int lvl = 0;//r.nextInt(5);
+                long key = WorldEngine.getWorldSectionId(lvl, x>>lvl, y>>lvl, z>>lvl);
+                generationService.enqueueTask(key);
+            }
+            int i = 0;
+            while (true) {
+                modelService.tick();
+                if (i++%5000==0)
+                    System.out.println(completedCounter.get());
+                glFinish();
+                List<String> a = new ArrayList<>();
+                generationService.addDebugData(a);
+                if (a.getFirst().endsWith(" 0")) {
+                    break;
+                }
+            }
+        }
+
+        System.out.println("Running benchmark");
+        while (true)
+        {
+            completedCounter.set(0);
+            long start = System.currentTimeMillis();
+            int C = 200_000;
+            for (int i = 0; i < C; i++) {
+                int x = (r.nextInt(256 * 2 + 2) - 256) >> 1;//-32
+                int z = (r.nextInt(256 * 2 + 2) - 256) >> 1;//-32
+                int y = r.nextInt(10) - 2;
+                int lvl = 0;//r.nextInt(5);
+                long key = WorldEngine.getWorldSectionId(lvl, x >> lvl, y >> lvl, z >> lvl);
+                generationService.enqueueTask(key);
+            }
+            //int i = 0;
+            while (true) {
+                //if (i++%5000==0)
+                //    System.out.println(completedCounter.get());
+                modelService.tick();
+                glFinish();
+                List<String> a = new ArrayList<>();
+                generationService.addDebugData(a);
+                if (a.getFirst().endsWith(" 0")) {
+                    break;
+                }
+            }
+            long delta = (System.currentTimeMillis()-start);
+            System.out.println("Time "+delta+"ms count: " + completedCounter.get() + " avg per mesh: " + ((double)delta/completedCounter.get()) + "ms");
+            if (false)
+                break;
+        }
+        generationService.shutdown();
+        modelService.shutdown();
     }
 }

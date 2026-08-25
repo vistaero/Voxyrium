@@ -23,7 +23,9 @@ void main() {
     //vec4 colour = solidColour;
     vec4 colour = texture(blockModelAtlas, uv + baseUV, ((flags>>1)&1u)*-4.0);
     if ((flags&1u) == 1 && colour.a <= 0.25f) {
+        #ifndef DEBUG_RENDER
         discard;
+        #endif
     }
 
     //Conditional tinting, TODO: FIXME: REPLACE WITH MASK OR SOMETHING, like encode data into the top bit of alpha

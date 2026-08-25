@@ -1,14 +1,17 @@
 package me.cortex.voxy.client.saver;
 
 import me.cortex.voxy.client.config.VoxyConfig;
-import me.cortex.voxy.common.storage.StorageBackend;
-import me.cortex.voxy.common.storage.compressors.ZSTDCompressor;
-import me.cortex.voxy.common.storage.config.ConfigBuildCtx;
+import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.common.config.section.SectionStorageConfig;
+import me.cortex.voxy.common.config.section.SectionSerializationStorage;
+import me.cortex.voxy.common.config.section.SectionStorage;
+import me.cortex.voxy.common.config.compressors.ZSTDCompressor;
+import me.cortex.voxy.common.config.ConfigBuildCtx;
 import me.cortex.voxy.common.config.Serialization;
-import me.cortex.voxy.common.storage.config.StorageConfig;
-import me.cortex.voxy.common.storage.other.CompressionStorageAdaptor;
-import me.cortex.voxy.common.storage.rocksdb.RocksDBStorageBackend;
+import me.cortex.voxy.common.config.storage.other.CompressionStorageAdaptor;
+import me.cortex.voxy.common.config.storage.rocksdb.RocksDBStorageBackend;
 import me.cortex.voxy.common.world.WorldEngine;
+import me.cortex.voxy.common.thread.ServiceThreadPool;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.WorldSavePath;
@@ -25,9 +28,9 @@ public class ContextSelectionSystem {
     public static class WorldConfig {
         public int minYOverride = Integer.MAX_VALUE;
         public int maxYOverride = Integer.MIN_VALUE;
-        public StorageConfig storageConfig;
+        public SectionStorageConfig sectionStorageConfig;
     }
-    public static final String DEFAULT_STORAGE_CONFIG;
+    public static final WorldConfig DEFAULT_STORAGE_CONFIG;
     static {
         var config = new WorldConfig();
 
@@ -35,18 +38,17 @@ public class ContextSelectionSystem {
         var baseDB = new RocksDBStorageBackend.Config();
 
         var compressor = new ZSTDCompressor.Config();
-        compressor.compressionLevel = 7;
+        compressor.compressionLevel = 3;
 
         var compression = new CompressionStorageAdaptor.Config();
         compression.delegate = baseDB;
         compression.compressor = compressor;
 
-        config.storageConfig = compression;
-        DEFAULT_STORAGE_CONFIG = Serialization.GSON.toJson(config);
+        var serializer = new SectionSerializationStorage.Config();
+        serializer.storage = compression;
+        config.sectionStorageConfig = serializer;
 
-        if (Serialization.GSON.fromJson(DEFAULT_STORAGE_CONFIG, WorldConfig.class) == null) {
-            throw new IllegalStateException();
-        }
+        DEFAULT_STORAGE_CONFIG = config;
     }
 
     public static class Selection {
@@ -70,34 +72,32 @@ public class ContextSelectionSystem {
                     if (this.config == null) {
                         throw new IllegalStateException("Config deserialization null, reverting to default");
                     }
+                    if (this.config.sectionStorageConfig == null) {
+                        throw new IllegalStateException("Config section storage null, reverting to default");
+                    }
                     return;
                 } catch (Exception e) {
-                    System.err.println("Failed to load the storage configuration file, resetting it to default");
-                    e.printStackTrace();
+                    Logger.error("Failed to load the storage configuration file, resetting it to default, this will probably break your save if you used a custom storage config", e);
                 }
             }
 
             try {
-                this.config = Serialization.GSON.fromJson(VoxyConfig.CONFIG.defaultSaveConfig, WorldConfig.class);
+                this.config = DEFAULT_STORAGE_CONFIG;
                 this.save();
             } catch (Exception e) {
                 throw new RuntimeException("Failed to deserialize the default config, aborting!", e);
             }
             if (this.config == null) {
-                throw new IllegalStateException("Config is still null: \n"+VoxyConfig.CONFIG.defaultSaveConfig);
+                throw new IllegalStateException("Config is still null\n");
             }
         }
 
-        public StorageBackend createStorageBackend() {
+        public SectionStorage createSectionStorageBackend() {
             var ctx = new ConfigBuildCtx();
             ctx.setProperty(ConfigBuildCtx.BASE_SAVE_PATH, this.selectionFolder.toString());
             ctx.setProperty(ConfigBuildCtx.WORLD_IDENTIFIER, this.worldId);
             ctx.pushPath(ConfigBuildCtx.DEFAULT_STORAGE_PATH);
-            return this.config.storageConfig.build(ctx);
-        }
-
-        public WorldEngine createEngine() {
-            return new WorldEngine(this.createStorageBackend(), VoxyConfig.CONFIG.ingestThreads, VoxyConfig.CONFIG.savingThreads, 5);
+            return this.config.sectionStorageConfig.build(ctx);
         }
 
         //Saves the config for the world selection or something, need to figure out how to make it work with dimensional configs maybe?
@@ -128,12 +128,12 @@ public class ContextSelectionSystem {
         } else {
             var netHandle = MinecraftClient.getInstance().interactionManager;
             if (netHandle == null) {
-                System.err.println("Network handle null");
+                Logger.error("Network handle null");
                 basePath = basePath.resolve("UNKNOWN");
             } else {
                 var info = netHandle.networkHandler.getServerInfo();
                 if (info == null) {
-                    System.err.println("Server info null");
+                    Logger.error("Server info null");
                     basePath = basePath.resolve("UNKNOWN");
                 } else {
                     if (info.isRealm()) {

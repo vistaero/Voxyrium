@@ -1,16 +1,19 @@
 package me.cortex.voxy.common.world.other;
 
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
-import me.cortex.voxy.common.storage.StorageBackend;
+import me.cortex.voxy.common.config.IMappingStorage;
+import me.cortex.voxy.common.config.section.SectionStorage;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.NbtOps;
-import net.minecraft.nbt.NbtTagSizeTracker;
+import net.minecraft.nbt.NbtSizeTracker;
 import net.minecraft.registry.entry.RegistryEntry;
 import net.minecraft.util.Pair;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.EmptyBlockView;
 import net.minecraft.world.biome.Biome;
 import org.lwjgl.system.MemoryUtil;
 
@@ -29,7 +32,7 @@ public class Mapper {
     private static final int BLOCK_STATE_TYPE = 1;
     private static final int BIOME_TYPE = 2;
 
-    private final StorageBackend storage;
+    private final IMappingStorage storage;
     public static final long UNKNOWN_MAPPING = -1;
     public static final long AIR = 0;
 
@@ -40,7 +43,7 @@ public class Mapper {
 
     private Consumer<StateEntry> newStateCallback;
     private Consumer<BiomeEntry> newBiomeCallback;
-    public Mapper(StorageBackend storage) {
+    public Mapper(IMappingStorage storage) {
         this.storage = storage;
         //Insert air since its a special entry (index 0)
         var airEntry = new StateEntry(0, Blocks.AIR.getDefaultState());
@@ -52,7 +55,9 @@ public class Mapper {
 
 
     public static boolean isAir(long id) {
-        return ((id>>27)&((1<<20)-1)) == 0;
+        int bId = getBlockId(id);
+        //Note: air can mean void, cave or normal air, as the block state is remapped during ingesting
+        return bId == 0;
     }
 
     public static int getBlockId(long id) {
@@ -71,8 +76,11 @@ public class Mapper {
         return (id&(~(0xFFL<<56)))|(Integer.toUnsignedLong(light)<<56);
     }
 
-    public void setCallbacks(Consumer<StateEntry> stateCallback, Consumer<BiomeEntry> biomeCallback) {
+    public void setStateCallback(Consumer<StateEntry> stateCallback) {
         this.newStateCallback = stateCallback;
+    }
+
+    public void setBiomeCallback(Consumer<BiomeEntry> biomeCallback) {
         this.newBiomeCallback = biomeCallback;
     }
 
@@ -133,7 +141,7 @@ public class Mapper {
 
         bentries.stream().sorted(Comparator.comparing(a->a.id)).forEach(entry -> {
             if (this.biomeId2biomeEntry.size() != entry.id) {
-                throw new IllegalStateException("Biome entry not ordered");
+                throw new IllegalStateException("Biome entry not ordered. got " + entry.biome + " with id " + entry.id + " expected id " + this.biomeId2biomeEntry.size());
             }
             this.biomeId2biomeEntry.add(entry);
         });
@@ -157,7 +165,7 @@ public class Mapper {
     }
 
     private synchronized BiomeEntry registerNewBiome(String biome) {
-        BiomeEntry entry = new BiomeEntry(this.biome2biomeEntry.size(), biome);
+        BiomeEntry entry = new BiomeEntry(this.biomeId2biomeEntry.size(), biome);
         //this.biome2biomeEntry.put(biome, entry);
         this.biomeId2biomeEntry.add(entry);
 
@@ -185,9 +193,19 @@ public class Mapper {
 
     //TODO: replace lambda with a class cached lambda ref (cause doing this:: still does a lambda allocation)
     public int getIdForBlockState(BlockState state) {
+        if (state.isAir()) {
+            return 0;
+        }
         return this.block2stateEntry.computeIfAbsent(state, this::registerNewBlockState).id;
     }
 
+    public int getBlockStateOpacity(long mappingId) {
+        return this.getBlockStateOpacity(getBlockId(mappingId));
+    }
+
+    public int getBlockStateOpacity(int blockId) {
+        return this.blockId2stateEntry.get(blockId).opacity;
+    }
 
     //TODO: replace lambda with a class cached lambda ref (cause doing this:: still does a lambda allocation)
     public int getIdForBiome(RegistryEntry<Biome> biome) {
@@ -240,7 +258,7 @@ public class Mapper {
                 continue;
             }
             if (this.blockId2stateEntry.indexOf(entry) != entry.id) {
-                throw new IllegalStateException("State Id NOT THE SAME, very critically bad");
+                throw new IllegalStateException("State Id NOT THE SAME, very critically bad. arr:" + this.blockId2stateEntry.indexOf(entry) + " entry: " + entry.id);
             }
             byte[] serialized = entry.serialize();
             ByteBuffer buffer = MemoryUtil.memAlloc(serialized.length);
@@ -266,13 +284,19 @@ public class Mapper {
         this.storage.flush();
     }
 
+    public void close() {
+
+    }
+
 
     public static final class StateEntry {
         public final int id;
         public final BlockState state;
+        public final int opacity;
         public StateEntry(int id, BlockState state) {
             this.id = id;
             this.state = state;
+            this.opacity = state.getOpacity(EmptyBlockView.INSTANCE, BlockPos.ORIGIN);
         }
 
         public byte[] serialize() {
@@ -290,11 +314,11 @@ public class Mapper {
 
         public static StateEntry deserialize(int id, byte[] data) {
             try {
-                var compound = NbtIo.readCompressed(new ByteArrayInputStream(data), NbtTagSizeTracker.ofUnlimitedBytes());
+                var compound = NbtIo.readCompressed(new ByteArrayInputStream(data), NbtSizeTracker.ofUnlimitedBytes());
                 if (compound.getInt("id") != id) {
                     throw new IllegalStateException("Encoded id != expected id");
                 }
-                BlockState state = BlockState.CODEC.parse(NbtOps.INSTANCE, compound.getCompound("block_state")).get().orThrow();
+                BlockState state = BlockState.CODEC.parse(NbtOps.INSTANCE, compound.getCompound("block_state")).getOrThrow();
                 return new StateEntry(id, state);
             } catch (IOException e) {
                 throw new RuntimeException(e);
@@ -326,7 +350,7 @@ public class Mapper {
 
         public static BiomeEntry deserialize(int id, byte[] data) {
             try {
-                var compound = NbtIo.readCompressed(new ByteArrayInputStream(data), NbtTagSizeTracker.ofUnlimitedBytes());
+                var compound = NbtIo.readCompressed(new ByteArrayInputStream(data), NbtSizeTracker.ofUnlimitedBytes());
                 if (compound.getInt("id") != id) {
                     throw new IllegalStateException("Encoded id != expected id");
                 }

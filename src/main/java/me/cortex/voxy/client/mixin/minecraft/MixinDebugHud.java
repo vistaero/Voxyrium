@@ -1,6 +1,7 @@
 package me.cortex.voxy.client.mixin.minecraft;
 
-import me.cortex.voxy.client.core.IGetVoxelCore;
+import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
+import me.cortex.voxy.commonImpl.VoxyCommon;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.hud.DebugHud;
 import org.spongepowered.asm.mixin.Mixin;
@@ -15,9 +16,15 @@ public class MixinDebugHud {
     @Inject(method = "getRightText", at = @At("TAIL"))
     private void injectDebug(CallbackInfoReturnable<List<String>> cir) {
         var ret = cir.getReturnValue();
-        var core = ((IGetVoxelCore) MinecraftClient.getInstance().worldRenderer).getVoxelCore();
-        if (core != null) {
-            core.addDebugInfo(ret);
+        var instance = VoxyCommon.getInstance();
+        if (instance != null) {
+            ret.add("");
+            ret.add("");
+            instance.addDebug(ret);
+        }
+        var renderer = ((IGetVoxyRenderSystem) MinecraftClient.getInstance().worldRenderer).getVoxyRenderSystem();
+        if (renderer != null) {
+            renderer.addDebugInfo(ret);
         }
     }
 }

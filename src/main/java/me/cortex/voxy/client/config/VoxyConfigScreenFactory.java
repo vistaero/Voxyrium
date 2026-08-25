@@ -2,8 +2,9 @@ package me.cortex.voxy.client.config;
 
 import com.terraformersmc.modmenu.api.ConfigScreenFactory;
 import com.terraformersmc.modmenu.api.ModMenuApi;
-import me.cortex.voxy.client.core.IGetVoxelCore;
-import me.shedaniel.clothconfig2.ClothConfigDemo;
+import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
+import me.cortex.voxy.commonImpl.IVoxyWorld;
+import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.shedaniel.clothconfig2.api.ConfigBuilder;
 import me.shedaniel.clothconfig2.api.ConfigCategory;
 import me.shedaniel.clothconfig2.api.ConfigEntryBuilder;
@@ -11,10 +12,12 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.text.Text;
 
-import java.util.List;
-
 public class VoxyConfigScreenFactory implements ModMenuApi {
     private static VoxyConfig DEFAULT;
+
+    private static boolean ON_SAVE_RELOAD_ALL = false;
+    private static boolean ON_SAVE_RELOAD_RENDERER = false;
+
     @Override
     public ConfigScreenFactory<?> getModConfigScreenFactory() {
         return parent -> buildConfigScreen(parent, VoxyConfig.CONFIG);
@@ -30,43 +33,64 @@ public class VoxyConfigScreenFactory implements ModMenuApi {
 
 
         addGeneralCategory(builder, config);
-        addThreadsCategory(builder, config);
-        addStorageCategory(builder, config);
+        //addThreadsCategory(builder, config);
+        //addStorageCategory(builder, config);
 
         builder.setSavingRunnable(() -> {
             //After saving the core should be reloaded/reset
-            var world = (IGetVoxelCore)MinecraftClient.getInstance().worldRenderer;
-            if (world != null) {
-                world.reloadVoxelCore();
+            var worldRenderer = MinecraftClient.getInstance().worldRenderer;
+            var world = ((IVoxyWorld) MinecraftClient.getInstance().world);
+            if (worldRenderer != null && (ON_SAVE_RELOAD_ALL||ON_SAVE_RELOAD_RENDERER)) {
+                //Shudown renderer
+                ((IGetVoxyRenderSystem) worldRenderer).shutdownRenderer();
             }
+            //Shutdown world
+            if (world != null && ON_SAVE_RELOAD_ALL) {
+                //This is a hack inserted for the client world thing
+                //TODO: FIXME: MAKE BETTER
+                var engine = world.getWorldEngine();
+                if (engine != null) {
+                    VoxyCommon.getInstance().stopWorld(engine);
+                }
+                world.setWorldEngine(null);
+            }
+            //Shutdown instance
+            if (ON_SAVE_RELOAD_ALL) {
+                VoxyCommon.shutdownInstance();
+
+                //Create instance
+                if (VoxyConfig.CONFIG.enabled)
+                    VoxyCommon.createInstance();
+            }
+
+            if (worldRenderer != null && (ON_SAVE_RELOAD_ALL||ON_SAVE_RELOAD_RENDERER)) {
+                //Create renderer
+                ((IGetVoxyRenderSystem) worldRenderer).createRenderer();
+            }
+
+            ON_SAVE_RELOAD_RENDERER = false;
+            ON_SAVE_RELOAD_ALL = false;
             VoxyConfig.CONFIG.save();
         });
 
         return builder.build();//
     }
 
+    private static void reloadAll() {
+        ON_SAVE_RELOAD_ALL = true;
+    }
+
+    private static void reloadRender() {
+        ON_SAVE_RELOAD_RENDERER = true;
+    }
+
     private static void addGeneralCategory(ConfigBuilder builder, VoxyConfig config) {
-
-
         ConfigCategory category = builder.getOrCreateCategory(Text.translatable("voxy.config.general"));
         ConfigEntryBuilder entryBuilder = builder.entryBuilder();
 
-        /*
-        category.addEntry(entryBuilder.startSubCategory(Text.translatable("aaa"), List.of(entryBuilder.startBooleanToggle(Text.translatable("voxy.config.general.enabled"), config.enabled)
-                .setTooltip(Text.translatable("voxy.config.general.enabled.tooltip"))
-                .setSaveConsumer(val -> config.enabled = val)
-                .setDefaultValue(DEFAULT.enabled)
-                .build(), entryBuilder.startSubCategory(Text.translatable("bbb"), List.of(entryBuilder.startIntSlider(Text.translatable("voxy.config.general.geometryBuffer"), config.geometryBufferSize, (1<<27)/8, ((1<<31)-1)/8)
-                        .setTooltip(Text.translatable("voxy.config.general.geometryBuffer.tooltip"))
-                        .setSaveConsumer(val -> config.geometryBufferSize = val)
-                        .setDefaultValue(DEFAULT.geometryBufferSize)
-                        .build())).build()
-                )).build());
-        */
-
         category.addEntry(entryBuilder.startBooleanToggle(Text.translatable("voxy.config.general.enabled"), config.enabled)
                 .setTooltip(Text.translatable("voxy.config.general.enabled.tooltip"))
-                .setSaveConsumer(val -> config.enabled = val)
+                .setSaveConsumer(val -> {if (config.enabled != val) reloadAll(); config.enabled = val;})
                 .setDefaultValue(DEFAULT.enabled)
                 .build());
 
@@ -76,76 +100,28 @@ public class VoxyConfigScreenFactory implements ModMenuApi {
                 .setDefaultValue(DEFAULT.ingestEnabled)
                 .build());
 
-        category.addEntry(entryBuilder.startIntSlider(Text.translatable("voxy.config.general.quality"), config.qualityScale, 8, 32)
-                .setTooltip(Text.translatable("voxy.config.general.quality.tooltip"))
-                .setSaveConsumer(val -> config.qualityScale = val)
-                .setDefaultValue(DEFAULT.qualityScale)
+        category.addEntry(entryBuilder.startBooleanToggle(Text.translatable("voxy.config.general.rendering"), config.enableRendering)
+                .setTooltip(Text.translatable("voxy.config.general.rendering.tooltip"))
+                .setSaveConsumer(val -> {if (config.enableRendering != val) reloadRender(); config.enableRendering = val;})
+                .setDefaultValue(DEFAULT.enableRendering)
                 .build());
 
-        category.addEntry(entryBuilder.startIntSlider(Text.translatable("voxy.config.general.geometryBuffer"), config.geometryBufferSize, (1<<27)/8, ((1<<31)-1)/8)
-                .setTooltip(Text.translatable("voxy.config.general.geometryBuffer.tooltip"))
-                .setSaveConsumer(val -> config.geometryBufferSize = val)
-                .setDefaultValue(DEFAULT.geometryBufferSize)
+        category.addEntry(entryBuilder.startIntSlider(Text.translatable("voxy.config.general.subDivisionSize"), (int) config.subDivisionSize, 25, 256)
+                .setTooltip(Text.translatable("voxy.config.general.subDivisionSize.tooltip"))
+                .setSaveConsumer(val -> config.subDivisionSize = val)
+                .setDefaultValue((int) DEFAULT.subDivisionSize)
                 .build());
 
-        category.addEntry(entryBuilder.startIntSlider(Text.translatable("voxy.config.general.maxSections"), config.maxSections, 100_000, 400_000)
-                .setTooltip(Text.translatable("voxy.config.general.maxSections.tooltip"))
-                .setSaveConsumer(val -> config.maxSections = val)
-                .setDefaultValue(DEFAULT.maxSections)
-                .build());
-
-        category.addEntry(entryBuilder.startIntField(Text.translatable("voxy.config.general.renderDistance"), config.renderDistance)
-                .setTooltip(Text.translatable("voxy.config.general.renderDistance.tooltip"))
-                .setSaveConsumer(val -> config.renderDistance = val)
-                .setDefaultValue(DEFAULT.renderDistance)
-                .build());
-
-        category.addEntry(entryBuilder.startBooleanToggle(Text.translatable("voxy.config.general.nvmesh"), config.useMeshShaderIfPossible)
-                .setTooltip(Text.translatable("voxy.config.general.nvmesh.tooltip"))
-                .setSaveConsumer(val -> config.useMeshShaderIfPossible = val)
-                .setDefaultValue(DEFAULT.useMeshShaderIfPossible)
-                .build());
-
-        //category.addEntry(entryBuilder.startIntSlider(Text.translatable("voxy.config.general.compression"), config.savingCompressionLevel, 1, 21)
-        //        .setTooltip(Text.translatable("voxy.config.general.compression.tooltip"))
-        //        .setSaveConsumer(val -> config.savingCompressionLevel = val)
-        //        .setDefaultValue(DEFAULT.savingCompressionLevel)
+        //category.addEntry(entryBuilder.startIntSlider(Text.translatable("voxy.config.general.lruCacheSize"), config.secondaryLruCacheSize, 16, 1<<13)
+        //        .setTooltip(Text.translatable("voxy.config.general.lruCacheSize.tooltip"))
+        //        .setSaveConsumer(val ->{if (config.secondaryLruCacheSize != val) reload(); config.secondaryLruCacheSize = val;})
+        //        .setDefaultValue(DEFAULT.secondaryLruCacheSize)
         //        .build());
-    }
 
-    private static void addThreadsCategory(ConfigBuilder builder, VoxyConfig config) {
-        ConfigCategory category = builder.getOrCreateCategory(Text.translatable("voxy.config.threads"));
-        ConfigEntryBuilder entryBuilder = builder.entryBuilder();
-
-        category.addEntry(entryBuilder.startIntSlider(Text.translatable("voxy.config.threads.ingest"), config.ingestThreads, 1, Runtime.getRuntime().availableProcessors())
-                .setTooltip(Text.translatable("voxy.config.ingest.tooltip"))
-                .setSaveConsumer(val -> config.ingestThreads = val)
-                .setDefaultValue(DEFAULT.ingestThreads)
-                .build());
-
-        category.addEntry(entryBuilder.startIntSlider(Text.translatable("voxy.config.threads.saving"), config.savingThreads, 1, Runtime.getRuntime().availableProcessors())
-                .setTooltip(Text.translatable("voxy.config.saving.tooltip"))
-                .setSaveConsumer(val -> config.savingThreads = val)
-                .setDefaultValue(DEFAULT.savingThreads)
-                .build());
-
-        category.addEntry(entryBuilder.startIntSlider(Text.translatable("voxy.config.threads.render"), config.renderThreads, 1, Runtime.getRuntime().availableProcessors())
-                .setTooltip(Text.translatable("voxy.config.render.tooltip"))
-                .setSaveConsumer(val -> config.renderThreads = val)
-                .setDefaultValue(DEFAULT.renderThreads)
+        category.addEntry(entryBuilder.startIntSlider(Text.translatable("voxy.config.general.serviceThreads"), config.serviceThreads, 1, Runtime.getRuntime().availableProcessors())
+                .setTooltip(Text.translatable("voxy.config.general.serviceThreads.tooltip"))
+                .setSaveConsumer(val ->{if (config.serviceThreads != val) reloadAll(); config.serviceThreads = val;})
+                .setDefaultValue(DEFAULT.serviceThreads)
                 .build());
     }
-
-    private static void addStorageCategory(ConfigBuilder builder, VoxyConfig config) {
-        ConfigCategory category = builder.getOrCreateCategory(Text.translatable("voxy.config.storage"));
-        ConfigEntryBuilder entryBuilder = builder.entryBuilder();
-
-        ////Temporary until i figure out how to do more complex multi layer configuration for storage
-        //category.addEntry(entryBuilder.startStrField(Text.translatable("voxy.config.storage.path"), config.storagePath)
-        //        .setTooltip(Text.translatable("voxy.config.storage.path.tooltip"))
-        //        .setSaveConsumer(val -> config.storagePath = val)
-        //        .setDefaultValue(DEFAULT.storagePath)
-        //        .build());
-    }
-
 }

@@ -1,25 +1,24 @@
 package me.cortex.voxy.client.core.rendering.util;
 
 import it.unimi.dsi.fastutil.longs.LongArrayList;
-import it.unimi.dsi.fastutil.longs.LongConsumer;
-import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.GlFence;
 import me.cortex.voxy.client.core.gl.GlPersistentMappedBuffer;
-import me.cortex.voxy.client.core.util.AllocationArena;
+import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.common.util.AllocationArena;
+import me.cortex.voxy.common.util.MemoryBuffer;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.function.Consumer;
 
-import static me.cortex.voxy.client.core.util.AllocationArena.SIZE_LIMIT;
+import static me.cortex.voxy.common.util.AllocationArena.SIZE_LIMIT;
 import static org.lwjgl.opengl.ARBDirectStateAccess.glCopyNamedBufferSubData;
-import static org.lwjgl.opengl.ARBDirectStateAccess.glFlushMappedNamedBufferRange;
 import static org.lwjgl.opengl.ARBMapBufferRange.*;
 import static org.lwjgl.opengl.GL11.glFinish;
 import static org.lwjgl.opengl.GL42.glMemoryBarrier;
 import static org.lwjgl.opengl.GL42C.GL_BUFFER_UPDATE_BARRIER_BIT;
-import static org.lwjgl.opengl.GL43.GL_SHADER_STORAGE_BARRIER_BIT;
 import static org.lwjgl.opengl.GL44.GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT;
 import static org.lwjgl.opengl.GL44.GL_MAP_COHERENT_BIT;
 
@@ -43,8 +42,30 @@ public class DownloadStream {
 
     private long caddr = -1;
     private long offset = 0;
-    public void download(GlBuffer buffer, long destOffset, long size, DownloadResultConsumer resultConsumer) {
+
+    //Pulls the entire buffer from the gpu
+    public void download(GlBuffer buffer, DownloadResultConsumer resultConsumer) {
+        this.download(buffer, 0, buffer.size(), resultConsumer);
+    }
+
+    public void download(GlBuffer buffer, Consumer<MemoryBuffer> resultConsumer) {
+        this.download(buffer, 0, buffer.size(), resultConsumer);
+    }
+
+    public void download(GlBuffer buffer, long downloadOffset, long size, Consumer<MemoryBuffer> consumer) {
+        this.download(buffer, downloadOffset, size, (ptr,size2)-> {
+            consumer.accept(MemoryBuffer.createUntrackedUnfreeableRawFrom(ptr, size));
+        });
+    }
+
+    public void download(GlBuffer buffer, long downloadOffset, long size, DownloadResultConsumer resultConsumer) {
         if (size > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException();
+        }
+        if (size <= 0) {
+            throw new IllegalArgumentException();
+        }
+        if (downloadOffset+size > buffer.size()) {
             throw new IllegalArgumentException();
         }
 
@@ -52,6 +73,7 @@ public class DownloadStream {
         if (this.caddr == -1 || !this.allocationArena.expand(this.caddr, (int) size)) {
             this.caddr = this.allocationArena.alloc((int) size);//TODO: replace with allocFromLargest
             if (this.caddr == SIZE_LIMIT) {
+                Logger.warn("Download stream full, preemptively committing, this could cause bad things to happen");
                 this.commit();
                 int attempts = 10;
                 while (--attempts != 0 && this.caddr == SIZE_LIMIT) {
@@ -75,7 +97,10 @@ public class DownloadStream {
             throw new IllegalStateException();
         }
 
-        this.downloadList.add(new DownloadData(buffer, addr, destOffset, size, resultConsumer));
+        this.downloadList.add(new DownloadData(buffer, addr, downloadOffset, size, resultConsumer));
+
+        //TODO: maybe not auto-commit
+        this.commit();
     }
 
 
@@ -116,6 +141,21 @@ public class DownloadStream {
 
             frame.allocations.forEach(this.allocationArena::free);
             frame.fence.free();
+        }
+    }
+
+    //Synchonize force flushes everything
+    public void flushWaitClear() {
+        glFinish();
+        this.tick();
+        var fence = new GlFence();
+        glFinish();
+        while (!fence.signaled())
+            Thread.onSpinWait();
+        fence.free();
+        this.tick();
+        if (!this.frames.isEmpty()) {
+            throw new IllegalStateException();
         }
     }
 

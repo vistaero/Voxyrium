@@ -4,8 +4,7 @@ import com.google.gson.*;
 import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
-import me.cortex.voxy.common.storage.config.CompressorConfig;
-import me.cortex.voxy.common.storage.config.StorageConfig;
+import me.cortex.voxy.common.Logger;
 import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.BufferedReader;
@@ -134,20 +133,19 @@ public class Serialization {
                             nameMethod.setAccessible(true);
                         } catch (NoSuchMethodException e) {}
                         if (nameMethod == null) {
-                            System.err.println("WARNING: Config class " + clzName + " doesnt contain a getConfigTypeName and thus wont be serializable");
+                            Logger.error("WARNING: Config class " + clzName + " doesnt contain a getConfigTypeName and thus wont be serializable");
                             continue outer;
                         }
                         count++;
                         String name = (String) nameMethod.invoke(null);
                         serializers.computeIfAbsent(clz, GsonConfigSerialization::new)
                                 .register(name, (Class) original);
-                        System.out.println("Registered " + original.getSimpleName() + " as " + name + " for config type " + clz.getSimpleName());
+                        Logger.info("Registered " + original.getSimpleName() + " as " + name + " for config type " + clz.getSimpleName());
                         break;
                     }
                 }
             } catch (Exception e) {
-                System.err.println("Error while setting up config serialization");
-                e.printStackTrace();
+                Logger.error("Error while setting up config serialization", e);
             }
         }
 
@@ -157,7 +155,7 @@ public class Serialization {
         }
 
         GSON = builder.create();
-        System.out.println("Registered " + count + " config types");
+        Logger.info("Registered " + count + " config types");
     }
 
     private static List<String> collectAllClasses(String pack) {
@@ -175,7 +173,7 @@ public class Serialization {
                 }
             }).collect(Collectors.toList());
         } catch (Exception e) {
-            System.err.println("Failed to collect classes in package: " + pack);
+            Logger.error("Failed to collect classes in package: " + pack, e);
             return List.of();
         }
     }
@@ -193,8 +191,7 @@ public class Serialization {
                     return Stream.of();
                 }
             }).collect(Collectors.toList());
-        } catch (
-                IOException e) {
+        } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }

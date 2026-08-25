@@ -1,9 +1,6 @@
 package me.cortex.voxy.client.core.model;
 
-import com.mojang.blaze3d.platform.GlConst;
 import com.mojang.blaze3d.platform.GlStateManager;
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.systems.VertexSorter;
 import me.cortex.voxy.client.core.gl.GlFramebuffer;
 import me.cortex.voxy.client.core.gl.GlTexture;
 import me.cortex.voxy.client.core.gl.shader.Shader;
@@ -19,6 +16,7 @@ import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.fluid.FluidState;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ColorHelper;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.RotationAxis;
 import net.minecraft.util.math.random.LocalRandom;
@@ -28,22 +26,22 @@ import net.minecraft.world.biome.ColorResolver;
 import net.minecraft.world.chunk.light.LightingProvider;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
+import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL11C;
 
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.lwjgl.opengl.ARBFramebufferObject.*;
-import static org.lwjgl.opengl.ARBImaging.GL_FUNC_ADD;
-import static org.lwjgl.opengl.ARBImaging.glBlendEquation;
+import static org.lwjgl.opengl.ARBDirectStateAccess.*;
 import static org.lwjgl.opengl.ARBShaderImageLoadStore.GL_FRAMEBUFFER_BARRIER_BIT;
 import static org.lwjgl.opengl.ARBShaderImageLoadStore.glMemoryBarrier;
-import static org.lwjgl.opengl.GL11.*;
-import static org.lwjgl.opengl.GL13.*;
+import static org.lwjgl.opengl.GL11C.GL_TEXTURE_2D;
 import static org.lwjgl.opengl.GL14C.glBlendFuncSeparate;
+import static org.lwjgl.opengl.GL15C.glBindBuffer;
 import static org.lwjgl.opengl.GL20C.glUniformMatrix4fv;
-import static org.lwjgl.opengl.GL45C.glBlitNamedFramebuffer;
-import static org.lwjgl.opengl.GL45C.glGetTextureImage;
+import static org.lwjgl.opengl.GL21C.GL_PIXEL_PACK_BUFFER;
+import static org.lwjgl.opengl.GL30.*;
+import static org.lwjgl.opengl.GL43.*;
 
 //Builds a texture for each face of a model
 public class ModelTextureBakery {
@@ -51,6 +49,7 @@ public class ModelTextureBakery {
     private final int height;
     private final GlTexture colourTex;
     private final GlTexture depthTex;
+    private final GlTexture depthTexView;
     private final GlFramebuffer framebuffer;
     private final GlStateCapture glState = GlStateCapture.make()
             .addCapability(GL_DEPTH_TEST)
@@ -59,12 +58,16 @@ public class ModelTextureBakery {
             .addCapability(GL_CULL_FACE)
             .addTexture(GL_TEXTURE0)
             .addTexture(GL_TEXTURE1)
+            .addTexture(GL_TEXTURE2)
             .build()
             ;
     private final Shader rasterShader = Shader.make()
             .add(ShaderType.VERTEX, "voxy:bakery/position_tex.vsh")
             .add(ShaderType.FRAGMENT, "voxy:bakery/position_tex.fsh")
-            .compile();
+            .compile()
+            .name("ModelBaker");
+
+    private final Shader copyOutShader;
 
     private static final List<MatrixStack> FACE_VIEWS = new ArrayList<>();
 
@@ -72,12 +75,24 @@ public class ModelTextureBakery {
     public ModelTextureBakery(int width, int height) {
         //TODO: Make this run in a seperate opengl context so that it can run in a seperate thread
 
-
         this.width = width;
         this.height = height;
-        this.colourTex = new GlTexture().store(GL_RGBA8, 1, width, height);
-        this.depthTex = new GlTexture().store(GL_DEPTH24_STENCIL8, 1, width, height);
-        this.framebuffer = new GlFramebuffer().bind(GL_COLOR_ATTACHMENT0, this.colourTex).bind(GL_DEPTH_STENCIL_ATTACHMENT, this.depthTex).verify();
+        this.colourTex = new GlTexture().store(GL_RGBA8, 1, width, height).name("ModelBakeryColour");
+        this.depthTex = new GlTexture().store(GL_DEPTH24_STENCIL8, 1, width, height).name("ModelBakeryDepth");
+        glTextureParameteri(this.depthTex.id, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_STENCIL_INDEX);
+        this.depthTexView = this.depthTex.createView();
+        glTextureParameteri(this.depthTex.id, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT);
+
+        this.framebuffer = new GlFramebuffer().bind(GL_COLOR_ATTACHMENT0, this.colourTex).bind(GL_DEPTH_STENCIL_ATTACHMENT, this.depthTex).verify().name("ModelFramebuffer");
+
+        glTextureParameteri(this.depthTexView.id, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_STENCIL_INDEX);
+
+        this.copyOutShader = Shader.make()
+                .define("WIDTH", width)
+                .define("HEIGHT", height)
+                .add(ShaderType.COMPUTE, "voxy:bakery/buffercopy.comp")
+                .compile()
+                .name("ModelBakeryOut");
 
         //This is done to help make debugging easier
         FACE_VIEWS.clear();
@@ -85,6 +100,8 @@ public class ModelTextureBakery {
     }
 
     private static void AddViews() {
+        //TODO: FIXME: need to bake in the correct orientation, HOWEVER some orientations require a flipped winding order!!!!
+
         addView(-90,0, 0, false);//Direction.DOWN
         addView(90,0, 0, false);//Direction.UP
         addView(0,180, 0, true);//Direction.NORTH
@@ -108,25 +125,24 @@ public class ModelTextureBakery {
 
     //TODO: For block entities, also somehow attempt to render the default block entity, e.g. chests and stuff
     // cause that will result in ok looking micro details in the terrain
-    public ColourDepthTextureData[] renderFaces(BlockState state, long randomValue, boolean renderFluid) {
+    public void renderFacesToStream(BlockState state, long randomValue, boolean renderFluid, int streamBuffer, int streamBaseOffset) {
         this.glState.capture();
         var model = MinecraftClient.getInstance()
                 .getBakedModelManager()
                 .getBlockModels()
                 .getModel(state);
 
-        var entityModel = state.hasBlockEntity()?BakedBlockEntityModel.bake(state):null;
+        BakedBlockEntityModel entityModel = state.hasBlockEntity()?BakedBlockEntityModel.bake(state):null;
 
         int oldFB = GlStateManager.getBoundFramebuffer();
-        var oldProjection = new Matrix4f(RenderSystem.getProjectionMatrix());
         GL11C.glViewport(0, 0, this.width, this.height);
 
-        RenderSystem.setProjectionMatrix(new Matrix4f().identity().set(new float[]{
+        var projection = new Matrix4f().identity().set(new float[]{
                 2,0,0,0,
                 0, 2,0,0,
                 0,0, -1f,0,
                 -1,-1,0,1,
-        }), VertexSorter.BY_Z);
+        });
 
 
 
@@ -140,8 +156,10 @@ public class ModelTextureBakery {
 
         //TODO: figure out why calling this makes minecraft render black
         //renderLayer.startDrawing();
+
         glClearColor(0,0,0,0);
         glClearDepth(1);
+        glClearStencil(0);
         glBindFramebuffer(GL_FRAMEBUFFER, this.framebuffer.id);
 
         glEnable(GL_STENCIL_TEST);
@@ -169,38 +187,54 @@ public class ModelTextureBakery {
         glStencilFunc(GL_ALWAYS, 1, 0xFF);
         glStencilMask(0xFF);
 
-        this.rasterShader.bind();
-        glActiveTexture(GL_TEXTURE0);
-        int texId = MinecraftClient.getInstance().getTextureManager().getTexture(new Identifier("minecraft", "textures/atlas/blocks.png")).getGlId();
-        GlUniform.uniform1(0, 0);
+        int texId = MinecraftClient.getInstance().getTextureManager().getTexture(Identifier.of("minecraft", "textures/atlas/blocks.png")).getGlId();
 
-        var faces = new ColourDepthTextureData[FACE_VIEWS.size()];
-        for (int i = 0; i < faces.length; i++) {
-            faces[i] = captureView(state, model, entityModel, FACE_VIEWS.get(i), randomValue, i, renderFluid, texId);
-            //glBlitNamedFramebuffer(this.framebuffer.id, oldFB, 0,0,16,16,300*(i>>1),300*(i&1),300*(i>>1)+256,300*(i&1)+256, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        final int TEXTURE_SIZE = this.width*this.height *4;//NOTE! assume here that both depth and colour are 4 bytes in size
+        for (int i = 0; i < FACE_VIEWS.size(); i++) {
+            int faceOffset = streamBaseOffset + TEXTURE_SIZE*i*2;
+            captureViewToStream(state, model, entityModel, FACE_VIEWS.get(i), randomValue, i, renderFluid, texId, projection, streamBuffer, faceOffset);
+
+            if (false) {
+                int SIZE = 128;
+                int x = (i % 3) * SIZE;
+                int y = (i / 3) * SIZE;
+                glBlitNamedFramebuffer(this.framebuffer.id, oldFB, 0, 0, 16, 16, x, y, x + SIZE, y + SIZE, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            }
         }
 
         renderLayer.endDrawing();
+
         glDisable(GL_STENCIL_TEST);
         glDisable(GL_BLEND);
 
-        RenderSystem.setProjectionMatrix(oldProjection, VertexSorter.BY_DISTANCE);
         glBindFramebuffer(GL_FRAMEBUFFER, oldFB);
         GL11C.glViewport(GlStateManager.Viewport.getX(), GlStateManager.Viewport.getY(), GlStateManager.Viewport.getWidth(), GlStateManager.Viewport.getHeight());
 
         //TODO: FIXME: fully revert the state of opengl
 
         this.glState.restore();
-        return faces;
     }
 
+    private final BufferBuilder bufferBuilder = new BufferBuilder(786432) {
+        @Override
+        public void vertex(float x, float y, float z, float red, float green, float blue, float alpha, float u, float v, int overlay, int light, float normalX, float normalY, float normalZ) {
+            super.vertex(x, y, z, 0.0f, 0.0f, 1.0f, 1.0f, u, v, overlay, light, normalX, normalY, normalZ);
+        }
 
-    private ColourDepthTextureData captureView(BlockState state, BakedModel model, BakedBlockEntityModel blockEntityModel, MatrixStack stack, long randomValue, int face, boolean renderFluid, int textureId) {
-        var vc = Tessellator.getInstance().getBuffer();
+        @Override
+        public VertexConsumer color(int red, int green, int blue, int alpha) {
+            return super.color(0, 0, 255, 255);
+        }
+    };
+
+    private void captureViewToStream(BlockState state, BakedModel model, BakedBlockEntityModel blockEntityModel, MatrixStack stack, long randomValue, int face, boolean renderFluid, int textureId, Matrix4f projection, int streamBuffer, int streamOffset) {
+        this.rasterShader.bind();
+        glActiveTexture(GL_TEXTURE0);
+        GlUniform.uniform1(0, 0);
+
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-
         float[] mat = new float[4*4];
-        new Matrix4f(RenderSystem.getProjectionMatrix()).mul(stack.peek().getPositionMatrix()).get(mat);
+        new Matrix4f(projection).mul(stack.peek().getPositionMatrix()).get(mat);
         glUniformMatrix4fv(1, false, mat);
 
 
@@ -208,9 +242,12 @@ public class ModelTextureBakery {
             blockEntityModel.renderOut();
         }
 
-        vc.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR_TEXTURE);
+        var bb = this.bufferBuilder;
+        bb.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_TEXTURE_COLOR);
         if (!renderFluid) {
-            renderQuads(vc, state, model, new MatrixStack(), randomValue);
+            //TODO: need to do 2 variants for quads, one which have coloured, ones that dont, might be able to pull a spare bit
+            // at the end whether or not a pixel should be mixed with texture
+            renderQuads(bb, state, model, new MatrixStack(), randomValue);
         } else {
             MinecraftClient.getInstance().getBlockRenderManager().renderFluid(BlockPos.ORIGIN, new BlockRenderView() {
                 @Override
@@ -277,19 +314,42 @@ public class ModelTextureBakery {
                 public int getBottomY() {
                     return 0;
                 }
-            }, vc, state, state.getFluidState());
+            }, bb, state, state.getFluidState());
         }
 
         glBindTexture(GL_TEXTURE_2D, textureId);
-        BufferRenderer.draw(vc.end());
-
+        try {
+            //System.err.println("REPLACE THE UPLOADING WITH THREAD SAFE VARIENT");
+            BufferRenderer.draw(bb.end());
+        } catch (IllegalStateException e) {
+            //System.err.println("Got empty buffer builder! for block " + state);
+        }
 
         glMemoryBarrier(GL_FRAMEBUFFER_BARRIER_BIT);
-        int[] colourData = new int[this.width*this.height];
-        int[] depthData = new int[this.width*this.height];
-        glGetTextureImage(this.colourTex.id, 0, GL_RGBA, GL_UNSIGNED_BYTE, colourData);
-        glGetTextureImage(this.depthTex.id, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, depthData);
-        return new ColourDepthTextureData(colourData, depthData, this.width, this.height);
+
+        this.emitToStream(streamBuffer, streamOffset);
+    }
+
+    //TODO: FIXME: Mesa is broken when trying to read from a sampler of GL_STENCIL_INDEX
+    // it seems to just ignore the value set in GL_DEPTH_STENCIL_TEXTURE_MODE
+    private void emitToStream(int streamBuffer, int streamOffset) {
+        if (streamOffset%4 != 0) {
+            throw new IllegalArgumentException();
+        }
+        this.copyOutShader.bind();
+        glActiveTexture(GL_TEXTURE0);
+        GL11C.glBindTexture(GL11.GL_TEXTURE_2D, this.colourTex.id);
+        glBindSampler(0, 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL11.GL_TEXTURE_2D, this.depthTex.id);
+        glBindSampler(1, 0);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL11.GL_TEXTURE_2D, this.depthTexView.id);
+        glBindSampler(2, 0);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, streamBuffer);
+        glUniform1ui(4, streamOffset/4);
+
+        glDispatchCompute(1,1,1);
     }
 
     private static void renderQuads(BufferBuilder builder, BlockState state, BakedModel model, MatrixStack stack, long randomValue) {
@@ -297,8 +357,8 @@ public class ModelTextureBakery {
             var quads = model.getQuads(state, direction, new LocalRandom(randomValue));
             for (var quad : quads) {
                 //TODO: mark pixels that have
-                int meta = quad.hasColor()?1:0;
-                builder.quad(stack.peek(), quad, (meta>>16)&0xff, (meta>>8)&0xff, meta&0xff, 0, 0);
+                int meta = 1;
+                builder.quad(stack.peek(), quad, ((meta>>16)&0xff)/255f, ((meta>>8)&0xff)/255f, (meta&0xff)/255f, 1.0f, 0, 0);
             }
         }
     }
@@ -306,7 +366,10 @@ public class ModelTextureBakery {
     public void free() {
         this.framebuffer.free();
         this.colourTex.free();
+        this.depthTexView.free();
         this.depthTex.free();
         this.rasterShader.free();
+        this.copyOutShader.free();
+        this.bufferBuilder.close();
     }
 }

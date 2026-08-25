@@ -1,0 +1,93 @@
+#version 460 core
+//Uses intrinsics and other operations to perform very fast sorting
+// we dont need a propper sort, only a fuzzy sort, as in we only need to top 128 entries, but those can be unsorted
+
+//#define OUTPUT_SIZE 128
+
+layout(local_size_x=WORK_SIZE, local_size_y=1) in;
+//256 workgroup
+
+#import <voxy:lod/hierarchical/node.glsl>
+
+layout(binding = VISIBILITY_BUFFER_BINDING, std430) restrict readonly buffer VisibilityDataBuffer {
+    uint[] visiblity;
+};
+
+layout(binding = OUTPUT_BUFFER_BINDING, std430) restrict volatile buffer MinimumVisibilityBuffer {//TODO: might need to be volatile
+    uint minVisIds[OUTPUT_SIZE];
+};
+
+//Returns the id of the max value
+uint atomicDerefMaxExchange(uint atId, uint id) {
+    const uint value = visiblity[id];
+    while (true) {
+        const uint existingId = minVisIds[atId];
+        //Check if the value is less than the dereferenced value, if its not, return our own id
+        if (visiblity[existingId] <= value) {
+            return id;
+        }
+        //Attempt to swap, since we know we are less than the existingId
+        const uint c = atomicCompSwap(minVisIds[atId], existingId, id);
+        //Check if we did swap, else if we failed (or got reswapped else where) recheck
+
+        //We did swap, (since the original mem contents was the existing id)
+        // which means existingId is now the max of the ptr
+        if (c == existingId) {
+            return existingId;
+        }
+    }
+}
+
+//TODO: optimize
+void bubbleSort(uint start, uint id) {
+    for (uint i = start; i < OUTPUT_SIZE; i++) {
+        id = atomicDerefMaxExchange(i, id);
+    }
+}
+
+void main() {
+    //if (gl_GlobalInvocationID.x <64) {
+    //    minVisIds[gl_GlobalInvocationID.x] = visiblity[gl_GlobalInvocationID.x];
+    //}
+    //First do a min sort/set of min OUTPUT_SIZE values of the set
+    uint vis = visiblity[gl_GlobalInvocationID.x];
+    if (vis == uint(-1)) {
+        return;
+    }
+    if (visiblity[minVisIds[OUTPUT_SIZE-1]] <= vis) {
+        return;
+    }
+    UnpackedNode node;
+    if (unpackNode(node, gl_GlobalInvocationID.x)==uvec4(-1)) {
+        return;//Unallocated node
+    }
+
+    if (isEmptyMesh(node) || (!hasMesh(node))) {//|| (!hasChildren(node))
+        return;
+    }
+    //TODO: FIXME: DONT HARDCODE TOP LEVEL LOD LEVEL
+    if (node.lodLevel == 4) {// (!hasChildren(node)) -> Assume leaf node
+        return;//Cannot remove geometry from top level node
+    }
+
+    /*THIS IS COMPLETLY WRONG, we need to check if all the children of the parent of the child are leaf nodes
+    // not this node
+
+    //Very sneeky hack, ensure all children are leaf nodes
+    if (hasChildren(node)&&!childListIsEmpty(node)) {
+        uint ptr = getChildPtr(node);
+        uint cnt = getChildCount(node);
+        for (uint i = 0; i < cnt; i++) {
+            UnpackedNode child;
+            unpackNode(child, i+ptr);
+            if (hasChildren(child)) {
+                return;
+            }
+        }
+    }
+    */
+
+
+
+    bubbleSort(0, gl_GlobalInvocationID.x);
+}

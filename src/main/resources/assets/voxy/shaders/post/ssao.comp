@@ -53,7 +53,7 @@ void main() {
     point += scale*0.5f;//Offset to the center of the textile
     float depth = texture(depthTex, point).r;
     vec4 ocolour = vec4(0);
-    if (depth < 1.0f) {
+    if (depth!=0.0f && depth < 1.0f) {
         vec4 colour = texture(colourTex, point);
         if (colour == vec4(0.0f, 0.0f, 0.0f, 0.0f)) {
             ocolour = vec4(1.0f, 0.0f, 0.0f, 1.0f);

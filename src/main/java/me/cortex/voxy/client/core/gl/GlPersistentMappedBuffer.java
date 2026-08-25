@@ -20,7 +20,7 @@ public class GlPersistentMappedBuffer extends TrackedObject {
     @Override
     public void free() {
         this.free0();
-        glUnmapBuffer(this.id);
+        glUnmapNamedBuffer(this.id);
         glDeleteBuffers(this.id);
     }
 
@@ -30,5 +30,9 @@ public class GlPersistentMappedBuffer extends TrackedObject {
 
     public long addr() {
         return this.addr;
+    }
+
+    public GlPersistentMappedBuffer name(String name) {
+        return GlDebug.name(name, this);
     }
 }

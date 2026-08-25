@@ -68,14 +68,11 @@ public class BakedBlockEntityModel {
             return this;
         }
 
-        @Override
         public void fixedColor(int red, int green, int blue, int alpha) {
-
         }
 
         @Override
         public void unfixColor() {
-
         }
 
         @Override
@@ -94,6 +91,10 @@ public class BakedBlockEntityModel {
                         .next();
             }
         }
+
+        public boolean isEmpty() {
+            return this.vertices.isEmpty();
+        }
     }
 
     private final List<BakedVertices> layers;
@@ -102,20 +103,26 @@ public class BakedBlockEntityModel {
     }
 
     public void renderOut() {
-        var vc = Tessellator.getInstance().getBuffer();
-        for (var layer : this.layers) {
-            vc.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR_TEXTURE);
-            if (layer.layer instanceof RenderLayer.MultiPhase mp) {
-                Identifier textureId = mp.phases.texture.getId().orElse(null);
-                if (textureId == null) {
-                    System.err.println("ERROR: Empty texture id for layer: " + layer);
-                } else {
-                    var texture = MinecraftClient.getInstance().getTextureManager().getTexture(textureId);
-                    glBindTexture(GL_TEXTURE_2D, texture.getGlId());
+        //TODO:FIXME: CANT RUN ON RENDER THREAD
+        if (false) {
+            System.err.println("Model entity baking not yet supported offthread baking");
+        } else {
+            var vc = Tessellator.getInstance().getBuffer();
+            for (var layer : this.layers) {
+                if (layer.isEmpty()) continue;
+                vc.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR_TEXTURE);
+                if (layer.layer instanceof RenderLayer.MultiPhase mp) {
+                    Identifier textureId = mp.phases.texture.getId().orElse(null);
+                    if (textureId == null) {
+                        System.err.println("ERROR: Empty texture id for layer: " + layer);
+                    } else {
+                        var texture = MinecraftClient.getInstance().getTextureManager().getTexture(textureId);
+                        glBindTexture(GL_TEXTURE_2D, texture.getGlId());
+                    }
                 }
+                layer.putInto(vc);
+                BufferRenderer.draw(vc.end());
             }
-            layer.putInto(vc);
-            BufferRenderer.draw(vc.end());
         }
     }
 
@@ -126,8 +133,8 @@ public class BakedBlockEntityModel {
             return null;
         }
         var renderer = MinecraftClient.getInstance().getBlockEntityRenderDispatcher().get(entity);
+        entity.setWorld(MinecraftClient.getInstance().world);
         if (renderer != null) {
-            entity.setWorld(MinecraftClient.getInstance().world);
             try {
                 renderer.render(entity, 0.0f, new MatrixStack(), layer->map.computeIfAbsent(layer, BakedVertices::new), 0, 0);
             } catch (Exception e) {

@@ -32,6 +32,7 @@ public class PostProcessing {
     private GlTexture colourSSAO;
     private GlTexture depthStencil;
     private boolean didSSAO;
+    private final FullscreenBlit setDepth0 = new FullscreenBlit("voxy:post/depth0.frag");
     private final FullscreenBlit emptyBlit = new FullscreenBlit("voxy:post/noop.frag");
     //private final FullscreenBlit blitTexture = new FullscreenBlit("voxy:post/blit_texture_cutout.frag");
     private final FullscreenBlit blitTexture = new FullscreenBlit("voxy:post/blit_texture_depth_cutout.frag");
@@ -93,16 +94,23 @@ public class PostProcessing {
         if (this.colour != null) this.colour.free();
         if (this.depthStencil != null) this.depthStencil.free();
         this.emptyBlit.delete();
+        this.setDepth0.delete();
         this.blitTexture.delete();
         this.ssaoComp.free();
     }
 
     public void setup(int width, int height, int sourceFB) {
+        //TODO: use the raw depth texture instead
+        //TODO: when blitting, also set the depth value of where the mask is created to 0 (I.E. closest to the camera)
+        // cause of hiz computing, it makes alot of sections visible
         this.didSSAO = false;
         this.glStateCapture.capture();
 
         this.setSize(width, height);
         glBindFramebuffer(GL_FRAMEBUFFER, this.framebuffer.id);
+
+        //glClearColor(0,0,0,0);//TODO: RESTORE THIS TO THE ORIGINAL VALUE
+
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
         glBlitNamedFramebuffer(sourceFB, this.framebuffer.id, 0,0, width, height, 0,0, width, height, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
 
@@ -116,16 +124,16 @@ public class PostProcessing {
         glDepthMask(false);
         glColorMask(false,false,false,false);
         this.emptyBlit.blit();
-        glColorMask(true,true,true,true);
         glDepthMask(true);
+
+        glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+        //Set depth to 0 w.r.t mask
+        glStencilFunc(GL_EQUAL, 0, 0xFF);
+        this.setDepth0.blit();
         glDisable(GL_DEPTH_TEST);
-
-        //Clear the depth buffer we copied cause else it will interfear with results (not really i think idk)
-        glClear(GL_DEPTH_BUFFER_BIT);
-
+        glColorMask(true,true,true,true);
 
         //Make voxy terrain render only where there isnt mc terrain
-        glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
         glStencilFunc(GL_EQUAL, 1, 0xFF);
 
 

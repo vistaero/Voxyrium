@@ -7,36 +7,29 @@ import java.util.Random;
 //TODO: redo this so that it works as you are inserting data into it maybe? since it should be much faster??
 
 public final class Mesher2D {
-    private final int size;
-    private final int maxSize;
+    private static final int MAX_MERGED_SIZE = 15;//16
+
+    private static final int SIZE_BITS = 5;
+    private static final int MSK = (1<<SIZE_BITS) -1;
+
     private final long[] data;
     private final long[] setset;
     private int[] quadCache;
     private boolean isEmpty = true;
     private int setsMsk = 0;
-    public Mesher2D(int sizeBits, int maxSize) {
-        if (sizeBits > 5) {
-            throw new IllegalStateException("Due to the addition of the setsMsk, size greter than 32 is not supported atm");
-        }
-
-        this.size = sizeBits;
-        this.maxSize = maxSize;
-        this.data = new long[1<<(sizeBits<<1)];
-        this.setset = new long[(1<<(sizeBits<<1))>>6];
+    public Mesher2D() {
+        this.data = new long[1<<(SIZE_BITS<<1)];
+        this.setset = new long[(1<<(SIZE_BITS<<1))>>6];
         this.quadCache = new int[128];
     }
 
-    private int getIdx(int x, int z) {
-        int M = (1<<this.size)-1;
-        if (false&&(x>M || z>M)) {
-            throw new IllegalStateException();
-        }
-        return ((z&M)<<this.size)|(x&M);
+    private static int getIdx(int x, int z) {
+        return ((z&MSK)<<SIZE_BITS)|(x&MSK);
     }
 
     public Mesher2D put(int x, int z, long data) {
         this.isEmpty = false;
-        int idx = this.getIdx(x, z);
+        int idx = getIdx(x, z);
         this.data[idx] = data;
         this.setset[idx>>6] |= 1L<<(idx&0b111111);
         this.setsMsk |= 1<<(idx>>6);
@@ -65,7 +58,7 @@ public final class Mesher2D {
     }
 
     private boolean canMerge(int x, int z, long match) {
-        int id = this.getIdx(x, z);
+        int id = getIdx(x, z);
         return (this.setset[id>>6]&(1L<<(id&0b111111))) != 0 && this.data[id] == match;
     }
 
@@ -88,6 +81,7 @@ public final class Mesher2D {
 
         int[] quads = this.quadCache;
         int idxCount = 0;
+        int counter = 0;
 
         //TODO: add different strategies/ways to mesh
         int posId = this.data[0] == 0?this.nextSetBit(0):0;
@@ -95,18 +89,17 @@ public final class Mesher2D {
             int idx = posId;
             long data = this.data[idx];
 
-            int M = (1<<this.size)-1;
-            int x = idx&M;
-            int z = (idx>>>this.size)&M;
+            int x = idx&MSK;
+            int z = (idx>>>SIZE_BITS)&MSK;
 
-            boolean ex = x != ((1<<this.size)-1);
-            boolean ez = z != ((1<<this.size)-1);
+            boolean ex = x != MSK;
+            boolean ez = z != MSK;
             int endX = x;
             int endZ = z;
             while (ex || ez) {
                 //Expand in the x direction
                 if (ex) {
-                    if (endX - x >= this.maxSize || endX >= (1 << this.size) - 1) {
+                    if (endX - x >= MAX_MERGED_SIZE || endX >= MSK) {
                         ex = false;
                     }
                 }
@@ -122,7 +115,7 @@ public final class Mesher2D {
                     endX++;
                 }
                 if (ez) {
-                    if (endZ - z >= this.maxSize || endZ >= (1<<this.size)-1) {
+                    if (endZ - z >= SIZE_BITS || endZ >= MSK) {
                         ez = false;
                     }
                 }
@@ -142,7 +135,7 @@ public final class Mesher2D {
             //Mark the sections as meshed
             for (int mx = x; mx <= endX; mx++) {
                 for (int mz = z; mz <= endZ; mz++) {
-                    int cid = this.getIdx(mx, mz);
+                    int cid = getIdx(mx, mz);
                     this.setset[cid>>6] &= ~(1L<<(cid&0b111111));
                 }
             }
@@ -150,19 +143,24 @@ public final class Mesher2D {
             int encodedQuad = encodeQuad(x, z, endX - x + 1, endZ - z + 1);
 
             {
-                int pIdx = idxCount++;
-                if (pIdx == quads.length) {
-                    var newArray = new int[quads.length + 64];
+                counter++;
+                int pIdx = idxCount;
+                idxCount += 3;
+                if (quads.length <= idxCount+3) {
+                    var newArray = new int[quads.length + 64*3];
                     System.arraycopy(quads, 0, newArray, 0, quads.length);
                     quads = newArray;
                 }
                 quads[pIdx] = encodedQuad;
+                quads[pIdx+1] = (int) data;
+                quads[pIdx+2] = (int) (data>>32);
+
             }
             posId = this.nextSetBit(posId);
         }
 
         this.quadCache = quads;
-        return idxCount;
+        return counter;
     }
 
     public int[] getArray() {
@@ -178,16 +176,8 @@ public final class Mesher2D {
         }
     }
 
-    public long getDataFromQuad(int quad) {
-        return this.getData(getX(quad), getZ(quad));
-    }
-
-    public long getData(int x, int z) {
-        return this.data[this.getIdx(x, z)];
-    }
-
     public static void main3(String[] args) {
-        var mesh = new Mesher2D(5,15);
+        var mesh = new Mesher2D();
         mesh.put(30,30, 123);
         mesh.put(31,30, 123);
         mesh.put(30,31, 123);
@@ -197,9 +187,9 @@ public final class Mesher2D {
         System.err.println(count);
     }
 
-    public static void main(String[] args) {
+    public static void main2(String[] args) {
         var r = new Random(123451);
-        var mesh = new Mesher2D(5,15);
+        var mesh = new Mesher2D();
         /*
         for (int j = 0; j < 512; j++) {
             mesh.put(r.nextInt(32), r.nextInt(32), r.nextInt(10));
@@ -234,12 +224,25 @@ public final class Mesher2D {
         //}
     }
 
-    public static void main2(String[] args) {
+    public static void main(String[] args) {
         var r = new Random(123451);
         int a = 0;
+
+        //Prime code
+        for (int i = 0; i < 100000; i++) {
+            var mesh = new Mesher2D();
+            for (int j = 0; j < 512; j++) {
+                mesh.put(r.nextInt(32), r.nextInt(32), r.nextInt(100));
+            }
+            var result = mesh.process();
+            a += result;
+        }
+
+
         long total = 0;
-        for (int i = 0; i < 200000; i++) {
-            var mesh = new Mesher2D(5,16);
+        int COUNT = 200000;
+        for (int i = 0; i < COUNT; i++) {
+            var mesh = new Mesher2D();
             for (int j = 0; j < 512; j++) {
                 mesh.put(r.nextInt(32), r.nextInt(32), r.nextInt(100));
             }
@@ -248,9 +251,8 @@ public final class Mesher2D {
             total += System.nanoTime() - s;
             a += result;
         }
-        System.out.println(total/(1e+6));
-        System.out.println((double) (total/(1e+6))/200000);
-        //mesh.put(0,0,1);
+
+        System.out.println(((double) total/COUNT)*(1e-6));
     }
 }
 

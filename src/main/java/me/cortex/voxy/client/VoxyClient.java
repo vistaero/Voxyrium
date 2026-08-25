@@ -23,7 +23,7 @@ public final class VoxyClient implements ClientModInitializer {
     private static final HashSet<String> FREX = new HashSet<>();
     private static FileLock exclusiveLock;
 
-    private static void initializeRenderer() {
+    public static void initVoxyClient() {
         VoxyGraphicsBackend.initialize();
         boolean nativeAvailable = probeNativeOpenGlRenderer();
         VoxyGraphicsBackend.resolveRenderer(VoxyGraphicsBackend.RendererMode.NATIVE, nativeAvailable);
@@ -79,7 +79,6 @@ public final class VoxyClient implements ClientModInitializer {
     @SuppressWarnings("unchecked")
     public void onInitializeClient() {
         VoxyCommon.setInstanceFactory(VoxyClientInstance::new);
-        initializeRenderer();
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             if (VoxyCommon.isAvailable()) {

@@ -23,14 +23,13 @@ public final class IrisBackendCompat {
 
         try {
             IrisApi api = IrisApi.getInstance();
-            // Voxy selects its renderer before Iris finishes creating the active
-            // pipeline. The config flag therefore covers startup, while
-            // isShaderPackInUse() covers renderer changes later in the session.
-            return api.isShaderPackInUse() || api.getConfig().areShadersEnabled();
+            // Iris being installed, or merely having shaders enabled in its config,
+            // does not imply an active shaderpack. Blaze3D only needs to step aside
+            // while Iris is actually rendering one.
+            return api.isShaderPackInUse();
         } catch (Throwable throwable) {
-            // An unknown Iris state must not select the known-incompatible path.
-            Logger.warn("Could not query Iris shader state before selecting Voxy's renderer; assuming shaders are active and avoiding Blaze3D.", throwable);
-            return true;
+            Logger.warn("Could not query whether an Iris shaderpack is active; leaving the selected Voxy renderer unchanged.", throwable);
+            return false;
         }
     }
 }

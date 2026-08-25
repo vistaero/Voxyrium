@@ -25,8 +25,8 @@
   "voxy.config.general.renderer_backend.blaze3d": "Blaze3D",
 
   "voxy.confirm.iris_blaze3d.title": "Shaderpack de Iris activo",
-  "voxy.confirm.iris_blaze3d.message": "Blaze3D podría tener problemas visuales con este shaderpack de Iris.\n\nRecomendado: seguir usando Nativo.",
-  "voxy.confirm.iris_blaze3d.native": "Mantener Nativo",
+  "voxy.confirm.iris_blaze3d.message": "Blaze3D podría tener problemas visuales con este shaderpack de Iris.\n\nRecomendado: Usar Nativo.",
+  "voxy.confirm.iris_blaze3d.native": "Usar Nativo",
   "voxy.confirm.iris_blaze3d.blaze3d": "Usar Blaze3D",
   "voxy.confirm.iris_blaze3d.dont_show_again": "No volver a mostrar",
 

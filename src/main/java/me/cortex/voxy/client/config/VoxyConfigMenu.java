@@ -105,13 +105,9 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
                                         VoxyGraphicsBackend.RendererMode.class,
                                         Component.translatable("voxy.config.general.renderer_backend"),
                                         CFG::getRendererBackendMode,
-                                        value->{
-                                            CFG.setRendererBackendMode(value);
-                                            VoxyClient.selectRenderer(value);
-                                        })
+                                        VoxyClient::requestRendererSelection)
                                         .setNameProvider(value->Component.translatable(
                                                 "voxy.config.general.renderer_backend." + value.name().toLowerCase(java.util.Locale.ROOT)))
-                                        .setPostChangeFlags(RENDER_RELOAD, "voxy:iris_reload")
                                         .setEnabler("voxy:enabled")
                         ), new Group(
                                 new IntOption(

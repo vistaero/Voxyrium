@@ -36,14 +36,15 @@ public class VoxyConfig {
     public float subDivisionSize = 64;
     public String fogMode;
     public boolean dontUseSodiumBuilderThreads = false;
-    public String rendererBackend = "auto";
+    public String rendererBackend = "native";
+    public boolean showBlaze3dIrisWarning = true;
 
     public VoxyGraphicsBackend.RendererMode getRendererBackendMode() {
-        if (this.rendererBackend == null) return VoxyGraphicsBackend.RendererMode.AUTO;
+        if (this.rendererBackend == null) return VoxyGraphicsBackend.RendererMode.NATIVE;
         try {
             return VoxyGraphicsBackend.RendererMode.valueOf(this.rendererBackend.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException exception) {
-            return VoxyGraphicsBackend.RendererMode.AUTO;
+            return VoxyGraphicsBackend.RendererMode.NATIVE;
         }
     }
 
@@ -89,6 +90,11 @@ public class VoxyConfig {
                 try (FileReader reader = new FileReader(path.toFile())) {
                     var conf = GSON.fromJson(reader, VoxyConfig.class);
                     if (conf != null) {
+                        // Auto used to mean Native when available. Keep that effective default
+                        // while removing the redundant choice from existing configuration files.
+                        if (conf.rendererBackend == null || conf.rendererBackend.equalsIgnoreCase("auto")) {
+                            conf.rendererBackend = "native";
+                        }
                         conf.save();
                         return conf;
                     } else {

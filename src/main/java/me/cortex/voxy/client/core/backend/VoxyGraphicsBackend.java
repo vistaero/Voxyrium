@@ -11,7 +11,6 @@ public enum VoxyGraphicsBackend {
     VULKAN;
 
     public enum RendererMode {
-        AUTO,
         NATIVE,
         BLAZE3D
     }
@@ -48,12 +47,17 @@ public enum VoxyGraphicsBackend {
         applyPreference(preference);
     }
 
+    /** Keeps all Voxy render paths disabled while an interactive choice is pending. */
+    public static void deferRendererSelection() {
+        nativeRendererAvailable = false;
+        activeRenderer = ActiveRenderer.UNAVAILABLE;
+    }
+
     public static void applyPreference(RendererMode preference) {
-        RendererMode resolvedPreference = preference == null ? RendererMode.AUTO : preference;
+        RendererMode resolvedPreference = preference == null ? RendererMode.NATIVE : preference;
         activeRenderer = switch (resolvedPreference) {
             case BLAZE3D -> ActiveRenderer.BLAZE3D;
             case NATIVE -> nativeRendererAvailable ? ActiveRenderer.NATIVE : ActiveRenderer.UNAVAILABLE;
-            case AUTO -> nativeRendererAvailable ? ActiveRenderer.NATIVE : ActiveRenderer.BLAZE3D;
         };
     }
 

@@ -20,10 +20,15 @@
   "voxy.config.general.rendering.tooltip": "Enables or disables voxy rendering",
 
   "voxy.config.general.renderer_backend": "Renderer backend",
-  "voxy.config.general.renderer_backend.tooltip": "Selects Voxy's renderer. Auto uses the native Vulkan/OpenGL renderer when available and falls back to Blaze3D otherwise. When Iris shaders are active, Voxy automatically selects Native because its Blaze3D renderer does not yet support shaderpack G-buffers.",
-  "voxy.config.general.renderer_backend.auto": "Auto",
+  "voxy.config.general.renderer_backend.tooltip": "Selects Voxy's renderer. Native uses Voxy's Vulkan/OpenGL renderer. Blaze3D uses Minecraft's public rendering API.",
   "voxy.config.general.renderer_backend.native": "Native",
   "voxy.config.general.renderer_backend.blaze3d": "Blaze3D",
+
+  "voxy.confirm.iris_blaze3d.title": "Iris shaderpack active",
+  "voxy.confirm.iris_blaze3d.message": "Blaze3D may have visual issues with this Iris shaderpack.\n\nRecommended: Use Native.",
+  "voxy.confirm.iris_blaze3d.native": "Use Native",
+  "voxy.confirm.iris_blaze3d.blaze3d": "Use Blaze3D",
+  "voxy.confirm.iris_blaze3d.dont_show_again": "Don't Show Again",
 
   "voxy.config.general.subDivisionSize": "Subdivision size (pixels)",
   "voxy.config.general.subDivisionSize.tooltip": "Maximum screen-space size before subdividing to a finer LoD. Smaller values increase quality and memory use.",

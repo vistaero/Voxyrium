@@ -1,5 +1,5 @@
 plugins {
-    id 'fabric-loom' version "1.8.11"
+    id 'fabric-loom' version "1.9.2"
     id 'maven-publish'
 }
 
@@ -18,7 +18,7 @@ def compatibilityTargets = [
         ],
         "1.20.1": [
                 fabric_api_version: "0.92.11+1.20.1",
-                sodium_version_modrinth: "mc1.20.1-0.5.8",
+                sodium_version_modrinth: "mc1.20.1-0.5.13-fabric",
                 modmenu_version: "7.2.2",
                 cloth_config_version: "11.1.136",
                 lithium_version: "mc1.20.1-0.11.2",
@@ -93,6 +93,14 @@ if (usesSodium04) {
     sourceSets.main.java {
         exclude 'me/cortex/voxy/client/mixin/sodium/MixinDefaultChunkRenderer.java'
         srcDir 'src/compat/mc1.20/java'
+    }
+}
+
+def usesLegacyClientChunkDrop = ["1.20", "1.20.1"].contains(project.minecraft_version.toString())
+if (usesLegacyClientChunkDrop) {
+    sourceSets.main.java {
+        exclude 'me/cortex/voxy/client/mixin/minecraft/MixinClientChunkCache.java'
+        srcDir 'src/compat/mc1.20-1.20.1/java'
     }
 }
 
@@ -237,6 +245,11 @@ processResources {
     if (usesSodium04) {
         filesMatching("client.voxy.mixins.json") {
             filter { line -> line.replace("sodium.MixinDefaultChunkRenderer", "sodium.MixinRegionChunkRenderer") }
+        }
+    }
+    if (usesLegacyClientChunkDrop) {
+        filesMatching("client.voxy.mixins.json") {
+            filter { line -> line.replace("minecraft.MixinClientChunkCache", "minecraft.MixinClientChunkCacheLegacy") }
         }
     }
 }

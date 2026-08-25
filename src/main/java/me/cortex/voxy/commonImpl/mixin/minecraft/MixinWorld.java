@@ -5,6 +5,7 @@ import me.cortex.voxy.commonImpl.WorldIdentifier;
 import net.minecraft.core.Holder;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.storage.WritableLevelData;
@@ -13,6 +14,8 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+import java.util.function.Supplier;
 
 @Mixin(Level.class)
 public class MixinWorld implements IWorldGetIdentifier {
@@ -24,6 +27,7 @@ public class MixinWorld implements IWorldGetIdentifier {
                                        ResourceKey<Level> key,
                                        RegistryAccess registryManager,
                                        Holder<DimensionType> dimensionEntry,
+                                       Supplier<ProfilerFiller> profilerSupplier,
                                        boolean isClient,
                                        boolean debugWorld,
                                        long seed,

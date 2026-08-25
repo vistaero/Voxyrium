@@ -2,6 +2,10 @@
   "schemaVersion": 1,
   "id": "voxy",
   "version": "${version}",
+  "custom": {
+    "commit": "${commit}",
+    "buildtime": "${buildtime}"
+  },
   "name": "Voxy",
   "description": "Far distance rendering mod utilising LoDs",
   "authors": [
@@ -14,24 +18,30 @@
   "environment": "*",
   "entrypoints": {
     "client": [
-      "me.cortex.voxy.client.Voxy"
-    ],
-    "server": [
-      "me.cortex.voxy.server.VoxyServer"
+      "me.cortex.voxy.client.VoxyClient"
     ],
     "modmenu": [
-      "me.cortex.voxy.client.config.VoxyConfigScreenFactory"
+      "me.cortex.voxy.client.config.ModMenuIntegration"
+    ],
+    "main": [
+      "me.cortex.voxy.commonImpl.VoxyCommon"
     ]
   },
   "mixins": [
-    "voxy.mixins.json"
+    {
+      "config": "client.voxy.mixins.json",
+      "environment": "client"
+    },
+    "common.voxy.mixins.json"
   ],
   "depends": {
-    "minecraft": "1.20.4",
+    "minecraft": "${allowed_mc_version}",
     "fabricloader": ">=0.14.22",
     "fabric-api": ">=0.91.1",
-    "cloth-config": ">=13",
-    "sodium": "*"
+    "sodium": "${allowed_sodium_versions}"
+  },
+  "breaks": {
+    "voxyworldgenv2": "=2.2.2"
   },
   "accessWidener": "voxy.accesswidener"
 }

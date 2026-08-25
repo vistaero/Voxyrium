@@ -1,18 +1,46 @@
 package me.cortex.voxy.common.world;
 
 
-import java.util.ArrayDeque;
+import me.cortex.voxy.commonImpl.VoxyCommon;
+
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.Arrays;
-import java.util.Deque;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 //Represents a loaded world section at a specific detail level
 // holds a 32x32x32 region of detail
 public final class WorldSection {
-    private static final int ARRAY_REUSE_CACHE_SIZE = 256;
+    public static final int SECTION_VOLUME = 32*32*32;
+    public static final boolean VERIFY_WORLD_SECTION_EXECUTION = VoxyCommon.isVerificationFlagOn("verifyWorldSectionExecution");
+
+
+    static final VarHandle ATOMIC_STATE_HANDLE;
+    private static final VarHandle NON_EMPTY_CHILD_HANDLE;
+    private static final VarHandle NON_EMPTY_BLOCK_HANDLE;
+    private static final VarHandle IN_SAVE_QUEUE_HANDLE;
+    private static final VarHandle IS_DIRTY_HANDLE;
+
+    static {
+        try {
+            ATOMIC_STATE_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "atomicState", int.class);
+            NON_EMPTY_CHILD_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "nonEmptyChildren", byte.class);
+            NON_EMPTY_BLOCK_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "nonEmptyBlockCount", int.class);
+            IN_SAVE_QUEUE_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "inSaveQueue", boolean.class);
+            IS_DIRTY_HANDLE = MethodHandles.lookup().findVarHandle(WorldSection.class, "isDirty", boolean.class);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+
+    //TODO: should make it dynamically adjust the size allowance based on memory pressure/WorldSection allocation rate (e.g. is it doing a world import)
+    private static final int ARRAY_REUSE_CACHE_SIZE = 400;//500;//32*32*32*8*ARRAY_REUSE_CACHE_SIZE == number of bytes
     //TODO: maybe just swap this to a ConcurrentLinkedDeque
-    private static final Deque<long[]> ARRAY_REUSE_CACHE = new ArrayDeque<>(1024);
+    private static final AtomicInteger ARRAY_REUSE_CACHE_COUNT = new AtomicInteger(0);
+    private static final ConcurrentLinkedDeque<long[]> ARRAY_REUSE_CACHE = new ConcurrentLinkedDeque<>();
 
 
     public final int lvl;
@@ -21,12 +49,21 @@ public final class WorldSection {
     public final int z;
     public final long key;
 
+
+    //Serialized states
+    long metadata;
     long[] data = null;
-    private final ActiveSectionTracker tracker;
-    public final AtomicBoolean inSaveQueue = new AtomicBoolean();
+    volatile int nonEmptyBlockCount = 0;//Note: only needed for level 0 sections
+    volatile byte nonEmptyChildren;
+
+    final ActiveSectionTracker tracker;
+    volatile boolean inSaveQueue;
+    volatile boolean isDirty;
+    private final AtomicLong renderRevision = new AtomicLong();
 
     //When the first bit is set it means its loaded
-    private final AtomicInteger atomicState = new AtomicInteger(1);
+    @SuppressWarnings("all")
+    private volatile int atomicState = 1;
 
     WorldSection(int lvl, int x, int y, int z, ActiveSectionTracker tracker) {
         this.lvl = lvl;
@@ -36,14 +73,20 @@ public final class WorldSection {
         this.key = WorldEngine.getWorldSectionId(lvl, x, y, z);
         this.tracker = tracker;
 
-        if (!ARRAY_REUSE_CACHE.isEmpty()) {
-            synchronized (ARRAY_REUSE_CACHE) {
-                this.data = ARRAY_REUSE_CACHE.poll();
-            }
-        }
+        this.data = ARRAY_REUSE_CACHE.poll();
         if (this.data == null) {
             this.data = new long[32 * 32 * 32];
+        } else {
+            ARRAY_REUSE_CACHE_COUNT.decrementAndGet();
         }
+    }
+
+    void primeForReuse() {
+        ATOMIC_STATE_HANDLE.set(this, 1);
+    }
+
+    public long[] _unsafeGetRawDataArray() {
+        return this.data;
     }
 
     @Override
@@ -51,67 +94,122 @@ public final class WorldSection {
         return ((x*1235641+y)*8127451+z)*918267913+lvl;
     }
 
+    public boolean tryAcquire() {
+        int prev, next;
+        do {
+            prev = (int) ATOMIC_STATE_HANDLE.get(this);
+            if ((prev&1) == 0) {
+                //The object has been release so early exit
+                return false;
+            }
+            next = prev + 2;
+        } while (!ATOMIC_STATE_HANDLE.compareAndSet(this, prev, next));
+        return (next&1) != 0;
+
+
+        /*
+        int prev, next;
+        do {
+            prev = (int) ATOMIC_STATE_HANDLE.get(this);
+            next = ((prev&1) != 0)?prev+2:prev;
+        } while (!ATOMIC_STATE_HANDLE.compareAndSet(this, prev, next));
+        return (next&1) != 0;
+         */
+    }
 
     public int acquire() {
-        int state = this.atomicState.addAndGet(2);
-        if ((state&1) == 0) {
-            throw new IllegalStateException("Tried to acquire unloaded section");
+        return this.acquire(1);
+    }
+
+    public int acquire(int count) {
+        int state = ((int)  ATOMIC_STATE_HANDLE.getAndAdd(this, count<<1)) + (count<<1);
+        if ((state & 1) == 0) {
+            throw new IllegalStateException("Tried to acquire unloaded section: " + WorldEngine.pprintPos(this.key) + " obj: " + System.identityHashCode(this));
         }
         return state>>1;
     }
 
     public int getRefCount() {
-        return this.atomicState.get()>>1;
+        return ((int)ATOMIC_STATE_HANDLE.get(this))>>1;
     }
 
     public int release() {
-        int state = this.atomicState.addAndGet(-2);
+        return release(true, 0);
+    }
+
+
+    public static int RELEASE_HINT_POSSIBLE_REUSE = 1;
+    //Unload but specify possible reuse hints
+    public int release(int hints) {
+        return release(true, hints);
+    }
+
+    int release(boolean unload, int hints) {
+        int state = ((int) ATOMIC_STATE_HANDLE.getAndAdd(this, -2)) - 2;
         if (state < 1) {
             throw new IllegalStateException("Section got into an invalid state");
         }
-        if ((state&1)==0) {
+        if ((state & 1) == 0) {
             throw new IllegalStateException("Tried releasing a freed section");
         }
-        if ((state>>1)==0) {
-            this.tracker.tryUnload(this);
+        if ((state>>1)==0 && unload) {
+            if (this.tracker != null) {
+                this.tracker.tryUnload(this, hints);
+            } else {
+                //This should _ONLY_ ever happen when its an untracked section
+                // If it is, try release it
+                if (this.trySetFreed()) {
+                    this._releaseArray();
+                }
+            }
         }
-
         return state>>1;
     }
 
     //Returns true on success, false on failure
     boolean trySetFreed() {
-        int witness = this.atomicState.compareAndExchange(1, 0);
-        if ((witness&1)==0 && witness != 0) {
+        int witness = (int) ATOMIC_STATE_HANDLE.compareAndExchange(this, 1, 0);
+        if ((witness & 1) == 0 && witness != 0) {
             throw new IllegalStateException("Section marked as free but has refs");
         }
-        boolean isFreed = witness == 1;
-        if (isFreed) {
-            if (ARRAY_REUSE_CACHE.size() < ARRAY_REUSE_CACHE_SIZE) {
-                synchronized (ARRAY_REUSE_CACHE) {
-                    ARRAY_REUSE_CACHE.add(this.data);
-                }
-            }
-            this.data = null;
+        if (witness == 1 && (this.isDirty || this.inSaveQueue)) {
+            throw new IllegalStateException("Section freed while marked as dirty or in the save queue: " + (this.isDirty?"dirty, ":"") + (this.inSaveQueue?"saveQueue":""));
         }
-        return isFreed;
+        return witness == 1;
     }
 
-    public void assertNotFree() {
-        if ((this.atomicState.get() & 1) == 0) {
+    void _releaseArray() {
+        if (VERIFY_WORLD_SECTION_EXECUTION && this.data == null) {
             throw new IllegalStateException();
+        }
+        if (ARRAY_REUSE_CACHE_COUNT.get() < ARRAY_REUSE_CACHE_SIZE) {
+            ARRAY_REUSE_CACHE.add(this.data);
+            ARRAY_REUSE_CACHE_COUNT.incrementAndGet();
+        }
+        this.data = null;
+    }
+
+
+    public void assertNotFree() {
+        if (VERIFY_WORLD_SECTION_EXECUTION) {
+            if ((((int) ATOMIC_STATE_HANDLE.get(this)) & 1) == 0) {
+                throw new IllegalStateException();
+            }
         }
     }
 
     public static int getIndex(int x, int y, int z) {
-        int M = (1<<5)-1;
-        if (x<0||x>M||y<0||y>M||z<0||z>M) {
-            throw new IllegalArgumentException("Out of bounds: " + x + ", " + y + ", " + z);
+        final int M = (1<<5)-1;
+        if (VERIFY_WORLD_SECTION_EXECUTION) {
+            if (x < 0 || x > M || y < 0 || y > M || z < 0 || z > M) {
+                throw new IllegalArgumentException("Out of bounds: " + x + ", " + y + ", " + z);
+            }
         }
         return ((y&M)<<10)|((z&M)<<5)|(x&M);
     }
 
     public long set(int x, int y, int z, long id) {
+        //TODO: this needs to update the block counts
         int idx = getIndex(x,y,z);
         long old = this.data[idx];
         this.data[idx] = id;
@@ -125,20 +223,101 @@ public final class WorldSection {
     }
 
     public void copyDataTo(long[] cache) {
-        this.assertNotFree();
-        if (cache.length != this.data.length) throw new IllegalArgumentException();
-        System.arraycopy(this.data, 0, cache, 0, this.data.length);
+        copyDataTo(cache, 0);
     }
 
-    public boolean tryAcquire() {
-        int state = this.atomicState.updateAndGet(val -> {
-            if ((val&1) != 0) {
-                return val+2;
+    public void copyDataTo(long[] cache, int dstOffset) {
+        this.assertNotFree();
+        if ((cache.length-dstOffset) < this.data.length) throw new IllegalArgumentException();
+        System.arraycopy(this.data, 0, cache, dstOffset, this.data.length);
+    }
+
+    public static int getChildIndex(int x, int y, int z) {
+        return (x&1)|((y&1)<<2)|((z&1)<<1);
+    }
+
+    public byte getNonEmptyChildren() {
+        return (byte) NON_EMPTY_CHILD_HANDLE.get(this);
+    }
+
+    //Updates this.nonEmptyChildren atomically with respect to the child passed in
+    // returns 0 if no change, 1 if it just updated and didnt do a major state change, 2 if it was a major state change (something -> nothing, nothing -> something)
+    public int updateEmptyChildState(WorldSection child) {
+        int childIdx = getChildIndex(child.x, child.y, child.z);
+        byte msk = (byte) (1<<childIdx);
+        byte prev, next;
+        do {
+            prev = this.getNonEmptyChildren();
+            next = (byte) ((prev&(~msk))|(child.getNonEmptyChildren()!=0?msk:0));
+        } while (!NON_EMPTY_CHILD_HANDLE.compareAndSet(this, prev, next));
+
+        return ((prev!=0)^(next!=0))?2:(prev!=next?1:0);
+    }
+
+    public int getNonEmptyBlockCount() {
+        return (int) NON_EMPTY_BLOCK_HANDLE.get(this);
+    }
+
+    public int addNonEmptyBlockCount(int delta) {
+        int count = ((int)NON_EMPTY_BLOCK_HANDLE.getAndAdd(this, delta)) + delta;
+        if (VERIFY_WORLD_SECTION_EXECUTION) {
+            if (count < 0) {
+                throw new IllegalStateException("Count is negative!");
             }
-            return val;
-        });
-        return (state&1) != 0;
+        }
+        return count;
+    }
+
+    public boolean updateLvl0State() {
+        if (VERIFY_WORLD_SECTION_EXECUTION) {
+            if (this.lvl != 0) {
+                throw new IllegalStateException("Tried updating a level 0 lod when its not level 0: " + WorldEngine.pprintPos(this.key));
+            }
+        }
+        byte prev, next;
+        do {
+            prev = this.getNonEmptyChildren();
+            next = (byte) (((int)NON_EMPTY_BLOCK_HANDLE.get(this))==0?0:0xFF);
+        } while (!NON_EMPTY_CHILD_HANDLE.compareAndSet(this, prev, next));
+        return prev != next;
+    }
+
+    public void _unsafeSetNonEmptyChildren(byte nonEmptyChildren) {
+        NON_EMPTY_CHILD_HANDLE.set(this, nonEmptyChildren);
+    }
+
+    public static WorldSection _createRawUntrackedUnsafeSection(int lvl, int x, int y, int z) {
+        return new WorldSection(lvl, x, y, z, null);
+    }
+
+    public void markDirty() {
+        IS_DIRTY_HANDLE.getAndSet(this, true);
+        this.renderRevision.incrementAndGet();
+    }
+
+    /**
+     * Monotonic revision used by renderer backends to avoid rebuilding an
+     * unchanged section after it has been uploaded once.
+     */
+    public long getRenderRevision() {
+        return this.renderRevision.get();
+    }
+
+
+    public boolean exchangeIsInSaveQueue(boolean state) {
+        return ((boolean) IN_SAVE_QUEUE_HANDLE.compareAndExchange(this, !state, state)) == !state;
+    }
+
+    //Should only be called by the saving service
+    public boolean setNotDirty() {
+        return (boolean) IS_DIRTY_HANDLE.getAndSet(this, false);
+    }
+
+    public boolean shouldSave() {
+        return this.isDirty&&!this.inSaveQueue;
+    }
+
+    public boolean isFreed() {
+        return (((int)ATOMIC_STATE_HANDLE.get(this))&1)==0;
     }
 }
-
-//TODO: for serialization, make a huffman encoding tree on the integers since that should be very very efficent for compression

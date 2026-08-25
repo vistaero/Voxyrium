@@ -1,7 +1,13 @@
 package me.cortex.voxy.client.core.model;
 
 public class IdNotYetComputedException extends RuntimeException {
-    public IdNotYetComputedException(int id) {
-        super("Id not yet computed: " + id);
+    public final int id;
+    public final boolean isIdBlockId;
+    public int auxBitMsk;
+    public long[] auxData;
+    public IdNotYetComputedException(int id, boolean isIdBlockId) {
+        super(null, null, false, false);
+        this.id = id;
+        this.isIdBlockId = isIdBlockId;
     }
 }

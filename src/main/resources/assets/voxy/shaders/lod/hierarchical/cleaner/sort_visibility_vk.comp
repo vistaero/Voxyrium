@@ -1,0 +1,67 @@
+#version 460 core
+// Vulkan-safe variant of sort_visibility.comp.
+//
+// The GL shader first inserts candidates into a shared-memory array using
+// atomic compare-and-swap.  That produces SPIR-V workgroup atomics which
+// MoltenVK 1.4 cannot lower for some Intel macOS/AMD configurations: pipeline
+// creation fails before the world can open.  Cleaning only runs under geometry
+// memory pressure, so the portable path trades that local pre-sort for direct
+// insertion into the global top-N array.  It preserves the selected candidates
+// and keeps the normal traversal/rendering path unchanged.
+
+layout(local_size_x=WORK_SIZE, local_size_y=1) in;
+
+#import <voxy:lod/hierarchical/node.glsl>
+
+layout(binding = VISIBILITY_BUFFER_BINDING, std430) restrict readonly buffer VisibilityDataBuffer {
+    uint[] visibility;
+};
+
+layout(binding = OUTPUT_BUFFER_BINDING, std430) restrict buffer MinimumVisibilityBuffer {
+    uint minVisIds[OUTPUT_SIZE];
+};
+
+uint atomicDerefMaxExchangeGlobal(uint atId, uint id) {
+    const uint value = visibility[id];
+    while (true) {
+        const uint existingId = minVisIds[atId];
+        if (existingId == id) {
+            return uint(-1);
+        }
+        if (visibility[existingId & ((1u << 31) - 1)] <= value) {
+            return id;
+        }
+        const uint previous = atomicCompSwap(minVisIds[atId], existingId, id);
+        if (previous == existingId) {
+            return existingId;
+        }
+    }
+}
+
+void bubbleSortGlobal(uint id) {
+    for (uint i = 0; i < OUTPUT_SIZE; i++) {
+        id = atomicDerefMaxExchangeGlobal(i, id);
+        if (id == uint(-1)) {
+            break;
+        }
+    }
+}
+
+bool shouldSortId(uint id) {
+    UnpackedNode node;
+    if (unpackNode(node, id) == uvec4(-1)) return false;
+    if (isEmptyMesh(node) || !hasMesh(node)) return false;
+    if (node.lodLevel == 4) return false;
+    return !hasRequested(node);
+}
+
+void main() {
+    for (uint i = 0; i < ELEMS_PER_THREAD; i++) {
+        uint id = gl_GlobalInvocationID.x * ELEMS_PER_THREAD + i;
+        uint vis = visibility[id];
+        if (vis == uint(-1)) continue;
+        if (visibility[minVisIds[OUTPUT_SIZE - 1]] <= vis) continue;
+        if (!shouldSortId(id)) continue;
+        bubbleSortGlobal(id);
+    }
+}

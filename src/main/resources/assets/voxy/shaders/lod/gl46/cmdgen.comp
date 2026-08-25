@@ -3,16 +3,27 @@
 
 layout(local_size_x = 128) in;
 
-#import <voxy:lod/quad_format.glsl>
-#import <voxy:lod/gl46/bindings.glsl>
-#import <voxy:lod/gl46/frustum.glsl>
+#define DRAW_BUFFER_BINDING 1
+#define DRAW_COUNT_BUFFER_BINDING 2
+#define SECTION_METADATA_BUFFER_BINDING 3
+#define VISIBILITY_BUFFER_BINDING 4
+#define INDIRECT_SECTION_LOOKUP_BINDING 5
+#define POSITION_SCRATCH_BINDING 6
+#define POSITION_SCRATCH_ACCESS writeonly
+
 #import <voxy:lod/section.glsl>
-#line 11
+#import <voxy:lod/gl46/bindings.glsl>
 
 //https://github.com/KhronosGroup/GLSL/blob/master/extensions/ext/GL_EXT_shader_16bit_storage.txt
 // adds support for uint8_t which can use for compact visibility buffer
 
 
+#ifdef HAS_STATISTICS
+layout(binding = STATISTICS_BUFFER_BINDING, std430) restrict buffer statisticsBuffer {
+    uint visibleSectionCounts[5];
+    uint quadCounts[5];
+};
+#endif
 
 /*
     uint  count;
@@ -22,20 +33,18 @@ layout(local_size_x = 128) in;
     uint  baseInstance;
     */
 
-uint encodeLocalLodPos(uint detail, ivec3 pos) {
-    uvec3 detla = (pos - (baseSectionPos >> detail))&((1<<9)-1);
-    return (detail<<27)|(detla.x<<18)|(detla.y<<9)|(detla.z);
-}
-
+layout(binding = TRANSLUCENT_DISTANCE_BUFFER_BINDING, std430) restrict buffer TranslucentCommandCount {
+    uint[] translucentCommandData;
+};
 
 //Note: if i want reverse indexing i need to use the index buffer offset to offset
-void writeCmd(uint idx, uint encodedPos, uint offset, uint quadCount) {
+void writeCmd(uint idx, uint instance, uint offset, uint quadCount) {
     DrawCommand cmd;
     cmd.count = quadCount * 6;
     cmd.instanceCount = 1;
     cmd.firstIndex = 0;
     cmd.baseVertex = int(offset)<<2;
-    cmd.baseInstance = encodedPos;
+    cmd.baseInstance = instance;
     cmdBuffer[idx] = cmd;
 }
 
@@ -43,104 +52,170 @@ void main() {
     if (gl_GlobalInvocationID.x >= sectionCount) {
         return;
     }
-    SectionMeta meta = sectionData[gl_GlobalInvocationID.x];
+    uint sectionId = indirectLookup[gl_GlobalInvocationID.x];
+    SectionMeta meta = sectionData[sectionId];
     uint detail = extractDetail(meta);
     ivec3 ipos = extractPosition(meta);
 
     vec3 cornerPos = vec3(((ipos<<detail)-baseSectionPos)<<5)-cameraSubPos;
 
 
-    //Check the occlusion data from last frame
-    bool shouldRender = visibilityData[gl_GlobalInvocationID.x] == frameId - 1;
+    uint dat = visibilityData[sectionId];
 
-    //Clear the occlusion data (not strictly? needed? i think???)
-    //visibilityData[gl_GlobalInvocationID.x] = 0;
+    //if the section was visible this frame
+    bool shouldRender = (dat&0x7fffffffu) == frameId;
+    bool renderTemporally = (dat&0x80000000u)==0;// means, if it was not visible last frame
 
-    //TODO: need to make it check that only if it was also in the frustum last frame does it apply the visibilityData check!
-    // this fixes temporal coherance
 
-    //This prevents overflow of the relative position encoder
-    if (shouldRender) {
-        shouldRender = !any(lessThan(ivec3(254), abs(ipos-(baseSectionPos>>detail))));
-    }
 
     if (shouldRender) {
-        uint encodedPos = encodeLocalLodPos(detail, ipos);
+
+        #ifdef HAS_STATISTICS
+        atomicAdd(visibleSectionCounts[detail], 1);
+        #endif
+
         uint ptr = extractQuadStart(meta);
         ivec3 relative = ipos-(baseSectionPos>>detail);
+        uint drawId = gl_GlobalInvocationID.x;
 
+        positionBuffer[drawId] = extractRawPos(meta);
+        uvec4 counts = meta.b;
 
-
+        //TODO implicit command merging
         uint msk = 0;
-        msk |= uint(((meta.cntB      &0xFFFF)!=0) && (relative.y>-1))<<0;
-        msk |= uint((((meta.cntB>>16)&0xFFFF)!=0) && (relative.y<1 ))<<1;
-        msk |= uint(((meta.cntC      &0xFFFF)!=0) && (relative.z>-1))<<2;
-        msk |= uint((((meta.cntC>>16)&0xFFFF)!=0) && (relative.z<1 ))<<3;
-        msk |= uint(((meta.cntD      &0xFFFF)!=0) && (relative.x>-1))<<4;
-        msk |= uint((((meta.cntD>>16)&0xFFFF)!=0) && (relative.x<1 ))<<5;
+        msk |= uint(((counts.y      &0xFFFFu)!=0) && (relative.y>-1))<<0;
+        msk |= uint((((counts.y>>16)&0xFFFFu)!=0) && (relative.y<1 ))<<1;
+        msk |= uint(((counts.z      &0xFFFFu)!=0) && (relative.z>-1))<<2;
+        msk |= uint((((counts.z>>16)&0xFFFFu)!=0) && (relative.z<1 ))<<3;
+        msk |= uint(((counts.w      &0xFFFFu)!=0) && (relative.x>-1))<<4;
+        msk |= uint((((counts.w>>16)&0xFFFFu)!=0) && (relative.x<1 ))<<5;
 
-        msk |= uint(((meta.cntA>>16)&0xFFFF)!=0)<<6;
+        msk |= uint(((counts.x>>16)&0xFFFFu)!=0)<<6;
 
 
-        uint cmdPtr = atomicAdd(opaqueDrawCount, bitCount(msk));
+        uint cmdCnt = bitCount(msk);
+        uint cmdPtr = atomicAdd(opaqueDrawCount, cmdCnt);
 
+        uint tCmdPtr = 0;
+        if (renderTemporally) {
+            tCmdPtr = atomicAdd(temporalOpaqueDrawCount, cmdCnt) + TEMPORAL_OFFSET;
+        }
+
+        //TODO: make totalQuads also have temporal amount
+        #ifdef HAS_STATISTICS
+        uint totalQuads = 0;
+        #endif
 
         uint count = 0;
         //Translucency
-        count = meta.cntA&0xFFFF;
+        count = counts.x&0xFFFFu;
         if (count != 0) {
-            uint translucentCommandPtr = atomicAdd(translucentDrawCount, 1) + 400000;//FIXME: dont hardcode this offset
-            writeCmd(translucentCommandPtr, encodedPos, ptr, count);
+            uint tp = atomicAdd(translucentDrawCount, 1)+TRANSLUCENT_WRITE_BASE;
+            translucentCommandData[tp] = drawId;
+            uvec3 absRel = abs(relative);
+            uint distToCamera = (absRel.x+absRel.y+absRel.z)<<detail;
+            //The -1 is because we want 0 to TRANSLUCENT_WRITE_BASE, exclusive of ending, not inclusive (0->1023)
+            distToCamera = (TRANSLUCENT_WRITE_BASE-1)-min(distToCamera, (TRANSLUCENT_WRITE_BASE-1));
+            atomicAdd(translucentCommandData[distToCamera], 1);
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
         }
         ptr += count;
 
         //Double sided quads
-        count = (meta.cntA>>16)&0xFFFF;
+        count = (counts.x>>16)&0xFFFFu;
         if (count != 0) {
-            writeCmd(cmdPtr++, encodedPos, ptr, count);
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
         }
         ptr += count;
 
         //Down
-        count = (meta.cntB)&0xFFFF;
+        count = (counts.y)&0xFFFFu;
         if (((msk&(1u<<0))!=0)) {
-            writeCmd(cmdPtr++, encodedPos, ptr, count);
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
         }
         ptr += count;
 
         //Up
-        count = (meta.cntB>>16)&0xFFFF;
+        count = (counts.y>>16)&0xFFFFu;
         if ((msk&(1u<<1))!=0) {
-            writeCmd(cmdPtr++, encodedPos, ptr, count);
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
         }
         ptr += count;
 
         //North
-        count = (meta.cntC)&0xFFFF;
+        count = (counts.z)&0xFFFFu;
         if ((msk&(1u<<2))!=0) {
-            writeCmd(cmdPtr++, encodedPos, ptr, count);
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
         }
         ptr += count;
 
         //South
-        count = (meta.cntC>>16)&0xFFFF;
+        count = (counts.z>>16)&0xFFFFu;
         if ((msk&(1u<<3))!=0) {
-            writeCmd(cmdPtr++, encodedPos, ptr, count);
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
         }
         ptr += count;
 
         //West
-        count = (meta.cntD)&0xFFFF;
+        count = (counts.w)&0xFFFFu;
         if ((msk&(1u<<4))!=0) {
-            writeCmd(cmdPtr++, encodedPos, ptr, count);
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
         }
         ptr += count;
 
         //East
-        count = (meta.cntD>>16)&0xFFFF;
+        count = (counts.w>>16)&0xFFFFu;
         if ((msk&(1u<<5))!=0) {
-            writeCmd(cmdPtr++, encodedPos, ptr, count);
+            writeCmd(cmdPtr++, drawId, ptr, count);
+            if (renderTemporally) {
+                writeCmd(tCmdPtr++, drawId, ptr, count);
+            }
+            #ifdef HAS_STATISTICS
+            totalQuads += count;
+            #endif
         }
         ptr += count;
+
+        #ifdef HAS_STATISTICS
+        atomicAdd(quadCounts[detail], totalQuads);
+        #endif
     }
 }

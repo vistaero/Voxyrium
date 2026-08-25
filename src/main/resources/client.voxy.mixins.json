@@ -1,0 +1,21 @@
+{
+  "required": true,
+  "package": "me.cortex.voxy.client.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "client": [
+    "minecraft.MixinClientChunkCache",
+    "minecraft.MixinClientLevel",
+    "minecraft.MixinLevelRenderer",
+    "minecraft.session.MixinClientPacketListener",
+    "minecraft.session.MixinMinecraft",
+    "minecraft.util.MixinBlockableEventLoop",
+    "sodium.MixinDefaultChunkRenderer",
+    "sodium.MixinRenderSectionManager"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "overwrites": {
+    "requireAnnotations": true
+  }
+}

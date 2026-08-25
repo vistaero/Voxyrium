@@ -1,25 +1,35 @@
 package me.cortex.voxy.client.mixin.sodium;
 
 import me.cortex.voxy.client.config.VoxyConfig;
-import me.cortex.voxy.client.core.IGetVoxelCore;
+import me.cortex.voxy.common.world.service.VoxelIngestService;
+import me.jellysquid.mods.sodium.client.gl.device.CommandList;
 import me.jellysquid.mods.sodium.client.render.chunk.RenderSectionManager;
-import net.minecraft.client.world.ClientWorld;
-import org.spongepowered.asm.mixin.Final;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.client.multiplayer.ClientLevel;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(value = RenderSectionManager.class, remap = false)
-public class MixinRenderSectionManager {
-    @Shadow @Final private ClientWorld world;
+public final class MixinRenderSectionManager {
+    @Unique
+    private static final boolean VOXY$BOBBY_INSTALLED = FabricLoader.getInstance().isModLoaded("bobby");
+
+    @Unique
+    private ClientLevel voxy$world;
+
+    @Inject(method = "<init>", at = @At("TAIL"))
+    private void voxy$captureWorld(ClientLevel world, int renderDistance,
+                                   CommandList commandList, CallbackInfo ci) {
+        this.voxy$world = world;
+    }
 
     @Inject(method = "onChunkRemoved", at = @At("HEAD"))
-    private void injectIngest(int x, int z, CallbackInfo ci) {
-        var core = ((IGetVoxelCore)(world.worldRenderer)).getVoxelCore();
-        if (core != null && VoxyConfig.CONFIG.ingestEnabled) {
-            core.enqueueIngest(world.getChunk(x, z));
+    private void voxy$ingestBeforeRemoval(int x, int z, CallbackInfo ci) {
+        if (VoxyConfig.CONFIG.ingestEnabled && !VOXY$BOBBY_INSTALLED) {
+            VoxelIngestService.tryAutoIngestChunk(this.voxy$world.getChunk(x, z));
         }
     }
 }

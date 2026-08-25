@@ -1,199 +1,364 @@
 package me.cortex.voxy.client.core.rendering.building;
 
-import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import me.cortex.voxy.client.core.model.IdNotYetComputedException;
-import me.cortex.voxy.client.core.model.ModelManager;
+import me.cortex.voxy.client.core.model.ModelBakerySubsystem;
+import me.cortex.voxy.common.thread.Service;
+import me.cortex.voxy.common.thread.ServiceManager;
+import me.cortex.voxy.common.util.Pair;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.common.world.WorldSection;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.text.Text;
+import me.cortex.voxy.common.world.other.Mapper;
 
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Semaphore;
+import java.util.List;
+import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.StampedLock;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
-import java.util.function.ToIntFunction;
 
 //TODO: Add a render cache
+
+
+//TODO: to add remove functionallity add a "defunked" variable to the build task and set it to true on remove
+// and process accordingly
 public class RenderGenerationService {
+    private static final int MAX_HOLDING_SECTION_COUNT = 1000;
 
-    public interface TaskChecker {boolean check(int lvl, int x, int y, int z);}
-    private record BuildTask(Supplier<WorldSection> sectionSupplier) {}
+    public static final AtomicInteger MESH_FAILED_COUNTER = new AtomicInteger();
+    private static final AtomicInteger COUNTER = new AtomicInteger();
+    private static final class BuildTask {
+        WorldSection section;
+        final long position;
+        boolean hasDoneModelRequestInner;
+        boolean hasDoneModelRequestOuter;
+        int attempts;
+        int addin;
+        long priority = Long.MIN_VALUE;
+        private BuildTask(long position) {
+            this.position = position;
+        }
+        private void updatePriority() {
+            int unique = COUNTER.incrementAndGet();
+            int lvl = WorldEngine.MAX_LOD_LAYER-WorldEngine.getLevel(this.position);
+            lvl = Math.min(lvl, 3);//Make the 2 highest quality have equal priority
+            this.priority = (((lvl*3L + Math.min(this.attempts, 3))*2 + this.addin) <<32) + Integer.toUnsignedLong(unique);
+            this.addin = 0;
+        }
+    }
 
-    private volatile boolean running = true;
-    private final Thread[] workers;
+    private final AtomicInteger holdingSectionCount = new AtomicInteger();//Used to limit section holding
 
-    private final Long2ObjectLinkedOpenHashMap<BuildTask> taskQueue = new Long2ObjectLinkedOpenHashMap<>();
+    private final AtomicInteger taskQueueCount = new AtomicInteger();
+    private final PriorityBlockingQueue<BuildTask> taskQueue = new PriorityBlockingQueue<>(5000, (a,b)-> Long.compareUnsigned(a.priority, b.priority));
+    private final StampedLock taskMapLock = new StampedLock();
+    private final Long2ObjectOpenHashMap<BuildTask> taskMap = new Long2ObjectOpenHashMap<>(5000);
 
-    private final Semaphore taskCounter = new Semaphore(0);
     private final WorldEngine world;
-    private final ModelManager modelManager;
-    private final Consumer<BuiltSection> resultConsumer;
-    private final BuiltSectionMeshCache meshCache = new BuiltSectionMeshCache();
+    private final ModelBakerySubsystem modelBakery;
+    private Consumer<BuiltSection> resultConsumer;
     private final boolean emitMeshlets;
 
-    public RenderGenerationService(WorldEngine world, ModelManager modelManager, int workers, Consumer<BuiltSection> consumer, boolean emitMeshlets) {
+    private final Service service;
+
+
+    /*
+    public RenderGenerationService(WorldEngine world, ModelBakerySubsystem modelBakery, ServiceManager sm, boolean emitMeshlets) {
+        this(world, modelBakery, sm, emitMeshlets, ()->true);
+    }*/
+
+    public RenderGenerationService(WorldEngine world, ModelBakerySubsystem modelBakery, ServiceManager sm, boolean emitMeshlets) {
         this.emitMeshlets = emitMeshlets;
         this.world = world;
-        this.modelManager = modelManager;
+        this.modelBakery = modelBakery;
+
+        this.service = sm.createService(()->{
+            //Thread local instance of the factory
+            var factory = new RenderDataFactory(this.world, this.modelBakery.factory, this.emitMeshlets);
+            IntOpenHashSet seenMissed = new IntOpenHashSet(128);
+            return new Pair<>(() -> {
+                this.processJob(factory, seenMissed);
+            }, factory::free);
+        }, 10, "Section mesh generation service");
+    }
+
+    public void setResultConsumer(Consumer<BuiltSection> consumer) {
         this.resultConsumer = consumer;
-        this.workers =  new Thread[workers];
-        for (int i = 0; i < workers; i++) {
-            this.workers[i] = new Thread(this::renderWorker);
-            this.workers[i].setDaemon(true);
-            this.workers[i].setName("Render generation service #" + i);
-            this.workers[i].start();
+    }
+
+    //NOTE: the biomes are always fully populated/kept up to date
+
+    //Asks the Model system to bake all blocks that currently dont have a model
+    private void computeAndRequestRequiredModels(IntOpenHashSet seenMissedIds, int bitMsk, long[] auxData) {
+        final var factory = this.modelBakery.factory;
+        for (int i = 0; i < 6; i++) {
+            if ((bitMsk&(1<<i))==0) continue;
+            for (int j = 0; j < 32*32; j++) {
+                int block = Mapper.getBlockId(auxData[j+(i*32*32)]);
+                if (block != 0 && !factory.hasModelForBlockId(block)) {
+                    if (seenMissedIds.add(block)) {
+                        this.modelBakery.requestBlockBake(block);
+                    }
+                }
+            }
         }
+    }
+
+    private void computeAndRequestRequiredModels(IntOpenHashSet seenMissedIds, WorldSection section) {
+        //Know this is... very much not safe, however it reduces allocation rates and other garbage, am sure its "fine"
+        final var factory = this.modelBakery.factory;
+        for (long state : section._unsafeGetRawDataArray()) {
+            int block = Mapper.getBlockId(state);
+            if (block != 0 && !factory.hasModelForBlockId(block)) {
+                if (seenMissedIds.add(block)) {
+                    this.modelBakery.requestBlockBake(block);
+                }
+            }
+        }
+    }
+
+    private WorldSection acquireSection(long pos) {
+        return this.world.acquireIfExists(pos);
+    }
+
+    private static boolean putTaskFirst(long pos) {
+        //Level 3 or 4
+        return WorldEngine.getLevel(pos) > 2;
     }
 
     //TODO: add a generated render data cache
-    private void renderWorker() {
-        //Thread local instance of the factory
-        var factory = new RenderDataFactory(this.world, this.modelManager, this.emitMeshlets);
-        while (this.running) {
-            this.taskCounter.acquireUninterruptibly();
-            if (!this.running) break;
-            try {
-                BuildTask task;
-                synchronized (this.taskQueue) {
-                    task = this.taskQueue.removeFirst();
-                }
-                var section = task.sectionSupplier.get();
-                if (section == null) {
-                    continue;
-                }
-                section.assertNotFree();
-                BuiltSection mesh = null;
-                try {
-                    mesh = factory.generateMesh(section);
-                } catch (IdNotYetComputedException e) {
-                    try {
-                        Thread.sleep(100);
-                    } catch (InterruptedException ex) {
-                        throw new RuntimeException(ex);
-                    }
-                    //We need to reinsert the build task into the queue
-                    //System.err.println("Render task failed to complete due to un-computed client id");
-                    synchronized (this.taskQueue) {
-                        this.taskQueue.computeIfAbsent(section.key, key->{this.taskCounter.release(); return task;});
-                    }
-                }
-                section.release();
-                if (mesh != null) {
-                    //TODO: if the mesh is null, need to clear the cache at that point
-                    this.resultConsumer.accept(mesh.clone());
-                    if (!this.meshCache.putMesh(mesh)) {
-                        mesh.free();
-                    }
-                }
-            } catch (Exception e) {
-                System.err.println(e);
-                MinecraftClient.getInstance().executeSync(()->MinecraftClient.getInstance().player.sendMessage(Text.literal("Voxy render service had an exception while executing please check logs and report error")));
+    private void processJob(RenderDataFactory factory, IntOpenHashSet seenMissedIds) {
+        BuildTask task = this.taskQueue.poll();
+        this.taskQueueCount.decrementAndGet();
+
+        //long time = BuiltSection.getTime();
+        boolean shouldFreeSection = true;
+
+        WorldSection section;
+        if (task.section == null) {
+            section = this.acquireSection(task.position);
+        } else {
+            section = task.section;
+        }
+
+
+        {//Remove the task from the map, this is done before we check for null sections as well the task map needs to be correct
+            long stamp = this.taskMapLock.writeLock();
+            var rtask = this.taskMap.remove(task.position);
+            if (rtask != task) {
+                this.taskMapLock.unlockWrite(stamp);
+                throw new IllegalStateException();
             }
+            this.taskMapLock.unlockWrite(stamp);
         }
-    }
 
-    public int getMeshCacheCount() {
-        return this.meshCache.getCount();
-    }
-
-    //TODO: Add a priority system, higher detail sections must always be updated before lower detail
-    // e.g. priorities NONE->lvl0 and lvl1 -> lvl0 over lvl0 -> lvl1
-
-
-    //TODO: make it pass either a world section, _or_ coodinates so that the render thread has to do the loading of the sections
-    // not the calling method
-
-    //TODO: maybe make it so that it pulls from the world to stop the inital loading absolutly butt spamming the queue
-    // and thus running out of memory
-
-    //TODO: REDO THIS ENTIRE THING
-    // render tasks should not be bound to a WorldSection, instead it should be bound to either a WorldSection or
-    // an LoD position, the issue is that if we bound to a LoD position we loose all the info of the WorldSection
-    // like if its in the render queue and if we should abort building the render data
-    //1 proposal fix is a Long2ObjectLinkedOpenHashMap<WorldSection> which means we can abort if needed,
-    // also gets rid of dependency on a WorldSection (kinda)
-    public void enqueueTask(int lvl, int x, int y, int z) {
-        this.enqueueTask(lvl, x, y, z, (l,x1,y1,z1)->true);
-    }
-
-
-    public void enqueueTask(int lvl, int x, int y, int z, TaskChecker checker) {
-        long ikey = WorldEngine.getWorldSectionId(lvl, x, y, z);
-        {
-            var cache = this.meshCache.getMesh(ikey);
-            if (cache != null) {
-                this.resultConsumer.accept(cache);
-                return;
+        if (section == null) {
+            if (this.resultConsumer != null) {
+                this.resultConsumer.accept(BuiltSection.empty(task.position));
             }
-        }
-        synchronized (this.taskQueue) {
-            this.taskQueue.computeIfAbsent(ikey, key->{
-                this.taskCounter.release();
-                return new BuildTask(()->{
-                    if (checker.check(lvl, x, y, z)) {
-                        return this.world.acquireIfExists(lvl, x, y, z);
-                    } else {
-                        return null;
-                    }
-                });
-            });
-        }
-    }
-
-    //Tells the render cache that the mesh at the specified position should be cached
-    public void markCache(int lvl, int x, int y, int z) {
-        this.meshCache.markCache(WorldEngine.getWorldSectionId(lvl, x, y, z));
-    }
-
-    //Tells the render cache that the mesh at the specified position should not be cached/any previous cache result, freed
-    public void unmarkCache(int lvl, int x, int y, int z) {
-        this.meshCache.unmarkCache(WorldEngine.getWorldSectionId(lvl, x, y, z));
-    }
-
-    //Resets a chunks cache mesh
-    public void clearCache(int lvl, int x, int y, int z) {
-        this.meshCache.clearMesh(WorldEngine.getWorldSectionId(lvl, x, y, z));
-    }
-
-    public void removeTask(int lvl, int x, int y, int z) {
-        synchronized (this.taskQueue) {
-            if (this.taskQueue.remove(WorldEngine.getWorldSectionId(lvl, x, y, z)) != null) {
-                this.taskCounter.acquireUninterruptibly();
-            }
-        }
-    }
-
-    public int getTaskCount() {
-        return this.taskCounter.availablePermits();
-    }
-
-    public void shutdown() {
-        boolean anyAlive = false;
-        for (var worker : this.workers) {
-            anyAlive |= worker.isAlive();
-        }
-
-        if (!anyAlive) {
-            System.err.println("Render gen workers already dead on shutdown! this is very very bad, check log for errors from this thread");
             return;
         }
+        section.assertNotFree();
+        BuiltSection mesh = null;
 
-        //Since this is just render data, dont care about any tasks needing to finish
-        this.running = false;
-        this.taskCounter.release(1000);
 
-        //Wait for thread to join
         try {
-            for (var worker : this.workers) {
-                worker.join();
+            mesh = factory.generateMesh(section);
+        } catch (IdNotYetComputedException e) {
+            {
+                long stamp = this.taskMapLock.writeLock();
+                BuildTask other = this.taskMap.putIfAbsent(task.position, task);
+                this.taskMapLock.unlockWrite(stamp);
+
+                if (other != null) {//Weve been replaced
+                    //Request the block
+                    if (e.isIdBlockId) {
+                        //TODO: maybe move this to _after_ task as been readded to queue??
+                        if (!this.modelBakery.factory.hasModelForBlockId(e.id)) {
+                            if (seenMissedIds.add(e.id)) {
+                                this.modelBakery.requestBlockBake(e.id);
+                            }
+                        }
+                    }
+                    //Exchange info
+                    if (task.hasDoneModelRequestInner) {
+                        other.hasDoneModelRequestInner = true;
+                    }
+                    if (task.hasDoneModelRequestOuter) {
+                        other.hasDoneModelRequestOuter = true;
+                    }
+                    if (task.section != null) {
+                        this.holdingSectionCount.decrementAndGet();
+                    }
+                    task.section = null;
+                    shouldFreeSection = true;
+                    task = null;
+                }
             }
-        } catch (InterruptedException e) {throw new RuntimeException(e);}
+            if (task != null) {
+                //This is our task
+
+                //Request the block
+                if (e.isIdBlockId) {
+                    //TODO: maybe move this to _after_ task as been readded to queue??
+                    if (!this.modelBakery.factory.hasModelForBlockId(e.id)) {
+                        if (seenMissedIds.add(e.id)) {
+                            this.modelBakery.requestBlockBake(e.id);
+                        }
+                    }
+                }
+
+                if (task.hasDoneModelRequestOuter || task.hasDoneModelRequestInner) {
+                    MESH_FAILED_COUNTER.incrementAndGet();
+                }
+
+                if (task.hasDoneModelRequestInner && task.hasDoneModelRequestOuter) {
+                    task.attempts++;
+                } else {
+                    if (task.hasDoneModelRequestInner) {
+                        task.attempts++;//This is because it can be baking and just model thing isnt keeping up
+                    }
+
+                    if (!task.hasDoneModelRequestInner) {
+                        //The reason for the extra id parameter is that we explicitly add/check against the exception id due to e.g. requesting accross a chunk boarder wont be captured in the request
+                        if (e.auxData == null)//the null check this is because for it to be, the inner must already be computed
+                            this.computeAndRequestRequiredModels(seenMissedIds, section);
+                        task.hasDoneModelRequestInner = true;
+                    }
+                    //If this happens... aahaha painnnn
+                    if (task.hasDoneModelRequestOuter) {
+                        task.attempts++;
+                    }
+
+                    if ((!task.hasDoneModelRequestOuter) && e.auxData != null) {
+                        this.computeAndRequestRequiredModels(seenMissedIds, e.auxBitMsk, e.auxData);
+                        task.hasDoneModelRequestOuter = true;
+                    }
+
+                    task.addin = WorldEngine.getLevel(task.position)>2?1:0;//Single time addin which gives the models time to bake before the task executes
+                }
+
+                //Keep the lock on the section, and attach it to the task, this prevents needing to re-aquire it later
+                if (task.section == null) {
+                    if (this.holdingSectionCount.get() < MAX_HOLDING_SECTION_COUNT) {
+                        this.holdingSectionCount.incrementAndGet();
+                        task.section = section;
+                        shouldFreeSection = false;
+                    }
+                } else {
+                    shouldFreeSection = false;
+                }
+
+                task.updatePriority();
+                this.taskQueue.add(task);
+                this.taskQueueCount.incrementAndGet();
+
+                if (this.service.isLive()) {//Only execute if were not dead
+                    this.service.execute();//Since we put in queue, release permit
+                }
+            }
+        }
+
+        if (shouldFreeSection) {
+            if (task != null && task.section != null) {
+                this.holdingSectionCount.decrementAndGet();
+            }
+            section.release();
+        }
+
+        if (mesh != null) {//If the mesh is null it means it didnt finish, so dont submit
+            if (this.resultConsumer != null) {
+                this.resultConsumer.accept(mesh);
+            } else {
+                mesh.free();
+            }
+        }
+    }
+
+
+    public void enqueueTask(long pos) {
+        if (!this.service.isLive()) {
+            return;
+        }
+        boolean[] isOurs = new boolean[1];
+        long stamp = this.taskMapLock.writeLock();
+        BuildTask task = this.taskMap.computeIfAbsent(pos, p->{
+                isOurs[0] = true;
+                return new BuildTask(p);
+            });
+        this.taskMapLock.unlockWrite(stamp);
+
+        if (isOurs[0]) {//If its not ours we dont care about it
+            //Set priority and insert into queue and execute
+            task.updatePriority();
+            this.taskQueue.add(task);
+            this.taskQueueCount.incrementAndGet();
+            this.service.execute();
+        }
+    }
+
+    /*
+    public void enqueueTask(int lvl, int x, int y, int z) {
+        this.enqueueTask(WorldEngine.getWorldSectionId(lvl, x, y, z));
+    }
+    */
+
+    public void shutdown() {
+        //Steal and free as much work as possible
+        while (this.service.numJobs() != 0) {
+            int i = this.service.drain();
+            if (i == 0) break;
+            {
+                long stamp = this.taskMapLock.writeLock();
+                for (int j = 0; j < i; j++) {
+                    var task = this.taskQueue.remove();
+                    if (task.section != null) {
+                        task.section.release();
+                        this.holdingSectionCount.decrementAndGet();
+                    }
+                    if (this.taskMap.remove(task.position) != task) {
+                        throw new IllegalStateException();
+                    }
+                }
+                this.taskMapLock.unlockWrite(stamp);
+                this.taskQueueCount.addAndGet(-i);
+            }
+        }
+
+        //Shutdown the threads
+        this.service.shutdown();
 
         //Cleanup any remaining data
         while (!this.taskQueue.isEmpty()) {
-            this.taskQueue.removeFirst();
+            var task = this.taskQueue.remove();
+            this.taskQueueCount.decrementAndGet();
+            if (task.section != null) {
+                task.section.release();
+                this.holdingSectionCount.decrementAndGet();
+            }
+
+            long stamp = this.taskMapLock.writeLock();
+            if (this.taskMap.remove(task.position) != task) {
+                throw new IllegalStateException();
+            }
+            this.taskMapLock.unlockWrite(stamp);
         }
-        this.meshCache.free();
+        if (this.taskQueueCount.get() != 0) {
+            throw new IllegalStateException();
+        }
+    }
+
+    private long lastChangedTime = 0;
+    public void addDebugData(List<String> debug) {
+        if (System.currentTimeMillis()-this.lastChangedTime > 100) {
+            MESH_FAILED_COUNTER.set(0);
+            this.lastChangedTime = System.currentTimeMillis();
+        }
+        debug.add("RSSQ/TFC: " + this.taskQueueCount.get() + "/" + MESH_FAILED_COUNTER.get());//render section service queue, Task Fail Counter
+
+    }
+
+    public int getTaskCount() {
+        return this.taskQueueCount.get();
     }
 }

@@ -1,33 +1,8 @@
-#line 1
-struct Frustum {
-    vec4 planes[6];
-};
-
 layout(binding = 0, std140) uniform SceneUniform {
     mat4 MVP;
     ivec3 baseSectionPos;
-    int sectionCount;
-    Frustum frustum;
-    vec3 cameraSubPos;
     uint frameId;
-};
-
-struct BlockModel {
-    uint faceData[6];
-    uint flagsA;
-    uint colourTint;
-    uint _pad[8];
-};
-
-struct SectionMeta {
-    uint posA;
-    uint posB;
-    uint AABB;
-    uint ptr;
-    uint cntA;
-    uint cntB;
-    uint cntC;
-    uint cntD;
+    vec3 cameraSubPos;
 };
 
 //TODO: see if making the stride 2*4*4 bytes or something cause you get that 16 byte write
@@ -39,52 +14,81 @@ struct DrawCommand {
     uint  baseInstance;
 };
 
-layout(binding = 0) uniform sampler2D blockModelAtlas;
+
+#ifdef BLOCK_MODEL_TEXTURE_BINDING
+layout(binding = BLOCK_MODEL_TEXTURE_BINDING) uniform sampler2D blockModelAtlas;
+#endif
+
 
 #ifndef Quad
 #define Quad ivec2
 #endif
-layout(binding = 1, std430) readonly restrict buffer QuadBuffer {
+#ifdef QUAD_BUFFER_BINDING
+layout(binding = QUAD_BUFFER_BINDING, std430) readonly restrict buffer QuadBuffer {
     Quad quadData[];
 };
+#endif
 
-layout(binding = 2, std430) writeonly restrict buffer DrawBuffer {
+#ifdef DRAW_BUFFER_BINDING
+layout(binding = DRAW_BUFFER_BINDING, std430) writeonly restrict buffer DrawBuffer {
     DrawCommand cmdBuffer[];
 };
+#endif
 
-layout(binding = 3, std430) restrict buffer DrawCommandCountBuffer {
+#ifdef DRAW_COUNT_BUFFER_BINDING
+layout(binding = DRAW_COUNT_BUFFER_BINDING, std430) restrict buffer DrawCommandCountBuffer {
+    uint cmdGenDispatchX;
+    uint cmdGenDispatchY;
+    uint cmdGenDispatchZ;
+
     uint opaqueDrawCount;
     uint translucentDrawCount;
-};
+    uint temporalOpaqueDrawCount;
 
-layout(binding = 4, std430) readonly restrict buffer SectionBuffer {
+    DrawCommand cullDrawIndirectCommand;
+};
+#endif
+
+#ifdef SECTION_METADATA_BUFFER_BINDING
+layout(binding = SECTION_METADATA_BUFFER_BINDING, std430) readonly restrict buffer SectionBuffer {
     SectionMeta sectionData[];
 };
+#endif
+
+#ifdef INDIRECT_SECTION_LOOKUP_BINDING
+layout(binding = INDIRECT_SECTION_LOOKUP_BINDING, std430) readonly restrict buffer IndirectSectionLookupBuffer {
+    uint sectionCount;
+    uint indirectLookup[];
+};
+#endif
 
 #ifndef VISIBILITY_ACCESS
 #define VISIBILITY_ACCESS readonly
 #endif
-layout(binding = 5, std430) VISIBILITY_ACCESS restrict buffer VisibilityBuffer {
+#ifdef VISIBILITY_BUFFER_BINDING
+layout(binding = VISIBILITY_BUFFER_BINDING, std430) VISIBILITY_ACCESS restrict buffer VisibilityBuffer {
     uint visibilityData[];
 };
+#endif
 
-layout(binding = 6, std430) readonly restrict buffer ModelBuffer {
+#ifdef MODEL_BUFFER_BINDING
+layout(binding = MODEL_BUFFER_BINDING, std430) readonly restrict buffer ModelBuffer {
     BlockModel modelData[];
 };
+#endif
 
-layout(binding = 7, std430) readonly restrict buffer ModelColourBuffer {
+#ifdef MODEL_COLOUR_BUFFER_BINDING
+layout(binding = MODEL_COLOUR_BUFFER_BINDING, std430) readonly restrict buffer ModelColourBuffer {
     uint colourData[];
 };
+#endif
 
-layout(binding = 8, std430) readonly restrict buffer LightingBuffer {
-    uint lightData[];
+#ifdef POSITION_SCRATCH_BINDING
+#ifndef POSITION_SCRATCH_ACCESS
+#define POSITION_SCRATCH_ACCESS readonly
+#endif
+layout(binding = POSITION_SCRATCH_BINDING, std430) POSITION_SCRATCH_ACCESS restrict buffer PositionScratchBuffer {
+    uvec2 positionBuffer[];
 };
-
-vec4 getLighting(uint index) {
-    uvec4 arr = uvec4(lightData[index]);
-    arr = arr>>uvec4(16,8,0,24);
-    arr = arr & uvec4(0xFF);
-    return vec4(arr)*vec4(1.0f/255.0f);
-}
-
+#endif
 

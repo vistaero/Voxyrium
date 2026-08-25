@@ -13,14 +13,14 @@ public class GlPersistentMappedBuffer extends TrackedObject {
     public GlPersistentMappedBuffer(long size, int flags) {
         this.id = glCreateBuffers();
         this.size = size;
-        glNamedBufferStorage(this.id, size, GL_CLIENT_STORAGE_BIT|GL_MAP_PERSISTENT_BIT|(flags&(GL_MAP_COHERENT_BIT|GL_MAP_WRITE_BIT|GL_MAP_READ_BIT)));
+        glNamedBufferStorage(this.id, size, GL_MAP_PERSISTENT_BIT|(flags&(GL_MAP_COHERENT_BIT|GL_MAP_WRITE_BIT|GL_MAP_READ_BIT|GL_CLIENT_STORAGE_BIT)));
         this.addr = nglMapNamedBufferRange(this.id, 0, size, (flags&(GL_MAP_WRITE_BIT|GL_MAP_READ_BIT|GL_MAP_UNSYNCHRONIZED_BIT|GL_MAP_FLUSH_EXPLICIT_BIT))|GL_MAP_PERSISTENT_BIT);
     }
 
     @Override
     public void free() {
         this.free0();
-        glUnmapBuffer(this.id);
+        glUnmapNamedBuffer(this.id);
         glDeleteBuffers(this.id);
     }
 
@@ -30,5 +30,9 @@ public class GlPersistentMappedBuffer extends TrackedObject {
 
     public long addr() {
         return this.addr;
+    }
+
+    public GlPersistentMappedBuffer name(String name) {
+        return GlDebug.name(name, this);
     }
 }

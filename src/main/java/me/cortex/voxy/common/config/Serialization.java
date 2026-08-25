@@ -4,8 +4,8 @@ import com.google.gson.*;
 import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
-import me.cortex.voxy.common.storage.config.CompressorConfig;
-import me.cortex.voxy.common.storage.config.StorageConfig;
+import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.commonImpl.VoxyCommon;
 import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.BufferedReader;
@@ -102,13 +102,19 @@ public class Serialization {
         int count = 0;
         outer:
         for (var clzName : clazzs) {
-            if (!clzName.toLowerCase().contains("config")) {
+            if (VoxyCommon.IS_DEDICATED_SERVER&&clzName.startsWith("me.cortex.voxy.client")) {
+                continue;//Dont load stuff from client path when were on a dedicated server
+            }
+            if (!clzName.toLowerCase(Locale.ROOT).contains("config")) {
                 continue;//Only load classes that contain the word config
             }
             if (clzName.contains("mixin")) {
                 continue;//Dont want to load mixins
             }
-            if (clzName.contains("VoxyConfigScreenFactory")) {
+            if (clzName.contains("ModMenuIntegration")) {
+                continue;//Dont want to modmenu incase it doesnt exist
+            }
+            if (clzName.contains("VoxyConfigScreenPages")) {
                 continue;//Dont want to modmenu incase it doesnt exist
             }
             if (clzName.endsWith("VoxyConfig")) {
@@ -134,36 +140,39 @@ public class Serialization {
                             nameMethod.setAccessible(true);
                         } catch (NoSuchMethodException e) {}
                         if (nameMethod == null) {
-                            System.err.println("WARNING: Config class " + clzName + " doesnt contain a getConfigTypeName and thus wont be serializable");
+                            Logger.error("WARNING: Config class " + clzName + " doesnt contain a getConfigTypeName and thus wont be serializable");
                             continue outer;
                         }
                         count++;
                         String name = (String) nameMethod.invoke(null);
                         serializers.computeIfAbsent(clz, GsonConfigSerialization::new)
                                 .register(name, (Class) original);
-                        System.out.println("Registered " + original.getSimpleName() + " as " + name + " for config type " + clz.getSimpleName());
+                        Logger.info("Registered " + original.getSimpleName() + " as " + name + " for config type " + clz.getSimpleName());
                         break;
                     }
                 }
-            } catch (Exception e) {
-                System.err.println("Error while setting up config serialization");
-                e.printStackTrace();
+            } catch (Throwable e) {
+                Logger.error("Error while setting up config serialization", e);
             }
         }
 
-        var builder = new GsonBuilder();
+        var builder = new GsonBuilder()
+                .setPrettyPrinting();
         for (var entry : serializers.entrySet()) {
             builder.registerTypeAdapterFactory(entry.getValue());
         }
 
         GSON = builder.create();
-        System.out.println("Registered " + count + " config types");
+        Logger.info("Registered " + count + " config types");
     }
 
     private static List<String> collectAllClasses(String pack) {
         try {
             InputStream stream = Serialization.class.getClassLoader()
                     .getResourceAsStream(pack.replaceAll("[.]", "/"));
+            if (stream == null) {
+                return List.of();
+            }
             BufferedReader reader = new BufferedReader(new InputStreamReader(stream));
             return reader.lines().flatMap(inner -> {
                 if (inner.endsWith(".class")) {
@@ -175,7 +184,7 @@ public class Serialization {
                 }
             }).collect(Collectors.toList());
         } catch (Exception e) {
-            System.err.println("Failed to collect classes in package: " + pack);
+            Logger.error("Failed to collect classes in package: " + pack, e);
             return List.of();
         }
     }
@@ -193,8 +202,7 @@ public class Serialization {
                     return Stream.of();
                 }
             }).collect(Collectors.toList());
-        } catch (
-                IOException e) {
+        } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }

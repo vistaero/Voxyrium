@@ -14,8 +14,27 @@ public class GlFramebuffer extends TrackedObject {
         return this.bind(attachment, texture, 0);
     }
 
+    public GlFramebuffer bind(int attachment, int texture) {
+        return this.bind(attachment, texture, 0);
+    }
+
+    public GlFramebuffer bind(int attachment, int texture, int lvl) {
+        glNamedFramebufferTexture(this.id, attachment, texture, lvl);
+        return this;
+    }
+
     public GlFramebuffer bind(int attachment, GlTexture texture, int lvl) {
         glNamedFramebufferTexture(this.id, attachment, texture.id, lvl);
+        return this;
+    }
+
+    public GlFramebuffer bind(int attachment, GlRenderBuffer buffer) {
+        glNamedFramebufferRenderbuffer(this.id, attachment, GL_RENDERBUFFER, buffer.id);
+        return this;
+    }
+
+    public GlFramebuffer setDrawBuffers(int... buffers) {
+        glNamedFramebufferDrawBuffers(this.id, buffers);
         return this;
     }
 
@@ -31,5 +50,10 @@ public class GlFramebuffer extends TrackedObject {
             throw new IllegalStateException("Framebuffer incomplete with error code: " + code);
         }
         return this;
+    }
+
+
+    public GlFramebuffer name(String name) {
+        return GlDebug.name(name, this);
     }
 }

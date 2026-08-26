@@ -399,13 +399,26 @@ public class ModelFactory {
         var tintSources = getTintSources(blockState);
 
         boolean isBiomeColourDependent = false;
+        int constantTintColour = -1;
         if (tintSources != null) {
             isBiomeColourDependent = isBiomeDependentColour(tintSources, blockState);
+            if (!isBiomeColourDependent) {
+                constantTintColour = captureColourConstant(tintSources, blockState, DEFAULT_BIOME);
+                // Modern Minecraft exposes the actual tint sources used by each block/fluid
+                // model. 1.20.1 only exposes tint indices on baked quads, so those indices
+                // are merely candidates: cherry leaves and lava both carry candidate index
+                // zero without having a registered BlockColor. Match dev by treating that
+                // unresolved candidate as no tint source at all.
+                if (constantTintColour == -1) {
+                    tintSources = null;
+                }
+            }
         }
 
         ModelEntry entry;
         {//Deduplicate same entries
-            entry = new ModelEntry(textureData, clientFluidStateId, isBiomeColourDependent||tintSources==null?-1:captureColourConstant(tintSources, blockState, DEFAULT_BIOME)|0xFF000000);
+            entry = new ModelEntry(textureData, clientFluidStateId,
+                    isBiomeColourDependent || tintSources == null ? -1 : constantTintColour | 0xFF000000);
             int possibleDuplicate = this.modelTexture2id.getInt(entry);
             if (possibleDuplicate != -1) {//Duplicate found
                 this.idMappings[blockId] = possibleDuplicate;

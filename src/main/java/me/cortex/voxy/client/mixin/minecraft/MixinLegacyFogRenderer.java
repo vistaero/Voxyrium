@@ -15,7 +15,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(value = FogRenderer.class, priority = 900)
 public final class MixinLegacyFogRenderer {
     @Unique
-    private static final float VOXY$DISABLED_FOG_DISTANCE = 999999999.0F;
+    private static final float VOXY$DISABLED_FOG_START = 1_000_000.0F;
+
+    @Unique
+    private static final float VOXY$DISABLED_FOG_END = 1_000_001.0F;
 
     @Unique
     private static boolean voxy$loggedTerrainFogSuppression;
@@ -37,8 +40,12 @@ public final class MixinLegacyFogRenderer {
         // applying the same fog/fade a second time in front of the LoD render. This
         // must not depend on the Voxy world renderer already existing: FogRenderer
         // runs while that renderer is still being attached during world entry.
-        RenderSystem.setShaderFogStart(VOXY$DISABLED_FOG_DISTANCE);
-        RenderSystem.setShaderFogEnd(VOXY$DISABLED_FOG_DISTANCE);
+        // Sodium 0.4 evaluates smoothstep(fogEnd, fogStart, distance). Equal
+        // endpoints make that expression undefined and some drivers return the
+        // fog colour for every vanilla fragment, so keep a distinct far-away
+        // interval instead of collapsing the range to one value.
+        RenderSystem.setShaderFogStart(VOXY$DISABLED_FOG_START);
+        RenderSystem.setShaderFogEnd(VOXY$DISABLED_FOG_END);
 
         if (!voxy$loggedTerrainFogSuppression) {
             voxy$loggedTerrainFogSuppression = true;

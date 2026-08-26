@@ -2,7 +2,8 @@ package me.cortex.voxy.common.util;
 
 import me.cortex.voxy.common.Logger;
 import org.lwjgl.system.*;
-import org.lwjgl.system.windows.Kernel32;
+
+import java.lang.reflect.Method;
 
 //Platform specific code to assist in thread utilities
 public class ThreadUtils {
@@ -14,15 +15,29 @@ public class ThreadUtils {
     public static final boolean isLinux = Platform.get() == Platform.LINUX;
     private static final long SetThreadPriority;
     private static final long SetThreadSelectedCpuSetMasks;
+    private static final Method GetCurrentThread;
     private static final long schedSetaffinity;
     static {
+        long setThreadPriority = 0;
+        long setThreadSelectedCpuSetMasks = 0;
+        Method getCurrentThread = null;
         if (isWindows) {
-            SetThreadPriority = Kernel32.getLibrary().getFunctionAddress("SetThreadPriority");
-            SetThreadSelectedCpuSetMasks = Kernel32.getLibrary().getFunctionAddress("SetThreadSelectedCpuSetMasks");
-        } else {
-            SetThreadPriority = 0;
-            SetThreadSelectedCpuSetMasks = 0;
+            try {
+                // Minecraft 1.20.1 ships LWJGL 3.3.1, which predates this helper
+                // class. Resolve it reflectively so the optional priority and CPU
+                // affinity optimisations do not prevent Voxy from starting.
+                Class<?> kernel32 = Class.forName("org.lwjgl.system.windows.Kernel32");
+                var library = (SharedLibrary)kernel32.getMethod("getLibrary").invoke(null);
+                setThreadPriority = library.getFunctionAddress("SetThreadPriority");
+                setThreadSelectedCpuSetMasks = library.getFunctionAddress("SetThreadSelectedCpuSetMasks");
+                getCurrentThread = kernel32.getMethod("GetCurrentThread");
+            } catch (ReflectiveOperationException | LinkageError exception) {
+                Logger.info("LWJGL Win32 thread controls are unavailable; continuing without native thread priority or affinity overrides.");
+            }
         }
+        SetThreadPriority = setThreadPriority;
+        SetThreadSelectedCpuSetMasks = setThreadSelectedCpuSetMasks;
+        GetCurrentThread = getCurrentThread;
 
         if (Platform.get() == Platform.LINUX) {
             long fn = 0;
@@ -43,12 +58,12 @@ public class ThreadUtils {
     }
 
     public static boolean SetThreadSelectedCpuSetMasksWin32(long[] masks, short[] groups) {
-        if (SetThreadSelectedCpuSetMasks == 0 || !isWindows) {
+        if (SetThreadSelectedCpuSetMasks == 0 || GetCurrentThread == null || !isWindows) {
             return false;
         }
 
         if (masks == null) {
-            int retVal = JNI.invokePPCI(Kernel32.GetCurrentThread(), 0, (short) 0, SetThreadSelectedCpuSetMasks);
+            int retVal = JNI.invokePPCI(getCurrentThread(), 0, (short) 0, SetThreadSelectedCpuSetMasks);
             if (retVal == 0) {
                 throw new IllegalStateException();
             }
@@ -66,7 +81,7 @@ public class ThreadUtils {
                 MemoryUtil.memPutShort(ptr+i*16L+8L, groups[i]);
             }
 
-            int retVal = JNI.invokePPCI(Kernel32.GetCurrentThread(), ptr, (short)masks.length, SetThreadSelectedCpuSetMasks);
+            int retVal = JNI.invokePPCI(getCurrentThread(), ptr, (short)masks.length, SetThreadSelectedCpuSetMasks);
             if (retVal == 0) {
                 throw new IllegalStateException();
             }
@@ -75,13 +90,21 @@ public class ThreadUtils {
     }
 
     public static boolean SetSelfThreadPriorityWin32(int priority) {
-        if (SetThreadPriority == 0 || !isWindows) {
+        if (SetThreadPriority == 0 || GetCurrentThread == null || !isWindows) {
             return false;
         }
-        if (JNI.callPI(Kernel32.GetCurrentThread(), priority, SetThreadPriority)==0) {
+        if (JNI.callPI(getCurrentThread(), priority, SetThreadPriority)==0) {
             throw new IllegalStateException("Operation failed");
         }
         return true;
+    }
+
+    private static long getCurrentThread() {
+        try {
+            return ((Number)GetCurrentThread.invoke(null)).longValue();
+        } catch (ReflectiveOperationException exception) {
+            throw new IllegalStateException("Failed to obtain the current Win32 thread", exception);
+        }
     }
 
     public static boolean schedSetaffinityLinux(long masks[]) {

@@ -1,21 +1,30 @@
 package me.cortex.voxy.client.core.util;
 
 import net.fabricmc.loader.api.FabricLoader;
+import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.api.v0.IrisApi;
-import net.irisshaders.iris.shadows.ShadowRenderer;
+import net.irisshaders.iris.gl.IrisRenderSystem;
 
+import java.io.IOException;
 import java.util.function.Supplier;
 
-/** Compatibility boundary for the Iris 1.7 API shipped for Minecraft 1.20.6. */
+/** Compatibility boundary for the Iris 1.7 API on legacy Minecraft releases. */
 public final class IrisUtil {
     public static final boolean IRIS_INSTALLED = FabricLoader.getInstance().isModLoaded("iris");
-    public static final boolean SHADER_SUPPORT = false;
+    public static final boolean SHADER_SUPPORT = true;
 
     private IrisUtil() {
     }
 
     public static boolean irisShadowActive() {
-        return IRIS_INSTALLED && ShadowRenderer.ACTIVE;
+        if (!IRIS_INSTALLED) {
+            return false;
+        }
+        try {
+            return IrisApi.getInstance().isRenderingShadowPass();
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     public static boolean irisShaderPackEnabled() {
@@ -42,12 +51,26 @@ public final class IrisUtil {
     }
 
     public static void clearIrisSamplers() {
-        // Iris 1.7 restores the sampler state through its existing Sodium hook.
+        if (!IRIS_INSTALLED) {
+            return;
+        }
+        for (int unit = 0; unit < 16; unit++) {
+            IrisRenderSystem.bindSamplerToUnit(unit, 0);
+        }
     }
 
     public static void reload() {
-        // The current Voxy Iris pipeline targets a newer Iris API. 1.20.6 uses
-        // the native compatibility behavior and does not install that pipeline.
+        if (!IRIS_INSTALLED) {
+            return;
+        }
+        try {
+            if (IrisApi.getInstance().isShaderPackInUse()
+                    || IrisApi.getInstance().getConfig().areShadersEnabled()) {
+                Iris.reload();
+            }
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to reload Iris for the Voxy renderer transition", e);
+        }
     }
 
     public static void disableIrisShaders() {

@@ -21,9 +21,10 @@ sourceSets.main.java {
     exclude 'me/cortex/voxy/client/core/backend/blaze3d/**'
     exclude 'me/cortex/voxy/client/core/vk/**'
     exclude 'me/cortex/voxy/client/mixin/vk/**'
-    exclude 'me/cortex/voxy/client/mixin/iris/**'
-    exclude 'me/cortex/voxy/client/iris/**'
-    exclude 'me/cortex/voxy/client/core/IrisVoxyRenderPipeline.java'
+    // Iris 1.7 still exposes the native pipeline Voxy integrates with. Only
+    // omit the two hooks that target the newer Minecraft renderer lifecycle.
+    exclude 'me/cortex/voxy/client/mixin/iris/MixinIris.java'
+    exclude 'me/cortex/voxy/client/mixin/iris/MixinLevelRenderer.java'
     exclude 'me/cortex/voxy/client/mixin/flashback/**'
     exclude 'me/cortex/voxy/client/mixin/nvidium/**'
     exclude 'me/cortex/voxy/client/compat/FlashbackCompat.java'
@@ -181,6 +182,18 @@ processResources {
     filesMatching("fabric.mod.json") {
         filter {line->line.replace("\"\${","\${").replace("}\"", "}")};
         expand(props);
+    }
+    filesMatching("client.voxy.mixins.json") {
+        filter { line -> line.replace('    "minecraft.MixinClientChunkCache",', '''    "iris.CustomUniformsAccessor",
+    "iris.IrisRenderingPipelineAccessor",
+    "iris.MixinIrisRenderingPipeline",
+    "iris.MixinIrisSamplers",
+    "iris.MixinMatrixUniforms",
+    "iris.MixinPackRenderTargetDirectives",
+    "iris.MixinProgramSet",
+    "iris.MixinShaderPackSourceNames",
+    "iris.MixinStandardMacros",
+    "minecraft.MixinClientChunkCache",''') }
     }
 }
 

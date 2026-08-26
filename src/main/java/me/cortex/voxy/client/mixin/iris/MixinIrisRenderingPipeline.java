@@ -1,6 +1,5 @@
 package me.cortex.voxy.client.mixin.iris;
 
-import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.client.iris.IGetIrisVoxyPipelineData;
 import me.cortex.voxy.client.iris.IGetVoxyPatchData;
@@ -37,18 +36,6 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
     private void voxy$injectPipeline(ProgramSet programSet, CallbackInfo ci) {
         if (this.patchData != null) {
             this.pipeline = IrisVoxyRenderPipelineData.buildPipeline((IrisRenderingPipeline)(Object)this, this.patchData, this.customUniforms, this.shaderStorageBufferHolder);
-        }
-    }
-
-    @Inject(method = "beginLevelRendering", at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/opengl/GlStateManager;_activeTexture(I)V", shift = At.Shift.BEFORE), remap = false)
-    private void voxy$injectViewportSetup(CallbackInfo ci) {
-        if (IrisUtil.CAPTURED_VIEWPORT_PARAMETERS != null) {
-            var renderer = IVoxyRenderSystemHolder.getNullable();
-            if (renderer != null) {
-                IrisUtil.CAPTURED_VIEWPORT_PARAMETERS.apply(renderer);
-                IrisUtil.CAPTURED_VIEWPORT_PARAMETERS = null;
-                IrisUtil.USED_IRIS_VIEWPORT = true;
-            }
         }
     }
 

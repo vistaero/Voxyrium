@@ -176,7 +176,7 @@ public class IrisVoxyRenderPipelineData {
             layout.put(pos, uniform); pos += getSizeAndAlignment(uniform.type)>>5;
             //We must get a size 1 to pad to align 4
             if (!ordering[3].isEmpty()) {//Size 1
-                uniform = ordering[3].removeFirst();
+                uniform = ordering[3].remove(0);
                 layout.put(pos, uniform); pos += getSizeAndAlignment(uniform.type)>>5;
             } else {//Padding must be injected
                 pos += 1;
@@ -468,23 +468,21 @@ public class IrisVoxyRenderPipelineData {
             }
 
             @Override
-            public boolean addDefaultSampler(TextureType type, IntSupplier texture, ValueUpdateNotifier notifier, Supplier<GlSampler> sampler, String... names) {
+            public boolean addDefaultSampler(TextureType type, IntSupplier texture, ValueUpdateNotifier notifier, GlSampler sampler, String... names) {
                 Logger.error("Unsupported default sampler");
                 return false;
             }
 
             @Override
-            public boolean addDynamicSampler(TextureType type, IntSupplier texture, Supplier<GlSampler> sampler, String... names) {
+            public boolean addDynamicSampler(TextureType type, IntSupplier texture, GlSampler sampler, String... names) {
                 return this.addDynamicSampler(type, texture, null, sampler, names);
             }
 
             @Override
-            public boolean addDynamicSampler(TextureType type, IntSupplier texture, ValueUpdateNotifier notifier, Supplier<GlSampler> sampler, String... names) {
+            public boolean addDynamicSampler(TextureType type, IntSupplier texture, ValueUpdateNotifier notifier, GlSampler sampler, String... names) {
                 if (!this.hasSampler(names)) return false;
-                samplerSet.add(new TextureWSampler(this.name(names), texture, sampler!=null?()->{
-                    var s = sampler.get();
-                    return s!=null?s.getId():-1;
-                }:()->-1));
+                samplerSet.add(new TextureWSampler(this.name(names), texture,
+                        sampler != null ? sampler::getId : () -> -1));
                 return true;
             }
 

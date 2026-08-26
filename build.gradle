@@ -46,7 +46,49 @@ base {
     archivesName = "${project.archives_base_name}-${project.minecraft_version}"
 }
 
-def usesLegacyIrisPipeline = project.minecraft_version.toString() == "1.20.1"
+def usesIris17Pipeline = project.minecraft_version.toString() == "1.20.1"
+def usesIris16Pipeline = project.minecraft_version.toString() == "1.20.2"
+def usesLegacyIrisPipeline = usesIris17Pipeline || usesIris16Pipeline
+
+// Iris 1.6 (the final Iris line for Minecraft 1.20.2) still uses the old
+// net.coderbot namespace and DeferredWorldRenderingPipeline name. Generate a
+// source-compatible view from the same Voxy integration used by 1.20.1 so the
+// implementation stays anchored to dev instead of becoming a separate fork.
+if (usesIris16Pipeline) {
+    def iris16Sources = layout.buildDirectory.dir("generated/sources/iris16/java")
+    tasks.register("generateIris16Sources", Sync) {
+        from("src/main/java")
+        into(iris16Sources)
+        filter { line -> line
+                .replace("net.irisshaders.iris", "net.coderbot.iris")
+                .replace("net.coderbot.iris.api.v0", "net.irisshaders.iris.api.v0")
+                .replace("net/irisshaders/iris", "net/coderbot/iris")
+                .replace("net/coderbot/iris/pipeline/IrisRenderingPipeline", "net/coderbot/iris/pipeline/DeferredWorldRenderingPipeline")
+                .replace("net/coderbot/iris/shaderpack/programs/ProgramSet", "net/coderbot/iris/shaderpack/ProgramSet")
+                .replace("net/coderbot/iris/shaderpack/programs/ComputeSource", "net/coderbot/iris/shaderpack/ComputeSource")
+                .replace("net.coderbot.iris.pipeline.IrisRenderingPipeline", "net.coderbot.iris.pipeline.DeferredWorldRenderingPipeline")
+                .replaceAll("\\bIrisRenderingPipeline\\b", "DeferredWorldRenderingPipeline")
+                .replace("net.coderbot.iris.targets.", "net.coderbot.iris.rendertarget.")
+                .replace("net.coderbot.iris.shaderpack.programs.ProgramSet", "net.coderbot.iris.shaderpack.ProgramSet")
+                .replace("net.coderbot.iris.shaderpack.properties.PackDirectives", "net.coderbot.iris.shaderpack.PackDirectives")
+                .replace("net.coderbot.iris.shaderpack.properties.ShaderProperties", "net.coderbot.iris.shaderpack.ShaderProperties")
+                .replace("net.coderbot.iris.shaderpack.properties.PackRenderTargetDirectives", "net.coderbot.iris.shaderpack.PackRenderTargetDirectives")
+                .replace("net.coderbot.iris.helpers.StringPair", "net.coderbot.iris.shaderpack.StringPair")
+                .replace("net.coderbot.iris.gl.state.FogMode", "net.coderbot.iris.pipeline.newshader.FogMode")
+                .replace("net.coderbot.iris.shaderpack.materialmap.WorldRenderingSettings", "net.coderbot.iris.block_rendering.BlockRenderingSettings")
+                .replace("WorldRenderingSettings.INSTANCE", "BlockRenderingSettings.INSTANCE")
+                .replace("ipipe.getFlippedAfterPrepare()", "Iris16Compat.getFlippedAfterPrepare(ipipe)")
+                .replace("ipipe::getFlippedAfterPrepare", "() -> Iris16Compat.getFlippedAfterPrepare(ipipe)")
+                .replace("ipipe.addGbufferOrShadowSamplers(", "Iris16Compat.addGbufferOrShadowSamplers(ipipe, ")
+                .replace("ssboStore.getBufferIndex(binding.irisIndex)", "Iris16Compat.getBufferIndex(ssboStore, binding.irisIndex)")
+                .replace('@At(value = "INVOKE", target = "Lnet/coderbot/iris/pipeline/transform/ShaderPrinter;resetPrintState()V", shift = At.Shift.AFTER)', '@At("HEAD")')
+                .replace('@Inject(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/coderbot/iris/pipeline/DeferredWorldRenderingPipeline;createSetupComputes([Lnet/coderbot/iris/shaderpack/ComputeSource;Lnet/coderbot/iris/shaderpack/ProgramSet;Lnet/coderbot/iris/shaderpack/texture/TextureStage;)[Lnet/coderbot/iris/gl/program/ComputeProgram;"))', '@Inject(method = "<init>", at = @At("RETURN"))') }
+    }
+    sourceSets.main.java.setSrcDirs([iris16Sources])
+    sourceSets.main.java.srcDir("src/compat/iris16/java")
+    sourceSets.main.java.exclude("me/cortex/voxy/client/mixin/iris/MixinIrisSamplers.java")
+    tasks.named("compileJava").configure { dependsOn("generateIris16Sources") }
+}
 
 // Minecraft 1.20 through 1.20.2 predates Minecraft's public GpuDevice/RenderPipeline API and
 // cannot host the Vulkan or public-Blaze3D renderers from current dev. Keep the
@@ -104,6 +146,7 @@ def usesSodium04 = project.minecraft_version.toString() == "1.20"
 if (usesSodium04) {
     sourceSets.main.java {
         exclude 'me/cortex/voxy/client/mixin/sodium/MixinDefaultChunkRenderer.java'
+        exclude 'me/cortex/voxy/client/mixin/sodium/MixinRenderSectionManager.java'
         srcDir 'src/compat/mc1.20/java'
     }
 }
@@ -266,15 +309,21 @@ processResources {
     }
     if (usesLegacyIrisPipeline) {
         filesMatching("client.voxy.mixins.json") {
-            filter { line -> line.replace('    "minecraft.MixinClientChunkCacheLegacy",', '''    "iris.CustomUniformsAccessor",
+            def irisMixins = '''    "iris.CustomUniformsAccessor",
     "iris.IrisRenderingPipelineAccessor",
     "iris.MixinIrisRenderingPipeline",
     "iris.MixinIrisSamplers",
     "iris.MixinMatrixUniforms",
+    "iris.MixinPackRenderTargetDirectives",
     "iris.MixinProgramSet",
     "iris.MixinShaderPackSourceNames",
-    "iris.MixinStandardMacros",
-    "minecraft.MixinClientChunkCacheLegacy",''') }
+    "iris.MixinStandardMacros",'''
+            if (usesIris16Pipeline) {
+                irisMixins = irisMixins.replace("iris.MixinIrisSamplers", "iris.MixinIrisSamplers16")
+            }
+            filter { line -> line
+                    .replace('    "minecraft.MixinClientChunkCacheLegacy",', irisMixins + '\n    "minecraft.MixinClientChunkCacheLegacy",')
+                    .replace('    "minecraft.MixinClientChunkCache",', irisMixins + '\n    "minecraft.MixinClientChunkCache",') }
         }
     }
 }

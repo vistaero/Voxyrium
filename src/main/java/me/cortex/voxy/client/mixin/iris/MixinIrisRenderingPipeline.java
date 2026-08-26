@@ -5,6 +5,7 @@ import me.cortex.voxy.client.iris.IGetIrisVoxyPipelineData;
 import me.cortex.voxy.client.iris.IGetVoxyPatchData;
 import me.cortex.voxy.client.iris.IrisShaderPatch;
 import me.cortex.voxy.client.iris.IrisVoxyRenderPipelineData;
+import me.cortex.voxy.client.iris.IrisPipelineBuildHooks;
 import net.irisshaders.iris.gl.buffer.ShaderStorageBufferHolder;
 import net.irisshaders.iris.pipeline.IrisRenderingPipeline;
 import net.irisshaders.iris.shaderpack.programs.ProgramSet;
@@ -27,6 +28,7 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
 
     @Inject(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/irisshaders/iris/pipeline/transform/ShaderPrinter;resetPrintState()V", shift = At.Shift.AFTER))
     private void voxy$injectPatchDataStore(ProgramSet programSet, CallbackInfo ci) {
+        IrisPipelineBuildHooks.begin(this);
         if (IrisUtil.SHADER_SUPPORT) {
             this.patchData = ((IGetVoxyPatchData) programSet).voxy$getPatchData();
         }
@@ -37,6 +39,7 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
         if (this.patchData != null) {
             this.pipeline = IrisVoxyRenderPipelineData.buildPipeline((IrisRenderingPipeline)(Object)this, this.patchData, this.customUniforms, this.shaderStorageBufferHolder);
         }
+        IrisPipelineBuildHooks.end(this);
     }
 
     @Override

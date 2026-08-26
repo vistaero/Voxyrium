@@ -5,6 +5,7 @@ import me.cortex.voxy.client.core.compat.LegacyFogState;
 import me.cortex.voxy.common.Logger;
 import net.minecraft.client.Camera;
 import net.minecraft.client.renderer.FogRenderer;
+import net.minecraft.world.level.material.FogType;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -28,7 +29,8 @@ public final class MixinLegacyFogRenderer {
         }
 
         LegacyFogState.captureTerrainFog(
-                RenderSystem.getShaderFogStart(), RenderSystem.getShaderFogEnd());
+                RenderSystem.getShaderFogStart(), RenderSystem.getShaderFogEnd(),
+                thickFog || camera.getFluidInCamera() != FogType.NONE);
 
         // Sodium 0.4/0.5 reads these values when binding its chunk shader. Keep the
         // original range above for Voxy, then prevent vanilla terrain geometry from

@@ -1,10 +1,13 @@
 package me.cortex.voxy.client.config;
 
 import com.google.common.collect.ImmutableList;
+import me.cortex.voxy.client.ClientSessionEvents;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.NormalRenderPipeline;
 import me.cortex.voxy.client.core.SSAO;
+import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.util.cpu.CpuLayout;
+import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.jellysquid.mods.sodium.client.gui.options.OptionGroup;
 import me.jellysquid.mods.sodium.client.gui.options.OptionImpl;
 import me.jellysquid.mods.sodium.client.gui.options.OptionImpact;
@@ -27,10 +30,15 @@ public final class LegacySodiumConfigMenu {
     private static final LegacyOptionStorage STORAGE = new LegacyOptionStorage();
 
     private static final class LegacyOptionStorage implements OptionStorage<VoxyConfig> {
+        private boolean enabledAtOpen;
+        private boolean renderingAtOpen;
         private NormalRenderPipeline.FogMode fogModeAtOpen;
 
         public void beginEditing() {
-            this.fogModeAtOpen = VoxyConfig.CONFIG.getFogMode();
+            var config = VoxyConfig.CONFIG;
+            this.enabledAtOpen = config.enabled;
+            this.renderingAtOpen = config.enableRendering;
+            this.fogModeAtOpen = config.getFogMode();
         }
 
         @Override
@@ -42,11 +50,35 @@ public final class LegacySodiumConfigMenu {
         public void save() {
             var config = VoxyConfig.CONFIG;
             var currentFogMode = config.getFogMode();
+            boolean reloadRuntimeState = this.enabledAtOpen != config.enabled
+                    || this.renderingAtOpen != config.enableRendering;
             boolean reloadFogPipeline = this.fogModeAtOpen != currentFogMode;
             config.save();
+            this.enabledAtOpen = config.enabled;
+            this.renderingAtOpen = config.enableRendering;
             this.fogModeAtOpen = currentFogMode;
 
-            if (reloadFogPipeline) {
+            if (reloadRuntimeState) {
+                var holder = IVoxyRenderSystemHolder.getNullableHolder();
+                if (holder != null) {
+                    holder.voxy$shutdownRenderer();
+                }
+
+                if (!config.enabled) {
+                    VoxyCommon.shutdownInstance();
+                } else if (ClientSessionEvents.inSession && VoxyCommon.getInstance() == null) {
+                    VoxyCommon.createInstance();
+                }
+
+                // Match dev's renderer-transition contract: Iris must rebuild its
+                // VOXY defines after the old renderer is detached and before the
+                // newly enabled renderer is constructed.
+                IrisUtil.reload();
+
+                if (holder != null && config.enabled && config.enableRendering) {
+                    holder.voxy$createRenderer();
+                }
+            } else if (reloadFogPipeline) {
                 var holder = IVoxyRenderSystemHolder.getNullableHolder();
                 if (holder != null && holder.voxy$getRenderSystem() != null) {
                     holder.voxy$shutdownRenderer();

@@ -15,7 +15,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(value = RenderSectionManager.class, remap = false)
-public final class MixinRenderSectionManager {
+public final class MixinRenderSectionManagerSodium04 {
     @Unique
     private static final boolean VOXY$BOBBY_INSTALLED = FabricLoader.getInstance().isModLoaded("bobby");
 

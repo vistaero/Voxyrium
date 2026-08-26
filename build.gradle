@@ -299,7 +299,9 @@ processResources {
     }
     if (usesSodium04) {
         filesMatching("client.voxy.mixins.json") {
-            filter { line -> line.replace("sodium.MixinDefaultChunkRenderer", "sodium.MixinRegionChunkRenderer") }
+            filter { line -> line
+                    .replace("sodium.MixinDefaultChunkRenderer", "sodium.MixinRegionChunkRenderer")
+                    .replace("sodium.MixinRenderSectionManager", "sodium.MixinRenderSectionManagerSodium04") }
         }
     }
     if (usesLegacyClientChunkDrop) {

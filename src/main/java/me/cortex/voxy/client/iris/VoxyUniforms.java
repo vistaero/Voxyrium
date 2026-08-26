@@ -70,32 +70,32 @@ public class VoxyUniforms {
 
 
 
-    private record Inverted(Supplier<Matrix4fc> parent) implements Supplier<Matrix4fc> {
-        private Inverted(Supplier<Matrix4fc> parent) {
+    private record Inverted(Supplier<? extends Matrix4fc> parent) implements Supplier<Matrix4f> {
+        private Inverted(Supplier<? extends Matrix4fc> parent) {
             this.parent = parent;
         }
 
-        public Matrix4fc get() {
+        public Matrix4f get() {
             Matrix4f copy = new Matrix4f(this.parent.get());
             copy.invert();
             return copy;
         }
 
-        public Supplier<Matrix4fc> parent() {
+        public Supplier<? extends Matrix4fc> parent() {
             return this.parent;
         }
     }
 
-    private static class PreviousMat implements Supplier<Matrix4fc> {
-        private final Supplier<Matrix4fc> parent;
+    private static class PreviousMat implements Supplier<Matrix4f> {
+        private final Supplier<? extends Matrix4fc> parent;
         private Matrix4f previous;
 
-        PreviousMat(Supplier<Matrix4fc> parent) {
+        PreviousMat(Supplier<? extends Matrix4fc> parent) {
             this.parent = parent;
             this.previous = new Matrix4f();
         }
 
-        public Matrix4fc get() {
+        public Matrix4f get() {
             Matrix4f previous = this.previous;
             this.previous = new Matrix4f(this.parent.get());
             return previous;

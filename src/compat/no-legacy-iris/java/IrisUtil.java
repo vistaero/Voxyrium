@@ -1,17 +1,14 @@
 package me.cortex.voxy.client.core.util;
 
 import net.fabricmc.loader.api.FabricLoader;
-import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.api.v0.IrisApi;
-import net.irisshaders.iris.gl.IrisRenderSystem;
 
-import java.io.IOException;
 import java.util.function.Supplier;
 
-/** Compatibility boundary for the public Iris API available on this Minecraft range. */
+/** Compatibility boundary for Iris releases without the Voxy shader pipeline. */
 public final class IrisUtil {
     public static final boolean IRIS_INSTALLED = FabricLoader.getInstance().isModLoaded("iris");
-    public static final boolean SHADER_SUPPORT = true;
+    public static final boolean SHADER_SUPPORT = false;
 
     private IrisUtil() {
     }
@@ -47,32 +44,15 @@ public final class IrisUtil {
     }
 
     public static <T> T runWithoutVertexFormatExtension(Supplier<T> action) {
-        // The native renderer never constructs Minecraft BufferBuilders. Iris
-        // 1.7 also predates the thread-local vertex-format opt-out used by dev.
         return action.get();
     }
 
     public static void clearIrisSamplers() {
-        if (!IRIS_INSTALLED) {
-            return;
-        }
-        for (int unit = 0; unit < 16; unit++) {
-            IrisRenderSystem.bindSamplerToUnit(unit, 0);
-        }
+        // Iris restores the sampler state through its existing Sodium hook.
     }
 
     public static void reload() {
-        if (!IRIS_INSTALLED) {
-            return;
-        }
-        try {
-            if (IrisApi.getInstance().isShaderPackInUse()
-                    || IrisApi.getInstance().getConfig().areShadersEnabled()) {
-                Iris.reload();
-            }
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to reload Iris for the Voxy renderer transition", e);
-        }
+        // These versions intentionally retain the native compatibility path.
     }
 
     public static void disableIrisShaders() {

@@ -11,14 +11,14 @@ def compatibilityTargets = [
                 fabric_api_version: "0.83.0+1.20",
                 sodium_version_modrinth: "mc1.20-0.4.10",
                 lithium_version: "mc1.20-0.11.2",
-                iris_version: "1.6.11+1.20.1",
+                iris_version: "1.6.4+1.20",
                 chunky_version: "NHWYq9at"
         ],
         "1.20.1": [
                 fabric_api_version: "0.92.11+1.20.1",
                 sodium_version_modrinth: "mc1.20.1-0.5.13-fabric",
                 lithium_version: "mc1.20.1-0.11.2",
-                iris_version: "1.7.2+1.20.1",
+                iris_version: "1.7.6+1.20.1",
                 chunky_version: "NHWYq9at"
         ],
         "1.20.2": [
@@ -46,6 +46,8 @@ base {
     archivesName = "${project.archives_base_name}-${project.minecraft_version}"
 }
 
+def usesLegacyIrisPipeline = project.minecraft_version.toString() == "1.20.1"
+
 // Minecraft 1.20 through 1.20.2 predates Minecraft's public GpuDevice/RenderPipeline API and
 // cannot host the Vulkan or public-Blaze3D renderers from current dev. Keep the
 // current native OpenGL renderer and omit only integrations whose host APIs do
@@ -54,9 +56,6 @@ sourceSets.main.java {
     exclude 'me/cortex/voxy/client/core/backend/blaze3d/**'
     exclude 'me/cortex/voxy/client/core/vk/**'
     exclude 'me/cortex/voxy/client/mixin/vk/**'
-    exclude 'me/cortex/voxy/client/mixin/iris/**'
-    exclude 'me/cortex/voxy/client/iris/**'
-    exclude 'me/cortex/voxy/client/core/IrisVoxyRenderPipeline.java'
     exclude 'me/cortex/voxy/client/mixin/flashback/**'
     exclude 'me/cortex/voxy/client/mixin/nvidium/**'
     exclude 'me/cortex/voxy/client/compat/FlashbackCompat.java'
@@ -79,6 +78,26 @@ sourceSets.main.java {
     exclude 'me/cortex/voxy/client/mixin/sodium/MixinRenderRegionManager.java'
     exclude 'me/cortex/voxy/client/mixin/sodium/MixinSodiumWorldRenderer.java'
     exclude 'me/cortex/voxy/client/mixin/sodium/MixinVisibleChunkCollector.java'
+}
+
+if (!usesLegacyIrisPipeline) {
+    sourceSets.main.java {
+        exclude 'me/cortex/voxy/client/mixin/iris/**'
+        exclude 'me/cortex/voxy/client/iris/**'
+        exclude 'me/cortex/voxy/client/core/IrisVoxyRenderPipeline.java'
+        exclude 'me/cortex/voxy/client/core/RenderPipelineFactory.java'
+        exclude 'me/cortex/voxy/client/core/util/IrisUtil.java'
+        // These compatibility sources sit at the source-root deliberately so
+        // the package-path exclusions above do not also remove them.
+        srcDir 'src/compat/no-legacy-iris/java'
+    }
+} else {
+    sourceSets.main.java {
+        // These two hooks target the modern Minecraft renderer lifecycle. The
+        // pipeline/data mixins below provide the equivalent Iris 1.7 integration.
+        exclude 'me/cortex/voxy/client/mixin/iris/MixinIris.java'
+        exclude 'me/cortex/voxy/client/mixin/iris/MixinLevelRenderer.java'
+    }
 }
 
 def usesSodium04 = project.minecraft_version.toString() == "1.20"
@@ -243,6 +262,19 @@ processResources {
     if (usesLegacyClientChunkDrop) {
         filesMatching("client.voxy.mixins.json") {
             filter { line -> line.replace("minecraft.MixinClientChunkCache", "minecraft.MixinClientChunkCacheLegacy") }
+        }
+    }
+    if (usesLegacyIrisPipeline) {
+        filesMatching("client.voxy.mixins.json") {
+            filter { line -> line.replace('    "minecraft.MixinClientChunkCacheLegacy",', '''    "iris.CustomUniformsAccessor",
+    "iris.IrisRenderingPipelineAccessor",
+    "iris.MixinIrisRenderingPipeline",
+    "iris.MixinIrisSamplers",
+    "iris.MixinMatrixUniforms",
+    "iris.MixinProgramSet",
+    "iris.MixinShaderPackSourceNames",
+    "iris.MixinStandardMacros",
+    "minecraft.MixinClientChunkCacheLegacy",''') }
         }
     }
 }

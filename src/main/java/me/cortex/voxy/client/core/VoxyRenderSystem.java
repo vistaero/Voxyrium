@@ -136,8 +136,12 @@ public class VoxyRenderSystem {
             this.viewportSelector = new ViewportSelector<>(sectionRenderer::createViewport);
 
             {
-                int minSec = Minecraft.getInstance().level.getMinBuildHeight() >> 5;
-                int maxSec = (Minecraft.getInstance().level.getMaxBuildHeight() - 1) >> 5;
+                // RenderDistanceTracker expects level-4 root coordinates. A level-0
+                // Voxy section spans 32 blocks and each LoD level doubles that size,
+                // so convert Minecraft block heights to 512-block root sections.
+                int topLevelSectionShift = 5 + WorldEngine.MAX_LOD_LAYER;
+                int minSec = Minecraft.getInstance().level.getMinBuildHeight() >> topLevelSectionShift;
+                int maxSec = (Minecraft.getInstance().level.getMaxBuildHeight() - 1) >> topLevelSectionShift;
 
                 //Do some very cheeky stuff for MiB
                 if (VoxyCommon.IS_MINE_IN_ABYSS) {//TODO: make this somehow configurable

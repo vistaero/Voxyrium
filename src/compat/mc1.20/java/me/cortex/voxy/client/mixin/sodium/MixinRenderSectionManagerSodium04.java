@@ -30,6 +30,13 @@ public final class MixinRenderSectionManagerSodium04 {
         this.voxy$world = world;
     }
 
+    @Inject(method = "onChunkAdded", at = @At("HEAD"))
+    private void voxy$ingestOnAdd(int x, int z, CallbackInfo ci) {
+        if (VoxyConfig.CONFIG.ingestEnabled && this.voxy$world != null) {
+            VoxelIngestService.tryAutoIngestChunk(this.voxy$world.getChunk(x, z));
+        }
+    }
+
     @Inject(method = "onChunkRemoved", at = @At("HEAD"))
     private void voxy$ingestBeforeRemoval(int x, int z, CallbackInfo ci) {
         if (VoxyConfig.CONFIG.ingestEnabled && !VOXY$BOBBY_INSTALLED) {

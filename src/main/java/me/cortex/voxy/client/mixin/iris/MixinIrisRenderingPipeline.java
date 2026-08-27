@@ -25,9 +25,14 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
     @Unique IrisShaderPatch patchData;
     @Unique
     IrisVoxyRenderPipelineData pipeline;
+    @Unique
+    ProgramSet voxy$programSet;
+    @Unique
+    boolean voxy$buildingPipelineData;
 
     @Inject(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/irisshaders/iris/pipeline/transform/ShaderPrinter;resetPrintState()V", shift = At.Shift.AFTER))
     private void voxy$injectPatchDataStore(ProgramSet programSet, CallbackInfo ci) {
+        this.voxy$programSet = programSet;
         IrisPipelineBuildHooks.begin(this);
         if (IrisUtil.SHADER_SUPPORT) {
             this.patchData = ((IGetVoxyPatchData) programSet).voxy$getPatchData();
@@ -36,10 +41,42 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
 
     @Inject(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/irisshaders/iris/pipeline/IrisRenderingPipeline;createSetupComputes([Lnet/irisshaders/iris/shaderpack/programs/ComputeSource;Lnet/irisshaders/iris/shaderpack/programs/ProgramSet;Lnet/irisshaders/iris/shaderpack/texture/TextureStage;)[Lnet/irisshaders/iris/gl/program/ComputeProgram;"))
     private void voxy$injectPipeline(ProgramSet programSet, CallbackInfo ci) {
-        if (this.patchData != null) {
-            this.pipeline = IrisVoxyRenderPipelineData.buildPipeline((IrisRenderingPipeline)(Object)this, this.patchData, this.customUniforms, this.shaderStorageBufferHolder);
+        try {
+            this.voxy$buildPipelineData();
+        } finally {
+            IrisPipelineBuildHooks.end(this);
         }
-        IrisPipelineBuildHooks.end(this);
+    }
+
+    @Unique
+    private void voxy$buildPipelineData() {
+        if (this.pipeline != null || this.voxy$buildingPipelineData) {
+            return;
+        }
+        if (this.patchData == null && this.voxy$programSet != null && IrisUtil.SHADER_SUPPORT) {
+            this.patchData = ((IGetVoxyPatchData)this.voxy$programSet).voxy$getPatchData();
+        }
+        if (this.patchData == null) {
+            return;
+        }
+
+        boolean ownsBuildHook = IrisPipelineBuildHooks.current() != this;
+        if (ownsBuildHook) {
+            IrisPipelineBuildHooks.begin(this);
+        }
+        this.voxy$buildingPipelineData = true;
+        try {
+            this.pipeline = IrisVoxyRenderPipelineData.buildPipeline(
+                    (IrisRenderingPipeline)(Object)this,
+                    this.patchData,
+                    this.customUniforms,
+                    this.shaderStorageBufferHolder);
+        } finally {
+            this.voxy$buildingPipelineData = false;
+            if (ownsBuildHook) {
+                IrisPipelineBuildHooks.end(this);
+            }
+        }
     }
 
     @Override
@@ -49,6 +86,7 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
 
     @Override
     public IrisVoxyRenderPipelineData voxy$getPipelineData() {
+        this.voxy$buildPipelineData();
         return this.pipeline;
     }
 }

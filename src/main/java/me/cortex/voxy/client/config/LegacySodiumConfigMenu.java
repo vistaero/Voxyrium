@@ -1,10 +1,13 @@
 package me.cortex.voxy.client.config;
 
 import com.google.common.collect.ImmutableList;
+import me.cortex.voxy.client.ClientSessionEvents;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import me.cortex.voxy.client.core.NormalRenderPipeline;
 import me.cortex.voxy.client.core.SSAO;
+import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.util.cpu.CpuLayout;
+import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.jellysquid.mods.sodium.client.gui.options.OptionGroup;
 import me.jellysquid.mods.sodium.client.gui.options.OptionImpl;
 import me.jellysquid.mods.sodium.client.gui.options.OptionImpact;
@@ -27,10 +30,21 @@ public final class LegacySodiumConfigMenu {
     private static final LegacyOptionStorage STORAGE = new LegacyOptionStorage();
 
     private static final class LegacyOptionStorage implements OptionStorage<VoxyConfig> {
+        private boolean enabledAtOpen;
+        private boolean renderingAtOpen;
         private NormalRenderPipeline.FogMode fogModeAtOpen;
+        private SSAO.SSAOMode ssaoModeAtOpen;
+        private float renderDistanceAtOpen;
+        private int serviceThreadsAtOpen;
 
         public void beginEditing() {
-            this.fogModeAtOpen = VoxyConfig.CONFIG.getFogMode();
+            var config = VoxyConfig.CONFIG;
+            this.enabledAtOpen = config.enabled;
+            this.renderingAtOpen = config.enableRendering;
+            this.fogModeAtOpen = config.getFogMode();
+            this.ssaoModeAtOpen = config.getSSAOMode();
+            this.renderDistanceAtOpen = config.sectionRenderDistance;
+            this.serviceThreadsAtOpen = config.serviceThreads;
         }
 
         @Override
@@ -42,15 +56,61 @@ public final class LegacySodiumConfigMenu {
         public void save() {
             var config = VoxyConfig.CONFIG;
             var currentFogMode = config.getFogMode();
-            boolean reloadFogPipeline = this.fogModeAtOpen != currentFogMode;
+            var currentSsaoMode = config.getSSAOMode();
+            boolean reloadRuntimeState = this.enabledAtOpen != config.enabled
+                    || this.renderingAtOpen != config.enableRendering;
+            boolean reloadRenderPipeline = this.fogModeAtOpen != currentFogMode
+                    || this.ssaoModeAtOpen != currentSsaoMode;
+            boolean updateRenderDistance = Float.compare(this.renderDistanceAtOpen, config.sectionRenderDistance) != 0;
+            boolean updateServiceThreads = this.serviceThreadsAtOpen != config.serviceThreads;
             config.save();
+            this.enabledAtOpen = config.enabled;
+            this.renderingAtOpen = config.enableRendering;
             this.fogModeAtOpen = currentFogMode;
+            this.ssaoModeAtOpen = currentSsaoMode;
+            this.renderDistanceAtOpen = config.sectionRenderDistance;
+            this.serviceThreadsAtOpen = config.serviceThreads;
 
-            if (reloadFogPipeline) {
+            boolean rendererRecreated = false;
+
+            if (reloadRuntimeState) {
+                var holder = IVoxyRenderSystemHolder.getNullableHolder();
+                if (holder != null) {
+                    holder.voxy$shutdownRenderer();
+                }
+
+                if (!config.enabled) {
+                    VoxyCommon.shutdownInstance();
+                } else if (ClientSessionEvents.inSession && VoxyCommon.getInstance() == null) {
+                    VoxyCommon.createInstance();
+                }
+
+                IrisUtil.reload();
+
+                if (holder != null && config.enabled && config.enableRendering) {
+                    holder.voxy$createRenderer();
+                }
+                rendererRecreated = true;
+            } else if (reloadRenderPipeline) {
                 var holder = IVoxyRenderSystemHolder.getNullableHolder();
                 if (holder != null && holder.voxy$getRenderSystem() != null) {
                     holder.voxy$shutdownRenderer();
                     holder.voxy$createRenderer();
+                    rendererRecreated = true;
+                }
+            }
+
+            if (updateRenderDistance && !rendererRecreated) {
+                var renderSystem = IVoxyRenderSystemHolder.getNullable();
+                if (renderSystem != null) {
+                    renderSystem.setRenderDistance(config.sectionRenderDistance);
+                }
+            }
+
+            if (updateServiceThreads) {
+                var instance = VoxyCommon.getInstance();
+                if (instance != null) {
+                    instance.updateDedicatedThreads();
                 }
             }
         }

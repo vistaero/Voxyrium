@@ -4,7 +4,7 @@ import com.google.common.collect.ImmutableSet;
 import me.cortex.voxy.client.iris.IrisPipelineBuildHooks;
 import me.cortex.voxy.client.iris.VoxySamplers;
 import net.coderbot.iris.gl.sampler.SamplerHolder;
-import net.coderbot.iris.pipeline.DeferredWorldRenderingPipeline;
+import net.coderbot.iris.pipeline.newshader.NewWorldRenderingPipeline;
 import net.coderbot.iris.rendertarget.RenderTargets;
 import net.coderbot.iris.samplers.IrisSamplers;
 import org.spongepowered.asm.mixin.Mixin;
@@ -23,7 +23,7 @@ public class MixinIrisSamplers16 {
                                              boolean isFullscreenPass,
                                              CallbackInfo ci) {
         Object pipeline = IrisPipelineBuildHooks.current();
-        if (pipeline instanceof DeferredWorldRenderingPipeline irisPipeline) {
+        if (pipeline instanceof NewWorldRenderingPipeline irisPipeline) {
             VoxySamplers.addSamplers(irisPipeline, samplers);
         }
     }

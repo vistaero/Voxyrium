@@ -7,7 +7,7 @@ import net.coderbot.iris.gl.buffer.ShaderStorageBufferHolder;
 import net.coderbot.iris.gl.image.ImageHolder;
 import net.coderbot.iris.gl.sampler.SamplerHolder;
 import net.coderbot.iris.pipeline.CustomTextureManager;
-import net.coderbot.iris.pipeline.DeferredWorldRenderingPipeline;
+import net.coderbot.iris.pipeline.newshader.NewWorldRenderingPipeline;
 import net.coderbot.iris.rendertarget.RenderTargets;
 import net.coderbot.iris.samplers.IrisSamplers;
 import net.coderbot.iris.shaderpack.texture.TextureStage;
@@ -19,22 +19,22 @@ import java.util.function.Supplier;
 
 /** Small API bridge for the final net.coderbot Iris release used by Minecraft 1.20.2. */
 public final class Iris16Compat {
-    private static final Field RENDER_TARGETS = field(DeferredWorldRenderingPipeline.class, "renderTargets");
-    private static final Field FLIPPED_AFTER_PREPARE = field(DeferredWorldRenderingPipeline.class, "flippedAfterPrepare");
-    private static final Field CUSTOM_TEXTURE_MANAGER = field(DeferredWorldRenderingPipeline.class, "customTextureManager");
-    private static final Field WHITE_PIXEL = field(DeferredWorldRenderingPipeline.class, "whitePixel");
-    private static final Field SHADOW_TARGETS_SUPPLIER = field(DeferredWorldRenderingPipeline.class, "shadowTargetsSupplier");
+    private static final Field RENDER_TARGETS = field(NewWorldRenderingPipeline.class, "renderTargets");
+    private static final Field FLIPPED_AFTER_PREPARE = field(NewWorldRenderingPipeline.class, "flippedAfterPrepare");
+    private static final Field CUSTOM_TEXTURE_MANAGER = field(NewWorldRenderingPipeline.class, "customTextureManager");
+    private static final Field WHITE_PIXEL = field(NewWorldRenderingPipeline.class, "whitePixel");
+    private static final Field SHADOW_TARGETS_SUPPLIER = field(NewWorldRenderingPipeline.class, "shadowTargetsSupplier");
     private static final Field SSBO_BUFFERS = field(ShaderStorageBufferHolder.class, "buffers");
 
     private Iris16Compat() {
     }
 
     @SuppressWarnings("unchecked")
-    public static ImmutableSet<Integer> getFlippedAfterPrepare(DeferredWorldRenderingPipeline pipeline) {
+    public static ImmutableSet<Integer> getFlippedAfterPrepare(NewWorldRenderingPipeline pipeline) {
         return get(FLIPPED_AFTER_PREPARE, pipeline, ImmutableSet.class);
     }
 
-    public static void addGbufferOrShadowSamplers(DeferredWorldRenderingPipeline pipeline,
+    public static void addGbufferOrShadowSamplers(NewWorldRenderingPipeline pipeline,
                                                    SamplerHolder samplers,
                                                    ImageHolder images,
                                                    Supplier<ImmutableSet<Integer>> flipped,

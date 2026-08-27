@@ -25,11 +25,15 @@ public class RenderPipelineFactory {
     private static AbstractRenderPipeline createIrisPipeline(RenderProperties properties, AsyncNodeManager nodeManager, NodeCleaner nodeCleaner, HierarchicalOcclusionTraverser traversal, BooleanSupplier frexSupplier) {
         var irisPipe = Iris.getPipelineManager().getPipelineNullable();
         if (irisPipe == null) {
+            Logger.warn("Iris pipeline diagnostics: Iris returned no active world pipeline; using Voxy's normal pipeline");
             return null;
         }
+        Logger.info("Iris pipeline diagnostics: class=" + irisPipe.getClass().getName()
+                + ", voxyDataProvider=" + (irisPipe instanceof IGetIrisVoxyPipelineData));
         if (irisPipe instanceof IGetIrisVoxyPipelineData getVoxyPipeData) {
             var pipeData = getVoxyPipeData.voxy$getPipelineData();
             if (pipeData == null) {
+                Logger.warn("Iris pipeline diagnostics: Voxy pipeline data is unavailable; using Voxy's normal pipeline");
                 return null;
             }
             Logger.info("Creating voxy iris render pipeline");

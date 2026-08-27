@@ -6,6 +6,7 @@ import me.cortex.voxy.client.iris.IGetVoxyPatchData;
 import me.cortex.voxy.client.iris.IrisShaderPatch;
 import me.cortex.voxy.client.iris.IrisVoxyRenderPipelineData;
 import me.cortex.voxy.client.iris.IrisPipelineBuildHooks;
+import me.cortex.voxy.common.Logger;
 import net.irisshaders.iris.gl.buffer.ShaderStorageBufferHolder;
 import net.irisshaders.iris.pipeline.IrisRenderingPipeline;
 import net.irisshaders.iris.shaderpack.programs.ProgramSet;
@@ -37,6 +38,8 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
         if (IrisUtil.SHADER_SUPPORT) {
             this.patchData = ((IGetVoxyPatchData) programSet).voxy$getPatchData();
         }
+        Logger.info("Iris pipeline mixin diagnostics: class=" + this.getClass().getName()
+                + ", patchDataAtConstructorHead=" + (this.patchData != null));
     }
 
     @Inject(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/irisshaders/iris/pipeline/IrisRenderingPipeline;createSetupComputes([Lnet/irisshaders/iris/shaderpack/programs/ComputeSource;Lnet/irisshaders/iris/shaderpack/programs/ProgramSet;Lnet/irisshaders/iris/shaderpack/texture/TextureStage;)[Lnet/irisshaders/iris/gl/program/ComputeProgram;"))
@@ -71,6 +74,7 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
                     this.patchData,
                     this.customUniforms,
                     this.shaderStorageBufferHolder);
+            Logger.info("Iris pipeline mixin diagnostics: Voxy pipeline data built for " + this.getClass().getName());
         } finally {
             this.voxy$buildingPipelineData = false;
             if (ownsBuildHook) {

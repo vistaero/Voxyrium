@@ -82,6 +82,7 @@ if (usesIris16Pipeline) {
                 .replace("ipipe::getFlippedAfterPrepare", "() -> Iris16Compat.getFlippedAfterPrepare(ipipe)")
                 .replace("ipipe.addGbufferOrShadowSamplers(", "Iris16Compat.addGbufferOrShadowSamplers(ipipe, ")
                 .replace("ssboStore.getBufferIndex(binding.irisIndex)", "Iris16Compat.getBufferIndex(ssboStore, binding.irisIndex)")
+                .replace("CommonUniforms.addDynamicUniforms(uniformBuilder, FogMode.PER_FRAGMENT);", "CommonUniforms.addDynamicUniforms(uniformBuilder, FogMode.PER_FRAGMENT);\n        Iris16Compat.addMissingUniforms(uniformBuilder);")
                 .replace('@Inject(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/coderbot/iris/pipeline/newshader/NewWorldRenderingPipeline;createSetupComputes([Lnet/coderbot/iris/shaderpack/ComputeSource;Lnet/coderbot/iris/shaderpack/ProgramSet;Lnet/coderbot/iris/shaderpack/texture/TextureStage;)[Lnet/coderbot/iris/gl/program/ComputeProgram;"))', '@Inject(method = "<init>", at = @At("RETURN"))') }
     }
     sourceSets.main.java.setSrcDirs([iris16Sources])

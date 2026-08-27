@@ -33,12 +33,18 @@ public final class LegacySodiumConfigMenu {
         private boolean enabledAtOpen;
         private boolean renderingAtOpen;
         private NormalRenderPipeline.FogMode fogModeAtOpen;
+        private SSAO.SSAOMode ssaoModeAtOpen;
+        private float renderDistanceAtOpen;
+        private int serviceThreadsAtOpen;
 
         public void beginEditing() {
             var config = VoxyConfig.CONFIG;
             this.enabledAtOpen = config.enabled;
             this.renderingAtOpen = config.enableRendering;
             this.fogModeAtOpen = config.getFogMode();
+            this.ssaoModeAtOpen = config.getSSAOMode();
+            this.renderDistanceAtOpen = config.sectionRenderDistance;
+            this.serviceThreadsAtOpen = config.serviceThreads;
         }
 
         @Override
@@ -50,13 +56,22 @@ public final class LegacySodiumConfigMenu {
         public void save() {
             var config = VoxyConfig.CONFIG;
             var currentFogMode = config.getFogMode();
+            var currentSsaoMode = config.getSSAOMode();
             boolean reloadRuntimeState = this.enabledAtOpen != config.enabled
                     || this.renderingAtOpen != config.enableRendering;
-            boolean reloadFogPipeline = this.fogModeAtOpen != currentFogMode;
+            boolean reloadRenderPipeline = this.fogModeAtOpen != currentFogMode
+                    || this.ssaoModeAtOpen != currentSsaoMode;
+            boolean updateRenderDistance = Float.compare(this.renderDistanceAtOpen, config.sectionRenderDistance) != 0;
+            boolean updateServiceThreads = this.serviceThreadsAtOpen != config.serviceThreads;
             config.save();
             this.enabledAtOpen = config.enabled;
             this.renderingAtOpen = config.enableRendering;
             this.fogModeAtOpen = currentFogMode;
+            this.ssaoModeAtOpen = currentSsaoMode;
+            this.renderDistanceAtOpen = config.sectionRenderDistance;
+            this.serviceThreadsAtOpen = config.serviceThreads;
+
+            boolean rendererRecreated = false;
 
             if (reloadRuntimeState) {
                 var holder = IVoxyRenderSystemHolder.getNullableHolder();
@@ -78,11 +93,27 @@ public final class LegacySodiumConfigMenu {
                 if (holder != null && config.enabled && config.enableRendering) {
                     holder.voxy$createRenderer();
                 }
-            } else if (reloadFogPipeline) {
+                rendererRecreated = true;
+            } else if (reloadRenderPipeline) {
                 var holder = IVoxyRenderSystemHolder.getNullableHolder();
                 if (holder != null && holder.voxy$getRenderSystem() != null) {
                     holder.voxy$shutdownRenderer();
                     holder.voxy$createRenderer();
+                    rendererRecreated = true;
+                }
+            }
+
+            if (updateRenderDistance && !rendererRecreated) {
+                var renderSystem = IVoxyRenderSystemHolder.getNullable();
+                if (renderSystem != null) {
+                    renderSystem.setRenderDistance(config.sectionRenderDistance);
+                }
+            }
+
+            if (updateServiceThreads) {
+                var instance = VoxyCommon.getInstance();
+                if (instance != null) {
+                    instance.updateDedicatedThreads();
                 }
             }
         }

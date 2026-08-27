@@ -6,13 +6,19 @@ import net.coderbot.iris.gl.buffer.ShaderStorageBuffer;
 import net.coderbot.iris.gl.buffer.ShaderStorageBufferHolder;
 import net.coderbot.iris.gl.image.ImageHolder;
 import net.coderbot.iris.gl.sampler.SamplerHolder;
+import net.coderbot.iris.gl.uniform.DynamicLocationalUniformHolder;
+import net.coderbot.iris.gl.uniform.UniformUpdateFrequency;
 import net.coderbot.iris.pipeline.CustomTextureManager;
 import net.coderbot.iris.pipeline.newshader.NewWorldRenderingPipeline;
 import net.coderbot.iris.rendertarget.RenderTargets;
 import net.coderbot.iris.samplers.IrisSamplers;
 import net.coderbot.iris.shaderpack.texture.TextureStage;
 import net.coderbot.iris.shadows.ShadowRenderTargets;
+import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import net.minecraft.client.renderer.texture.AbstractTexture;
+import org.joml.Vector3d;
+import org.joml.Vector3f;
+import org.joml.Vector3i;
 
 import java.lang.reflect.Field;
 import java.util.function.Supplier;
@@ -25,6 +31,9 @@ public final class Iris16Compat {
     private static final Field WHITE_PIXEL = field(NewWorldRenderingPipeline.class, "whitePixel");
     private static final Field SHADOW_TARGETS_SUPPLIER = field(NewWorldRenderingPipeline.class, "shadowTargetsSupplier");
     private static final Field SSBO_BUFFERS = field(ShaderStorageBufferHolder.class, "buffers");
+    private static final Vector3d CURRENT_CAMERA = new Vector3d();
+    private static final Vector3d PREVIOUS_CAMERA = new Vector3d();
+    private static int cameraFrame = Integer.MIN_VALUE;
 
     private Iris16Compat() {
     }
@@ -58,7 +67,56 @@ public final class Iris16Compat {
             Supplier<ShadowRenderTargets> shadowTargets = get(SHADOW_TARGETS_SUPPLIER, pipeline, Supplier.class);
             IrisSamplers.addShadowSamplers(samplers, shadowTargets.get(), null, false);
         }
-        VoxySamplers.addSamplers(pipeline, samplers);
+    }
+
+    /** Supplies uniforms added after Iris 1.6, plus Voxy matrices that its custom-uniform bridge drops. */
+    public static void addMissingUniforms(DynamicLocationalUniformHolder uniforms) {
+        VoxyUniforms.addUniforms(uniforms);
+        uniforms
+                .uniform3i(UniformUpdateFrequency.PER_FRAME, "cameraPositionInt", Iris16Compat::cameraPositionInt)
+                .uniform3f(UniformUpdateFrequency.PER_FRAME, "cameraPositionFract", Iris16Compat::cameraPositionFract)
+                .uniform3f(UniformUpdateFrequency.PER_FRAME, "previousCameraPositionFract", Iris16Compat::previousCameraPositionFract);
+    }
+
+    private static Vector3i cameraPositionInt() {
+        Vector3d camera = updateCamera(false);
+        return new Vector3i(floorToInt(camera.x), floorToInt(camera.y), floorToInt(camera.z));
+    }
+
+    private static Vector3f cameraPositionFract() {
+        Vector3d camera = updateCamera(false);
+        return new Vector3f(fraction(camera.x), fraction(camera.y), fraction(camera.z));
+    }
+
+    private static Vector3f previousCameraPositionFract() {
+        Vector3d camera = updateCamera(true);
+        return new Vector3f(fraction(camera.x), fraction(camera.y), fraction(camera.z));
+    }
+
+    private static synchronized Vector3d updateCamera(boolean previous) {
+        var renderSystem = IVoxyRenderSystemHolder.getNullable();
+        if (renderSystem == null) {
+            return previous ? new Vector3d(PREVIOUS_CAMERA) : new Vector3d(CURRENT_CAMERA);
+        }
+
+        var viewport = renderSystem.getViewport();
+        if (viewport.frameId != cameraFrame) {
+            PREVIOUS_CAMERA.set(CURRENT_CAMERA);
+            CURRENT_CAMERA.set(viewport.cameraX, viewport.cameraY, viewport.cameraZ);
+            if (cameraFrame == Integer.MIN_VALUE) {
+                PREVIOUS_CAMERA.set(CURRENT_CAMERA);
+            }
+            cameraFrame = viewport.frameId;
+        }
+        return previous ? new Vector3d(PREVIOUS_CAMERA) : new Vector3d(CURRENT_CAMERA);
+    }
+
+    private static int floorToInt(double value) {
+        return (int)Math.floor(value);
+    }
+
+    private static float fraction(double value) {
+        return (float)(value - Math.floor(value));
     }
 
     public static int getBufferIndex(ShaderStorageBufferHolder holder, int irisIndex) {

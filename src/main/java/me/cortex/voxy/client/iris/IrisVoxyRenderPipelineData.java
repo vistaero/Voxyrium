@@ -356,12 +356,24 @@ public class IrisVoxyRenderPipelineData {
                 return this;
             }
 
+            @Override
+            public DynamicLocationalUniformHolder uniform3i(UniformUpdateFrequency updateFrequency, String name, Supplier<Vector3i> value) {
+                this.injectDynamicUniformType(name, UniformType.VEC3I, offset -> ptr -> value.get().getToAddress(ptr + offset));
+                return this;
+            }
+
+            @Override
+            public DynamicLocationalUniformHolder uniformMatrix(UniformUpdateFrequency updateFrequency, String name, Supplier<Matrix4f> value) {
+                this.injectDynamicUniformType(name, UniformType.MAT4, offset -> ptr -> value.get().getToAddress(ptr + offset));
+                return this;
+            }
+
             private void injectDynamicUniformType(String name, UniformType type, Long2ObjectFunction<LongConsumer> supplier) {
                 var names = patch.getUniformList();
                 for (int i = 0; i < names.length; i++) {
                     if (names[i].equals(name)) {
                         if (!seenUniforms.add(name)) {
-                            throw new IllegalArgumentException("Already added uniform: " + name);
+                            return;
                         }
                         uniforms.add(new UniformWritingHolder(name, type, supplier));
                         break;
@@ -415,7 +427,7 @@ public class IrisVoxyRenderPipelineData {
         FunctionReturn cachedReturn = new FunctionReturn();
         ((CustomUniformsAccessor)cu).getLocationMap().get(patch).object2IntEntrySet().forEach(entry-> {
             if (!seenUniforms.add(entry.getKey().getName())) {
-                throw new IllegalArgumentException("Already added uniform: " + entry.getKey().getName());
+                return;
             }
             uniforms.add(new UniformWritingHolder(entry.getKey().getName(), Type.convert(entry.getKey().getType()),offset->createWriter(offset, cachedReturn, entry.getKey())));
         });
@@ -440,7 +452,7 @@ public class IrisVoxyRenderPipelineData {
         if (samplerDataSet == null) return null;
         Set<String> samplerNameSet = new LinkedHashSet<>(samplerDataSet.keySet());
         if (samplerNameSet.isEmpty()) return null;
-        Set<TextureWSampler> samplerSet = new LinkedHashSet<>();
+        Map<String, TextureWSampler> samplerSet = new LinkedHashMap<>();
 
         //Built up the external samplers list
         Map<String, IntSupplier> externalTextures = new HashMap<>();
@@ -481,7 +493,8 @@ public class IrisVoxyRenderPipelineData {
             @Override
             public boolean addDynamicSampler(TextureType type, IntSupplier texture, ValueUpdateNotifier notifier, GlSampler sampler, String... names) {
                 if (!this.hasSampler(names)) return false;
-                samplerSet.add(new TextureWSampler(this.name(names), texture,
+                var name = this.name(names);
+                samplerSet.putIfAbsent(name, new TextureWSampler(name, texture,
                         sampler != null ? sampler::getId : () -> -1));
                 return true;
             }
@@ -492,9 +505,9 @@ public class IrisVoxyRenderPipelineData {
                 var name = this.name(names);
                 var ex = externalTextures.get(name);
                 if (ex != null) {
-                    samplerSet.add(new TextureWSampler(name, ex, () -> 0));//unbind any sampler and use the externalTextureSupplier
+                    samplerSet.putIfAbsent(name, new TextureWSampler(name, ex, () -> 0));//unbind any sampler and use the externalTextureSupplier
                 } else {
-                    samplerSet.add(new TextureWSampler(name, () -> texture, () -> -1));
+                    samplerSet.putIfAbsent(name, new TextureWSampler(name, () -> texture, () -> -1));
                 }
             }
         };
@@ -516,7 +529,7 @@ public class IrisVoxyRenderPipelineData {
 
         //samplerSet contains our samplers
         if (samplerSet.size() != samplerNameSet.size()) {
-            Logger.error("Did not find all requested samplers. Found [" + samplerSet.stream().map(a->a.name).collect(Collectors.joining(", ")) + "] expected " + samplerNameSet);
+            Logger.error("Did not find all requested samplers. Found [" + String.join(", ", samplerSet.keySet()) + "] expected " + samplerNameSet);
         }
 
         //TODO: generate a layout (defines) for all the samplers with the correct types
@@ -524,7 +537,7 @@ public class IrisVoxyRenderPipelineData {
         StringBuilder builder = new StringBuilder();
         TextureWSampler[] samplers = new TextureWSampler[samplerSet.size()];
         int i = 0;
-        for (var entry : samplerSet) {
+        for (var entry : samplerSet.values()) {
             samplers[i]=entry;
 
             String samplerType = samplerDataSet.get(entry.name);

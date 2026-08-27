@@ -63,6 +63,7 @@ if (usesIris16Pipeline) {
                 .replace("net.irisshaders.iris", "net.coderbot.iris")
                 .replace("net.coderbot.iris.api.v0", "net.irisshaders.iris.api.v0")
                 .replace("net/irisshaders/iris", "net/coderbot/iris")
+                .replace("net/coderbot/iris/pipeline/transform/ShaderPrinter", "net/coderbot/iris/pipeline/ShaderPrinter")
                 .replace("net/coderbot/iris/pipeline/IrisRenderingPipeline", "net/coderbot/iris/pipeline/newshader/NewWorldRenderingPipeline")
                 .replace("net/coderbot/iris/shaderpack/programs/ProgramSet", "net/coderbot/iris/shaderpack/ProgramSet")
                 .replace("net/coderbot/iris/shaderpack/programs/ComputeSource", "net/coderbot/iris/shaderpack/ComputeSource")
@@ -81,7 +82,6 @@ if (usesIris16Pipeline) {
                 .replace("ipipe::getFlippedAfterPrepare", "() -> Iris16Compat.getFlippedAfterPrepare(ipipe)")
                 .replace("ipipe.addGbufferOrShadowSamplers(", "Iris16Compat.addGbufferOrShadowSamplers(ipipe, ")
                 .replace("ssboStore.getBufferIndex(binding.irisIndex)", "Iris16Compat.getBufferIndex(ssboStore, binding.irisIndex)")
-                .replace('@At(value = "INVOKE", target = "Lnet/coderbot/iris/pipeline/transform/ShaderPrinter;resetPrintState()V", shift = At.Shift.AFTER)', '@At("HEAD")')
                 .replace('@Inject(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/coderbot/iris/pipeline/newshader/NewWorldRenderingPipeline;createSetupComputes([Lnet/coderbot/iris/shaderpack/ComputeSource;Lnet/coderbot/iris/shaderpack/ProgramSet;Lnet/coderbot/iris/shaderpack/texture/TextureStage;)[Lnet/coderbot/iris/gl/program/ComputeProgram;"))', '@Inject(method = "<init>", at = @At("RETURN"))') }
     }
     sourceSets.main.java.setSrcDirs([iris16Sources])
@@ -301,10 +301,11 @@ processResources {
         filesMatching("client.voxy.mixins.json") {
             filter { line -> line
                     .replace("sodium.MixinDefaultChunkRenderer", "sodium.MixinRegionChunkRenderer")
-                    .replace("sodium.MixinRenderSectionManager", "sodium.MixinRenderSectionManagerSodium04") }
+                    .replace('    "sodium.MixinRenderSectionManager",', '')
+                    .replace("minecraft.MixinClientChunkCache", "minecraft.MixinClientChunkCacheSodium04") }
         }
     }
-    if (usesLegacyClientChunkDrop) {
+    if (usesLegacyClientChunkDrop && !usesSodium04) {
         filesMatching("client.voxy.mixins.json") {
             filter { line -> line.replace("minecraft.MixinClientChunkCache", "minecraft.MixinClientChunkCacheLegacy") }
         }

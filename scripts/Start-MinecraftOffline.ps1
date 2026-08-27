@@ -315,8 +315,8 @@ if (-not $ProfileId -and -not $MinecraftVersion) {
     :profileSelection while ($true) {
         [Console]::Clear()
         [Console]::SetCursorPosition(0, 0)
-        Write-Host 'Perfiles de Minecraft disponibles' -ForegroundColor Cyan
-        Write-Host "Usa las flechas para moverte, Espacio para marcar/desmarcar y Enter para iniciar. A selecciona todos; Q cancela.`n"
+        Write-Host 'Available Minecraft profiles' -ForegroundColor Cyan
+        Write-Host "Use the arrow keys to move, Space to select/deselect, and Enter to launch. A selects all; Q cancels.`n"
 
         for ($index = 0; $index -lt $availableProfiles.Count; $index++) {
             $pointer = if ($index -eq $focusedIndex) { '>' } else { ' ' }
@@ -354,7 +354,7 @@ if (-not $ProfileId -and -not $MinecraftVersion) {
                 break profileSelection
             }
             'Q' {
-                Write-Host 'Cancelado.'
+                Write-Host 'Cancelled.'
                 exit 0
             }
         }

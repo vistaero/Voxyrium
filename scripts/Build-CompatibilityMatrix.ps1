@@ -69,15 +69,15 @@ if ($interactiveSelection) {
     :selection while ($true) {
         [Console]::Clear()
         [Console]::SetCursorPosition(0, 0)
-        Write-Host "Compilaciones de compatibilidad de Minecraft" -ForegroundColor Cyan
-        Write-Host "Usa las flechas para moverte, Espacio para marcar/desmarcar y Enter para continuar. A selecciona todas; Q cancela.`n"
+        Write-Host "Minecraft compatibility builds" -ForegroundColor Cyan
+        Write-Host "Use the arrow keys to move, Space to select/deselect, and Enter to continue. A selects all; Q cancels.`n"
 
         for ($index = 0; $index -lt $availableVersions.Count; $index++) {
             $pointer = if ($index -eq $focusedIndex) { ">" } else { " " }
             $checkMark = if ($selected[$index]) { "x" } else { " " }
             Write-Host ("{0} [{1}] {2}" -f $pointer, $checkMark, $availableVersions[$index])
         }
-        Write-Host ("Marcadas: {0}" -f (@(for ($index = 0; $index -lt $availableVersions.Count; $index++) { if ($selected[$index]) { $availableVersions[$index] } }) -join ', '))
+        Write-Host ("Selected: {0}" -f (@(for ($index = 0; $index -lt $availableVersions.Count; $index++) { if ($selected[$index]) { $availableVersions[$index] } }) -join ', '))
 
         $key = [Console]::ReadKey($true)
         switch ($key.Key) {
@@ -103,7 +103,7 @@ if ($interactiveSelection) {
                 break selection
             }
             'Q' {
-                Write-Host "Cancelado."
+                Write-Host "Cancelled."
                 exit 0
             }
         }

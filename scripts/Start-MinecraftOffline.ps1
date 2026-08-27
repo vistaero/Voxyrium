@@ -213,6 +213,18 @@ function Start-OfflineProfile {
             $path = Join-Path $MinecraftDirectory ('libraries\' + ([string]$artifact.path).Replace('/', '\'))
             Invoke-Download $artifact.url $path
             $classPath.Add($path)
+        } elseif ($library.PSObject.Properties.Name -contains 'name') {
+            $coordinates = ([string]$library.name) -split ':'
+            if ($coordinates.Count -eq 3) {
+                $groupPath = $coordinates[0].Replace('.', '/')
+                $artifactName = $coordinates[1]
+                $artifactVersion = $coordinates[2]
+                $relativePath = "$groupPath/$artifactName/$artifactVersion/$artifactName-$artifactVersion.jar"
+                $path = Join-Path $MinecraftDirectory ('libraries\' + $relativePath.Replace('/', '\'))
+                $baseUri = if ($library.url) { [string]$library.url } else { 'https://libraries.minecraft.net/' }
+                Invoke-Download (($baseUri.TrimEnd('/') + '/' + $relativePath)) $path
+                $classPath.Add($path)
+            }
         }
         if (($library.PSObject.Properties.Name -contains 'natives') -and ($library.natives.PSObject.Properties.Name -contains 'windows')) {
             $classifierName = ([string]$library.natives.windows).Replace('${arch}', '64')
@@ -266,6 +278,8 @@ function Start-OfflineProfile {
     if ($loggingArgument) { $expandedJvm += $loggingArgument }
     $expandedGame = @(Expand-Variables @($gameArguments) $variables)
     $java = Get-JavaExecutable $javaMajor $javaComponent
+    $javaw = Join-Path (Split-Path -Parent $java) 'javaw.exe'
+    if (-not (Test-Path -LiteralPath $javaw)) { $javaw = $java }
     $allArguments = @($expandedJvm) + @($mainClass) + $expandedGame
     $argumentLine = (@($allArguments | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join ' ')
     Write-Host "Launching $($Profile.name) offline as $OfflineUsername (Java $javaMajor)" -ForegroundColor Green
@@ -273,18 +287,83 @@ function Start-OfflineProfile {
         Write-Host "Dry run: command resolved ($($allArguments.Count) arguments)." -ForegroundColor Cyan
         return
     }
-    $process = Start-Process -FilePath $java -ArgumentList $argumentLine -WorkingDirectory $gameDirectory -PassThru
-    if ($Wait) { $process.WaitForExit(); if ($process.ExitCode -ne 0) { throw "Minecraft exited with code $($process.ExitCode)." } }
+    $launchLogBase = Join-Path $gameDirectory '.voxy-launch'
+    $process = Start-Process -FilePath $javaw -ArgumentList $argumentLine -WorkingDirectory $gameDirectory `
+        -RedirectStandardOutput "$launchLogBase.out.log" -RedirectStandardError "$launchLogBase.err.log" -PassThru
+    if ($Wait) {
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            $errorLog = if (Test-Path -LiteralPath "$launchLogBase.err.log") { Get-Content -LiteralPath "$launchLogBase.err.log" -Raw } else { '' }
+            if ([string]::IsNullOrWhiteSpace($errorLog)) { $errorLog = 'No error output was produced.' }
+            throw "Minecraft exited with code $($process.ExitCode):`n$errorLog"
+        }
+    }
 }
 
 $profilesPath = Join-Path $MinecraftDirectory 'launcher_profiles.json'
 $launcherData = Get-Content -LiteralPath $profilesPath -Raw | ConvertFrom-Json
+
+if (-not $ProfileId -and -not $MinecraftVersion) {
+    $availableProfiles = @($launcherData.profiles.PSObject.Properties |
+        Where-Object Name -Like 'voxy-test-*' |
+        Sort-Object { [version]($_.Name -replace '^voxy-test-', '') })
+    if ($availableProfiles.Count -eq 0) { throw 'No Voxy test profiles were found.' }
+
+    $selectedProfiles = New-Object bool[] $availableProfiles.Count
+    $focusedIndex = 0
+
+    :profileSelection while ($true) {
+        [Console]::Clear()
+        [Console]::SetCursorPosition(0, 0)
+        Write-Host 'Perfiles de Minecraft disponibles' -ForegroundColor Cyan
+        Write-Host "Usa las flechas para moverte, Espacio para marcar/desmarcar y Enter para iniciar. A selecciona todos; Q cancela.`n"
+
+        for ($index = 0; $index -lt $availableProfiles.Count; $index++) {
+            $pointer = if ($index -eq $focusedIndex) { '>' } else { ' ' }
+            $checkMark = if ($selectedProfiles[$index]) { 'x' } else { ' ' }
+            Write-Host ('{0} [{1}] {2}' -f $pointer, $checkMark, $availableProfiles[$index].Value.name)
+        }
+        $selectedNames = @(
+            for ($index = 0; $index -lt $availableProfiles.Count; $index++) {
+                if ($selectedProfiles[$index]) { $availableProfiles[$index].Value.name }
+            }
+        )
+        Write-Host "`nMarcados: $($selectedNames -join ', ')"
+
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            'UpArrow' {
+                $focusedIndex = ($focusedIndex - 1 + $availableProfiles.Count) % $availableProfiles.Count
+            }
+            'DownArrow' {
+                $focusedIndex = ($focusedIndex + 1) % $availableProfiles.Count
+            }
+            'Spacebar' {
+                $selectedProfiles[$focusedIndex] = -not $selectedProfiles[$focusedIndex]
+            }
+            'Enter' {
+                $ProfileId = @(
+                    for ($index = 0; $index -lt $availableProfiles.Count; $index++) {
+                        if ($selectedProfiles[$index]) { $availableProfiles[$index].Name }
+                    }
+                )
+                if ($ProfileId.Count -gt 0) { break profileSelection }
+            }
+            'A' {
+                $ProfileId = @($availableProfiles | ForEach-Object Name)
+                break profileSelection
+            }
+            'Q' {
+                Write-Host 'Cancelado.'
+                exit 0
+            }
+        }
+    }
+}
+
 $selected = @($launcherData.profiles.PSObject.Properties | Where-Object {
     ($ProfileId -and $_.Name -in $ProfileId) -or
     ($MinecraftVersion -and $_.Value.lastVersionId -and ($_.Value.lastVersionId -replace '^fabric-loader-[^-]+-', '') -in $MinecraftVersion)
 })
-if (-not $ProfileId -and -not $MinecraftVersion) {
-    $selected = @($launcherData.profiles.PSObject.Properties | Where-Object Name -Like 'voxy-test-*')
-}
 if ($selected.Count -eq 0) { throw 'No matching Minecraft profiles were found.' }
 foreach ($property in $selected) { Start-OfflineProfile $property.Name $property.Value }

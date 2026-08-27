@@ -16,8 +16,6 @@ param(
     [switch]$SkipProfileCreation,
     [switch]$ProfilesOnly,
     [switch]$ReuseExistingArtifacts,
-    [switch]$OpenLauncher,
-    [switch]$LaunchOffline,
     [switch]$NoInteractiveMenu,
     [switch]$KeepWorktrees,
     [switch]$ContinueOnBuildFailure
@@ -60,57 +58,56 @@ if ($Branches -and $Versions) {
 
 $interactiveSelection = -not $NoInteractiveMenu -and -not $Branches -and -not $Versions -and -not $ProfilesOnly
 if ($interactiveSelection) {
-    $availableVersions = @($matrix.TestVersions | Select-Object -Unique)
-    Write-Host "`nCompilaciones de compatibilidad de Minecraft" -ForegroundColor Cyan
-    Write-Host "Selecciona una o varias versiones (ejemplos: 1,3-5 o A para todas).`n"
-    for ($index = 0; $index -lt $availableVersions.Count; $index++) {
-        Write-Host ("[{0,2}] {1}" -f ($index + 1), $availableVersions[$index])
-    }
+    $availableVersions = @(
+        $matrix.TestVersions |
+            Select-Object -Unique |
+            Sort-Object { [version]$_ } -Descending
+    )
+    $selected = New-Object bool[] $availableVersions.Count
+    $focusedIndex = 0
 
-    while ($true) {
-        $selection = (Read-Host "Versiones").Trim()
-        if ($selection -match '^(?i:a|all|todas)$') {
-            $Versions = $availableVersions
-            break
-        }
-        if ($selection -match '^(?i:q|quit|salir)$') {
-            Write-Host "Cancelado."
-            exit 0
-        }
+    :selection while ($true) {
+        [Console]::Clear()
+        [Console]::SetCursorPosition(0, 0)
+        Write-Host "Compilaciones de compatibilidad de Minecraft" -ForegroundColor Cyan
+        Write-Host "Usa las flechas para moverte, Espacio para marcar/desmarcar y Enter para continuar. A selecciona todas; Q cancela.`n"
 
-        $indexes = [System.Collections.Generic.HashSet[int]]::new()
-        $validSelection = $true
-        foreach ($partValue in ($selection -split ',')) {
-            $part = $partValue.Trim()
-            if ($part -match '^(?<first>\d+)-(?<last>\d+)$') {
-                $first = [int]$Matches.first
-                $last = [int]$Matches.last
-                if ($first -gt $last -or $first -lt 1 -or $last -gt $availableVersions.Count) {
-                    $validSelection = $false
-                    break
-                }
-                foreach ($selectedIndex in $first..$last) { [void]$indexes.Add($selectedIndex) }
+        for ($index = 0; $index -lt $availableVersions.Count; $index++) {
+            $pointer = if ($index -eq $focusedIndex) { ">" } else { " " }
+            $checkMark = if ($selected[$index]) { "x" } else { " " }
+            Write-Host ("{0} [{1}] {2}" -f $pointer, $checkMark, $availableVersions[$index])
+        }
+        Write-Host ("Marcadas: {0}" -f (@(for ($index = 0; $index -lt $availableVersions.Count; $index++) { if ($selected[$index]) { $availableVersions[$index] } }) -join ', '))
+
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            'UpArrow' {
+                $focusedIndex = ($focusedIndex - 1 + $availableVersions.Count) % $availableVersions.Count
             }
-            elseif ($part -match '^\d+$') {
-                $selectedIndex = [int]$part
-                if ($selectedIndex -lt 1 -or $selectedIndex -gt $availableVersions.Count) {
-                    $validSelection = $false
-                    break
-                }
-                [void]$indexes.Add($selectedIndex)
+            'DownArrow' {
+                $focusedIndex = ($focusedIndex + 1) % $availableVersions.Count
             }
-            else {
-                $validSelection = $false
-                break
+            'Spacebar' {
+                $selected[$focusedIndex] = -not $selected[$focusedIndex]
+            }
+            'Enter' {
+                $Versions = @(
+                    for ($index = 0; $index -lt $availableVersions.Count; $index++) {
+                        if ($selected[$index]) { $availableVersions[$index] }
+                    }
+                )
+                if ($Versions.Count -gt 0) { break selection }
+            }
+            'A' {
+                $Versions = $availableVersions
+                break selection
+            }
+            'Q' {
+                Write-Host "Cancelado."
+                exit 0
             }
         }
-        if ($validSelection -and $indexes.Count -gt 0) {
-            $Versions = @($indexes | Sort-Object | ForEach-Object { $availableVersions[$_ - 1] })
-            break
-        }
-        Write-Warning "Seleccion no valida. Usa numeros, valores separados por comas, rangos, A o Q."
     }
-    $LaunchOffline = $true
 }
 
 if ($Branches) {
@@ -139,8 +136,6 @@ if ($Versions) {
     }
     $matrix = @($selectedMatrix)
 }
-
-$selectedProfileVersions = @($matrix.TestVersions | Select-Object -Unique)
 
 if ($ProfilesOnly -and $SkipProfileCreation) {
     throw "ProfilesOnly and SkipProfileCreation cannot be used together."
@@ -520,19 +515,31 @@ function Get-CachedModrinthFile {
     $hashMatches = $false
     if (Test-Path -LiteralPath $cachePath) {
         $hashMatches = (Get-FileHash -LiteralPath $cachePath -Algorithm SHA512).Hash -ieq $expectedSha512
+        if ($script:UpdateLogPath) {
+            Write-UpdateLog "[$projectId] Cache file $(Split-Path -Leaf $cachePath): $(if ($hashMatches) { 'SHA-512 matches' } else { 'SHA-512 mismatch; redownloading' })."
+        }
     }
     if (-not $hashMatches) {
         $temporaryPath = "$cachePath.download"
         $headers = @{
             "User-Agent" = "vistaero-Voxyrium-compatibility-script/1.0"
         }
+        if ($script:UpdateLogPath) {
+            Write-UpdateLog "[$projectId] Downloading $downloadUrl."
+        }
         Invoke-WebRequest -Uri $downloadUrl -Headers $headers -OutFile $temporaryPath
         $downloadedHash = (Get-FileHash -LiteralPath $temporaryPath -Algorithm SHA512).Hash
         if ($downloadedHash -ine $expectedSha512) {
             Remove-Item -LiteralPath $temporaryPath -Force
+            if ($script:UpdateLogPath) {
+                Write-UpdateLog "[$projectId] SHA-512 verification failed for $fileName." "ERROR"
+            }
             throw "SHA-512 verification failed for $fileName."
         }
         Move-Item -LiteralPath $temporaryPath -Destination $cachePath -Force
+        if ($script:UpdateLogPath) {
+            Write-UpdateLog "[$projectId] Downloaded and verified $fileName."
+        }
     }
     return Get-Item -LiteralPath $cachePath
 }
@@ -574,35 +581,48 @@ function Sync-ModrinthRuntimeMods {
         }
     }
 
-    # Modrinth marks Iris 1.6.11 as compatible with Minecraft 1.20 even
-    # though that release requires Sodium 0.5.3, which is 1.20.1-only.
-    # Iris 1.6.4 is the newest 1.20 release tied to Sodium 0.4.10.
-    if ($MinecraftVersion -eq "1.20") {
-        $constraints["iris"] = "=1.6.4"
-    }
-
     $newEntries = [System.Collections.Generic.List[object]]::new()
     foreach ($dependencyId in $constraints.Keys | Sort-Object) {
         $project = $dependencyMap[$dependencyId]
         $modrinthFile = Get-ModrinthPrimaryFile -ProjectId $project.ProjectId -MinecraftVersion $MinecraftVersion -VersionConstraint $constraints[$dependencyId]
         $cachedFile = Get-CachedModrinthFile -ModrinthFile $modrinthFile
-        Copy-Item -LiteralPath $cachedFile.FullName -Destination (Join-Path $ModsDirectory $modrinthFile.FileName) -Force
+        $fileName = [string](@($modrinthFile.FileName)[0])
+
+        foreach ($existingJar in @(Get-ChildItem -LiteralPath $ModsDirectory -Filter "*.jar" -File -ErrorAction SilentlyContinue)) {
+            try {
+                $existingModId = [string](Get-FabricModIdFromJar -JarPath $existingJar.FullName)
+            }
+            catch {
+                continue
+            }
+            if ($existingModId -eq $dependencyId -and $existingJar.Name -ne $fileName) {
+                Remove-Item -LiteralPath $existingJar.FullName -Force
+                if ($script:UpdateLogPath) {
+                    Write-UpdateLog "[$MinecraftVersion] Removed old $($project.Name) file $($existingJar.Name)."
+                }
+            }
+        }
+        Copy-Item -LiteralPath $cachedFile.FullName -Destination (Join-Path $ModsDirectory $fileName) -Force
         $newEntries.Add([pscustomobject]@{
             project = $project.Name
             project_id = $project.ProjectId
             version_id = $modrinthFile.VersionId
             version_number = $modrinthFile.VersionNumber
             version_type = $modrinthFile.VersionType
-            file_name = $modrinthFile.FileName
+            file_name = $fileName
             sha512 = $modrinthFile.Sha512
         })
         Write-Host "  ${MinecraftVersion}: $($project.Name) $($modrinthFile.VersionNumber)" -ForegroundColor DarkGray
+        if ($script:UpdateLogPath) {
+            Write-UpdateLog "[$MinecraftVersion] $($project.Name): $($modrinthFile.VersionNumber) ($($modrinthFile.FileName))."
+        }
     }
 
     $newFileNames = @($newEntries | ForEach-Object { $_.file_name })
     foreach ($oldEntry in $previousEntries) {
-        if ($oldEntry.file_name -notin $newFileNames) {
-            $oldPath = Join-Path $ModsDirectory $oldEntry.file_name
+        $oldFileName = [string](@($oldEntry.file_name)[0])
+        if ($oldFileName -and $oldFileName -notin $newFileNames) {
+            $oldPath = Join-Path $ModsDirectory $oldFileName
             if (Test-Path -LiteralPath $oldPath) {
                 Remove-Item -LiteralPath $oldPath -Force
             }
@@ -636,29 +656,97 @@ function Sync-ModrinthShaderPacks {
     foreach ($project in $projects) {
         $modrinthFile = Get-ModrinthPrimaryFile -ProjectId $project.ProjectId -MinecraftVersion $MinecraftVersion -Loader $project.Loader
         $cachedFile = Get-CachedModrinthFile -ModrinthFile $modrinthFile
-        Copy-Item -LiteralPath $cachedFile.FullName -Destination (Join-Path $shaderPacksDirectory $modrinthFile.FileName) -Force
+        $fileName = [string](@($modrinthFile.FileName)[0])
+        Copy-Item -LiteralPath $cachedFile.FullName -Destination (Join-Path $shaderPacksDirectory $fileName) -Force
         $newEntries.Add([pscustomobject]@{
             project = $project.Name
             project_id = $project.ProjectId
             version_id = $modrinthFile.VersionId
             version_number = $modrinthFile.VersionNumber
             version_type = $modrinthFile.VersionType
-            file_name = $modrinthFile.FileName
+            file_name = $fileName
             sha512 = $modrinthFile.Sha512
         })
         Write-Host "  ${MinecraftVersion}: $($project.Name) $($modrinthFile.VersionNumber)" -ForegroundColor DarkGray
+        if ($script:UpdateLogPath) {
+            Write-UpdateLog "[$MinecraftVersion] $($project.Name): $($modrinthFile.VersionNumber) ($($modrinthFile.FileName))."
+        }
     }
 
     $newFileNames = @($newEntries | ForEach-Object { $_.file_name })
     foreach ($oldEntry in $previousEntries) {
-        if ($oldEntry.file_name -notin $newFileNames) {
-            $oldPath = Join-Path $shaderPacksDirectory $oldEntry.file_name
+        $oldFileName = [string](@($oldEntry.file_name)[0])
+        if ($oldFileName -and $oldFileName -notin $newFileNames) {
+            $oldPath = Join-Path $shaderPacksDirectory $oldFileName
             if (Test-Path -LiteralPath $oldPath) {
                 Remove-Item -LiteralPath $oldPath -Force
             }
         }
     }
     $newEntries | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $managedManifestPath -Encoding utf8
+}
+
+function Write-UpdateLog {
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [ValidateSet("INFO", "WARN", "ERROR")][string]$Level = "INFO"
+    )
+
+    $line = "[{0}] [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Message
+    Add-Content -LiteralPath $script:UpdateLogPath -Value $line -Encoding utf8
+    $color = switch ($Level) {
+        "ERROR" { "Red" }
+        "WARN" { "Yellow" }
+        default { "DarkGray" }
+    }
+    Write-Host $line -ForegroundColor $color
+}
+
+function Get-ProfileGameDirectory {
+    param([Parameter(Mandatory)][string]$MinecraftVersion)
+
+    $safeVersion = $MinecraftVersion -replace '[^A-Za-z0-9._-]', '_'
+    return (Join-Path $ProfilesDirectory "voxy-test-$safeVersion")
+}
+
+function Update-SelectedRuntimeMods {
+    param([Parameter(Mandatory)][object[]]$SelectedMatrix)
+
+    Write-UpdateLog "Starting automatic runtime mod update for $(@($SelectedMatrix.TestVersions | Select-Object -Unique).Count) Minecraft version(s)."
+    foreach ($entry in $SelectedMatrix) {
+        foreach ($minecraftVersion in @($entry.TestVersions)) {
+            $gameDirectory = Get-ProfileGameDirectory -MinecraftVersion $minecraftVersion
+            $modsDirectory = Join-Path $gameDirectory "mods"
+            try {
+                Write-UpdateLog "[$minecraftVersion] Target directory: $gameDirectory"
+                Write-UpdateLog "[$minecraftVersion] Preparing directories."
+                New-Item -ItemType Directory -Path $modsDirectory -Force | Out-Null
+                Write-UpdateLog "[$minecraftVersion] Updating runtime mods, including Iris."
+                Sync-ModrinthRuntimeMods -MinecraftVersion $minecraftVersion -ModsDirectory $modsDirectory
+            }
+            catch {
+                $message = $_.Exception.Message
+                Write-UpdateLog "[$minecraftVersion] Runtime mod update failed: $message" "ERROR"
+                $script:UpdateFailures.Add("Runtime mod update for Minecraft ${minecraftVersion}: $message")
+            }
+            try {
+                Write-UpdateLog "[$minecraftVersion] Updating shader packs."
+                Sync-ModrinthShaderPacks -MinecraftVersion $minecraftVersion -GameDirectory $gameDirectory
+                Write-UpdateLog "[$minecraftVersion] Update completed."
+            }
+            catch {
+                $message = $_.Exception.Message
+                Write-UpdateLog "[$minecraftVersion] Shader pack update failed: $message" "ERROR"
+                $script:UpdateFailures.Add("Shader pack update for Minecraft ${minecraftVersion}: $message")
+            }
+        }
+    }
+    if ($script:UpdateFailures.Count -gt 0) {
+        Write-UpdateLog "Runtime update finished with $($script:UpdateFailures.Count) error(s)." "WARN"
+    }
+    else {
+        Write-UpdateLog "Runtime update finished successfully."
+    }
 }
 
 function Install-FabricVersion {
@@ -714,7 +802,7 @@ function Save-LauncherProfiles {
         foreach ($minecraftVersion in $entry.TestVersions) {
             $safeVersion = $minecraftVersion -replace "[^A-Za-z0-9._-]", "_"
             $profileId = "voxy-test-$safeVersion"
-            $gameDirectory = Join-Path $ProfilesDirectory $profileId
+            $gameDirectory = Get-ProfileGameDirectory -MinecraftVersion $minecraftVersion
             $modsDirectory = Join-Path $gameDirectory "mods"
             New-Item -ItemType Directory -Path $modsDirectory -Force | Out-Null
 
@@ -772,18 +860,13 @@ function Save-LauncherProfiles {
     Move-Item -LiteralPath $temporaryPath -Destination $profilesPath -Force
 }
 
-function Open-MinecraftLauncher {
-    $launcherTarget = "shell:AppsFolder\Microsoft.4297127D64EC6_8wekyb3d8bbwe!Minecraft"
-    Write-Host "`nAbriendo Minecraft Launcher. Perfiles de prueba seleccionados:" -ForegroundColor Cyan
-    foreach ($minecraftVersion in $selectedProfileVersions) {
-        Write-Host " - Voxy Test $minecraftVersion"
-    }
-    Start-Process -FilePath "explorer.exe" -ArgumentList $launcherTarget
-}
-
 $RepositoryRoot = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
+$updateLogDirectory = Join-Path $OutputDirectory "update-logs"
+New-Item -ItemType Directory -Path $updateLogDirectory -Force | Out-Null
+$script:UpdateLogPath = Join-Path $updateLogDirectory ("runtime-update-{0}.log" -f (Get-Date -Format "yyyyMMdd-HHmmss"))
+$script:UpdateFailures = [System.Collections.Generic.List[string]]::new()
 $sessionId = [guid]::NewGuid().ToString("N").Substring(0, 8)
 $worktreeRoot = Join-Path $WorktreeBaseDirectory $sessionId
 New-Item -ItemType Directory -Path $worktreeRoot -Force | Out-Null
@@ -794,6 +877,13 @@ $failures = [System.Collections.Generic.List[string]]::new()
 $resolvedJavaHomes = @{}
 
 try {
+    if (-not $SkipRuntimeMods) {
+        Update-SelectedRuntimeMods -SelectedMatrix $matrix
+        foreach ($updateFailure in $script:UpdateFailures) {
+            $failures.Add($updateFailure)
+        }
+    }
+
     foreach ($entry in $matrix) {
         Write-Host "`n=== Building $($entry.Branch) ===" -ForegroundColor Cyan
         $branchExists = & git -C $RepositoryRoot show-ref --verify --quiet "refs/heads/$($entry.Branch)"
@@ -913,12 +1003,6 @@ try {
         Save-LauncherProfiles -VersionIds $versionIds -Artifacts $artifacts
     }
 
-    if ($OpenLauncher) {
-        Open-MinecraftLauncher
-    }
-    if ($LaunchOffline) {
-        & (Join-Path $PSScriptRoot 'Start-MinecraftOffline.ps1') -MinecraftVersion $selectedProfileVersions
-    }
 }
 finally {
     if (-not $KeepWorktrees) {
@@ -931,6 +1015,7 @@ finally {
 
 Write-Host "`nArtifacts: $OutputDirectory" -ForegroundColor Green
 Write-Host "Test profiles: $ProfilesDirectory" -ForegroundColor Green
+Write-Host "Update log: $script:UpdateLogPath" -ForegroundColor Green
 if ($failures.Count -gt 0) {
     Write-Warning ("Incomplete branches/builds:`n - " + ($failures -join "`n - "))
     exit 1

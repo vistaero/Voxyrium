@@ -47,10 +47,10 @@ base {
 }
 
 def usesIris17Pipeline = project.minecraft_version.toString() == "1.20.1"
-def usesIris16Pipeline = project.minecraft_version.toString() == "1.20.2"
+def usesIris16Pipeline = ["1.20", "1.20.2"].contains(project.minecraft_version.toString())
 def usesLegacyIrisPipeline = usesIris17Pipeline || usesIris16Pipeline
 
-// Iris 1.6 (the final Iris line for Minecraft 1.20.2) still uses the old
+// Iris 1.6 (the compatible Iris line for Minecraft 1.20 and 1.20.2) still uses the old
 // net.coderbot namespace. Its active shader-pack pipeline is
 // newshader.NewWorldRenderingPipeline, so generate a source-compatible view
 // from the same Voxy integration used by 1.20.1 and target that runtime class.
@@ -82,8 +82,22 @@ if (usesIris16Pipeline) {
                 .replace("ipipe::getFlippedAfterPrepare", "() -> Iris16Compat.getFlippedAfterPrepare(ipipe)")
                 .replace("ipipe.addGbufferOrShadowSamplers(", "Iris16Compat.addGbufferOrShadowSamplers(ipipe, ")
                 .replace("ssboStore.getBufferIndex(binding.irisIndex)", "Iris16Compat.getBufferIndex(ssboStore, binding.irisIndex)")
+                .replace("rt.getOrCreate(targets[i])", "Iris16Compat.getRenderTarget(rt, targets[i])")
                 .replace("CommonUniforms.addDynamicUniforms(uniformBuilder, FogMode.PER_FRAGMENT);", "CommonUniforms.addDynamicUniforms(uniformBuilder, FogMode.PER_FRAGMENT);\n        Iris16Compat.addMissingUniforms(uniformBuilder);")
                 .replace('@Inject(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/coderbot/iris/pipeline/newshader/NewWorldRenderingPipeline;createSetupComputes([Lnet/coderbot/iris/shaderpack/ComputeSource;Lnet/coderbot/iris/shaderpack/ProgramSet;Lnet/coderbot/iris/shaderpack/texture/TextureStage;)[Lnet/coderbot/iris/gl/program/ComputeProgram;"))', '@Inject(method = "<init>", at = @At("RETURN"))') }
+        if (project.minecraft_version.toString() == "1.20") {
+            doLast {
+                def pipelineData = iris16Sources.get().file("me/cortex/voxy/client/iris/IrisVoxyRenderPipelineData.java").asFile
+                def source = pipelineData.getText("UTF-8")
+                source = source
+                        .replace('            case VEC3I -> "ivec3";', '')
+                        .replace('            case VEC3, VEC3I -> P(3,4);', '            case VEC3 -> P(3,4);')
+                        .replace('            case VEC3, VEC3I, MAT3 -> 2;', '            case VEC3, MAT3 -> 2;')
+                        .replaceAll(/(?s)        } else if \(uniform instanceof Int3VectorCachedUniform v3icu\) \{.*?        } else if \(uniform instanceof Float4MatrixCachedUniform f4mcu\) \{/, '        } else if (uniform instanceof Float4MatrixCachedUniform f4mcu) {')
+                        .replaceAll(/(?s)            @Override\s+public DynamicLocationalUniformHolder uniform3i\(UniformUpdateFrequency updateFrequency, String name, Supplier<Vector3i> value\) \{.*?            }\s+\n/, '')
+                pipelineData.setText(source, "UTF-8")
+            }
+        }
     }
     sourceSets.main.java.setSrcDirs([iris16Sources])
     sourceSets.main.java.srcDir("src/compat/iris16/java")

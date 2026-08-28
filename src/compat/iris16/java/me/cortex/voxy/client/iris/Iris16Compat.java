@@ -10,6 +10,7 @@ import net.coderbot.iris.gl.uniform.DynamicLocationalUniformHolder;
 import net.coderbot.iris.gl.uniform.UniformUpdateFrequency;
 import net.coderbot.iris.pipeline.CustomTextureManager;
 import net.coderbot.iris.pipeline.newshader.NewWorldRenderingPipeline;
+import net.coderbot.iris.rendertarget.RenderTarget;
 import net.coderbot.iris.rendertarget.RenderTargets;
 import net.coderbot.iris.samplers.IrisSamplers;
 import net.coderbot.iris.shaderpack.texture.TextureStage;
@@ -21,9 +22,10 @@ import org.joml.Vector3f;
 import org.joml.Vector3i;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.function.Supplier;
 
-/** Small API bridge for the final net.coderbot Iris release used by Minecraft 1.20.2. */
+/** API bridge for the net.coderbot Iris 1.6 releases used by Minecraft 1.20 and 1.20.2. */
 public final class Iris16Compat {
     private static final Field RENDER_TARGETS = field(NewWorldRenderingPipeline.class, "renderTargets");
     private static final Field FLIPPED_AFTER_PREPARE = field(NewWorldRenderingPipeline.class, "flippedAfterPrepare");
@@ -31,6 +33,9 @@ public final class Iris16Compat {
     private static final Field WHITE_PIXEL = field(NewWorldRenderingPipeline.class, "whitePixel");
     private static final Field SHADOW_TARGETS_SUPPLIER = field(NewWorldRenderingPipeline.class, "shadowTargetsSupplier");
     private static final Field SSBO_BUFFERS = field(ShaderStorageBufferHolder.class, "buffers");
+    private static final Method GET_OR_CREATE_RENDER_TARGET = optionalMethod(RenderTargets.class, "getOrCreate", int.class);
+    private static final Method UNIFORM3I = optionalMethod(DynamicLocationalUniformHolder.class, "uniform3i",
+            UniformUpdateFrequency.class, String.class, Supplier.class);
     private static final Vector3d CURRENT_CAMERA = new Vector3d();
     private static final Vector3d PREVIOUS_CAMERA = new Vector3d();
     private static int cameraFrame = Integer.MIN_VALUE;
@@ -72,10 +77,19 @@ public final class Iris16Compat {
     /** Supplies uniforms added after Iris 1.6, plus Voxy matrices that its custom-uniform bridge drops. */
     public static void addMissingUniforms(DynamicLocationalUniformHolder uniforms) {
         VoxyUniforms.addUniforms(uniforms);
-        uniforms
-                .uniform3i(UniformUpdateFrequency.PER_FRAME, "cameraPositionInt", Iris16Compat::cameraPositionInt)
-                .uniform3f(UniformUpdateFrequency.PER_FRAME, "cameraPositionFract", Iris16Compat::cameraPositionFract)
-                .uniform3f(UniformUpdateFrequency.PER_FRAME, "previousCameraPositionFract", Iris16Compat::previousCameraPositionFract);
+        if (UNIFORM3I != null) {
+            invoke(UNIFORM3I, uniforms, UniformUpdateFrequency.PER_FRAME, "cameraPositionInt",
+                    (Supplier<Vector3i>)Iris16Compat::cameraPositionInt);
+        }
+        uniforms.uniform3f("cameraPositionFract", Iris16Compat::cameraPositionFract, null);
+        uniforms.uniform3f("previousCameraPositionFract", Iris16Compat::previousCameraPositionFract, null);
+    }
+
+    public static RenderTarget getRenderTarget(RenderTargets renderTargets, int index) {
+        if (GET_OR_CREATE_RENDER_TARGET != null) {
+            return invoke(GET_OR_CREATE_RENDER_TARGET, renderTargets, index);
+        }
+        return renderTargets.get(index);
     }
 
     private static Vector3i cameraPositionInt() {
@@ -124,7 +138,7 @@ public final class Iris16Compat {
         if (irisIndex < 0 || irisIndex >= buffers.length || buffers[irisIndex] == null) {
             throw new IllegalArgumentException("Unknown Iris shader storage buffer index " + irisIndex);
         }
-        return buffers[irisIndex].getId();
+        return getInt(fieldInHierarchy(buffers[irisIndex].getClass(), "id"), buffers[irisIndex]);
     }
 
     private static Field field(Class<?> owner, String name) {
@@ -134,6 +148,45 @@ public final class Iris16Compat {
             return field;
         } catch (ReflectiveOperationException exception) {
             throw new ExceptionInInitializerError(exception);
+        }
+    }
+
+    private static Field fieldInHierarchy(Class<?> owner, String name) {
+        for (Class<?> type = owner; type != null; type = type.getSuperclass()) {
+            try {
+                Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                return field;
+            } catch (NoSuchFieldException ignored) {
+            }
+        }
+        throw new ExceptionInInitializerError("Missing Iris field " + owner.getName() + "." + name);
+    }
+
+    private static Method optionalMethod(Class<?> owner, String name, Class<?>... parameterTypes) {
+        try {
+            Method method = owner.getMethod(name, parameterTypes);
+            method.setAccessible(true);
+            return method;
+        } catch (NoSuchMethodException exception) {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T invoke(Method method, Object owner, Object... arguments) {
+        try {
+            return (T)method.invoke(owner, arguments);
+        } catch (ReflectiveOperationException exception) {
+            throw new IllegalStateException("Could not invoke Iris 1.6 compatibility method", exception);
+        }
+    }
+
+    private static int getInt(Field field, Object owner) {
+        try {
+            return field.getInt(owner);
+        } catch (IllegalAccessException exception) {
+            throw new IllegalStateException("Could not access Iris 1.6 buffer state", exception);
         }
     }
 

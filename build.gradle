@@ -340,6 +340,7 @@ processResources {
                 irisMixins = irisMixins.replace("iris.MixinIrisSamplers", "iris.MixinIrisSamplers16")
             }
             filter { line -> line
+                    .replace('    "minecraft.MixinClientChunkCacheSodium04",', irisMixins + '\n    "minecraft.MixinClientChunkCacheSodium04",')
                     .replace('    "minecraft.MixinClientChunkCacheLegacy",', irisMixins + '\n    "minecraft.MixinClientChunkCacheLegacy",')
                     .replace('    "minecraft.MixinClientChunkCache",', irisMixins + '\n    "minecraft.MixinClientChunkCache",') }
         }

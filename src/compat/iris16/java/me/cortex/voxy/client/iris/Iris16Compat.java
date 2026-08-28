@@ -15,7 +15,10 @@ import net.coderbot.iris.rendertarget.RenderTargets;
 import net.coderbot.iris.samplers.IrisSamplers;
 import net.coderbot.iris.shaderpack.texture.TextureStage;
 import net.coderbot.iris.shadows.ShadowRenderTargets;
+import net.coderbot.iris.uniforms.CameraUniforms;
+import net.coderbot.iris.uniforms.CapturedRenderingState;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.AbstractTexture;
 import org.joml.Vector3d;
 import org.joml.Vector3f;
@@ -81,6 +84,8 @@ public final class Iris16Compat {
             invoke(UNIFORM3I, uniforms, UniformUpdateFrequency.PER_FRAME, "cameraPositionInt",
                     (Supplier<Vector3i>)Iris16Compat::cameraPositionInt);
         }
+        uniforms.uniform1f("cloudHeight", (net.coderbot.iris.gl.uniform.FloatSupplier)Iris16Compat::cloudHeight, null);
+        uniforms.uniform3f("relativeEyePosition", Iris16Compat::relativeEyePosition, null);
         uniforms.uniform3f("cameraPositionFract", Iris16Compat::cameraPositionFract, null);
         uniforms.uniform3f("previousCameraPositionFract", Iris16Compat::previousCameraPositionFract, null);
     }
@@ -95,6 +100,22 @@ public final class Iris16Compat {
     private static Vector3i cameraPositionInt() {
         Vector3d camera = updateCamera(false);
         return new Vector3i(floorToInt(camera.x), floorToInt(camera.y), floorToInt(camera.z));
+    }
+
+    private static float cloudHeight() {
+        var level = Minecraft.getInstance().level;
+        return level == null ? 192.0f : level.effects().getCloudHeight();
+    }
+
+    private static Vector3f relativeEyePosition() {
+        var cameraEntity = Minecraft.getInstance().getCameraEntity();
+        if (cameraEntity == null) {
+            return new Vector3f();
+        }
+
+        Vector3d camera = CameraUniforms.getUnshiftedCameraPosition();
+        var eye = cameraEntity.getEyePosition(CapturedRenderingState.INSTANCE.getTickDelta());
+        return new Vector3f((float)(camera.x - eye.x), (float)(camera.y - eye.y), (float)(camera.z - eye.z));
     }
 
     private static Vector3f cameraPositionFract() {

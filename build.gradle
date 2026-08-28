@@ -96,6 +96,13 @@ if (usesIris16Pipeline) {
                         .replaceAll(/(?s)        } else if \(uniform instanceof Int3VectorCachedUniform v3icu\) \{.*?        } else if \(uniform instanceof Float4MatrixCachedUniform f4mcu\) \{/, '        } else if (uniform instanceof Float4MatrixCachedUniform f4mcu) {')
                         .replaceAll(/(?s)            @Override\s+public DynamicLocationalUniformHolder uniform3i\(UniformUpdateFrequency updateFrequency, String name, Supplier<Vector3i> value\) \{.*?            }\s+\n/, '')
                 pipelineData.setText(source, "UTF-8")
+
+                def renderPipeline = iris16Sources.get().file("me/cortex/voxy/client/core/IrisVoxyRenderPipeline.java").asFile
+                source = renderPipeline.getText("UTF-8")
+                source = source.replace(
+                        '        return builder.append("\\n\\n");',
+                        '        builder.append("#define cameraPositionInt ((baseSectionPos << 5) + ivec3(floor(cameraSubPos)))\\n");\n        return builder.append("\\n\\n");')
+                renderPipeline.setText(source, "UTF-8")
             }
         }
     }

@@ -552,9 +552,11 @@ public class IrisVoxyRenderPipelineData {
                 var ts = samplers[j];
                 glBindTextureUnit(unit, ts.texture.getAsInt());
                 int sampler = ts.sampler.getAsInt();
-                if (sampler != -1) {
-                    glBindSampler(unit, sampler);
-                }//TODO: might need to bind sampler 0
+                // Sampler bindings are unit state, not program state. Clear an
+                // Iris sampler left on this unit when the texture relies on its
+                // own filtering and wrap parameters (notably Voxy depth used by
+                // shader-pack screen-space reflections).
+                glBindSampler(unit, sampler != -1 ? sampler : 0);
             }
         };
         return new ImageSet(builder.toString(), bindingFunction);

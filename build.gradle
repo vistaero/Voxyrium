@@ -336,6 +336,7 @@ processResources {
         filesMatching("client.voxy.mixins.json") {
             def irisMixins = '''    "iris.CustomUniformsAccessor",
     "iris.IrisRenderingPipelineAccessor",
+    "iris.MixinIrisPipelineManager",
     "iris.MixinIrisRenderingPipeline",
     "iris.MixinIrisSamplers",
     "iris.MixinMatrixUniforms",

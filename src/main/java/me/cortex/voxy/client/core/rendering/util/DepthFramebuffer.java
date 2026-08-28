@@ -7,8 +7,15 @@ import org.lwjgl.system.MemoryStack;
 import static org.lwjgl.opengl.ARBDirectStateAccess.nglClearNamedFramebufferfv;
 import static org.lwjgl.opengl.ARBDirectStateAccess.nglClearNamedFramebufferiv;
 import static org.lwjgl.opengl.GL11C.GL_DEPTH;
+import static org.lwjgl.opengl.GL11C.GL_NEAREST;
+import static org.lwjgl.opengl.GL11C.GL_TEXTURE_MAG_FILTER;
+import static org.lwjgl.opengl.GL11C.GL_TEXTURE_MIN_FILTER;
+import static org.lwjgl.opengl.GL11C.GL_TEXTURE_WRAP_S;
+import static org.lwjgl.opengl.GL11C.GL_TEXTURE_WRAP_T;
+import static org.lwjgl.opengl.GL12C.GL_CLAMP_TO_EDGE;
 import static org.lwjgl.opengl.GL14.GL_DEPTH_COMPONENT24;
 import static org.lwjgl.opengl.GL30C.*;
+import static org.lwjgl.opengl.GL45C.glTextureParameteri;
 
 public class DepthFramebuffer {
     private final int depthType;
@@ -29,8 +36,10 @@ public class DepthFramebuffer {
                 this.depthBuffer.free();
             }
             this.depthBuffer = new GlTexture().store(this.depthType, 1, width, height);
-            //glTextureParameteri(this.depthBuffer.id, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            //glTextureParameteri(this.depthBuffer.id, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTextureParameteri(this.depthBuffer.id, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTextureParameteri(this.depthBuffer.id, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTextureParameteri(this.depthBuffer.id, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTextureParameteri(this.depthBuffer.id, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
             this.framebuffer.bind(this.getDepthAttachmentType(), this.depthBuffer).verify();
             return true;
         }

@@ -83,7 +83,7 @@ if (usesIris16Pipeline) {
                 .replace("ipipe.addGbufferOrShadowSamplers(", "Iris16Compat.addGbufferOrShadowSamplers(ipipe, ")
                 .replace("ssboStore.getBufferIndex(binding.irisIndex)", "Iris16Compat.getBufferIndex(ssboStore, binding.irisIndex)")
                 .replace("rt.getOrCreate(targets[i])", "Iris16Compat.getRenderTarget(rt, targets[i])")
-                .replace("CommonUniforms.addDynamicUniforms(uniformBuilder, FogMode.PER_FRAGMENT);", "CommonUniforms.addDynamicUniforms(uniformBuilder, FogMode.PER_FRAGMENT);\n        Iris16Compat.addMissingUniforms(uniformBuilder);")
+                .replace("CommonUniforms.addDynamicUniforms(uniformBuilder, FogMode.PER_FRAGMENT);", "CommonUniforms.addDynamicUniforms(uniformBuilder, FogMode.PER_FRAGMENT);\n        Iris16Compat.addMissingUniforms(ipipe, uniformBuilder);")
                 .replace('@Inject(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/coderbot/iris/pipeline/newshader/NewWorldRenderingPipeline;createSetupComputes([Lnet/coderbot/iris/shaderpack/ComputeSource;Lnet/coderbot/iris/shaderpack/ProgramSet;Lnet/coderbot/iris/shaderpack/texture/TextureStage;)[Lnet/coderbot/iris/gl/program/ComputeProgram;"))', '@Inject(method = "<init>", at = @At("RETURN"))') }
         if (project.minecraft_version.toString() == "1.20") {
             doLast {

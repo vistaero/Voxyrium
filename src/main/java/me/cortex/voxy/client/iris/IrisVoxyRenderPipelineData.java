@@ -98,7 +98,7 @@ public class IrisVoxyRenderPipelineData {
 
 
     public static IrisVoxyRenderPipelineData buildPipeline(IrisRenderingPipeline ipipe, IrisShaderPatch patch, CustomUniforms cu, ShaderStorageBufferHolder ssboHolder) {
-        var uniforms = createUniformLayoutStructAndUpdater(createUniformSet(cu, patch));
+        var uniforms = createUniformLayoutStructAndUpdater(createUniformSet(ipipe, cu, patch));
 
 
         var imageSet = createImageSet(ipipe, patch);
@@ -303,7 +303,7 @@ public class IrisVoxyRenderPipelineData {
     private record UniformWritingHolder(String name, UniformType type, Long2ObjectFunction<LongConsumer> writingFactory) {
 
     }
-    private static List<UniformWritingHolder> createUniformSet(CustomUniforms cu, IrisShaderPatch patch) {
+    private static List<UniformWritingHolder> createUniformSet(IrisRenderingPipeline ipipe, CustomUniforms cu, IrisShaderPatch patch) {
         //This is a fking awful hack... but it works thinks
 
         List<UniformWritingHolder> uniforms = new ArrayList<>();

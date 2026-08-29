@@ -13,10 +13,12 @@ import net.coderbot.iris.pipeline.newshader.NewWorldRenderingPipeline;
 import net.coderbot.iris.rendertarget.RenderTarget;
 import net.coderbot.iris.rendertarget.RenderTargets;
 import net.coderbot.iris.samplers.IrisSamplers;
+import net.coderbot.iris.shaderpack.PackDirectives;
 import net.coderbot.iris.shaderpack.texture.TextureStage;
 import net.coderbot.iris.shadows.ShadowRenderTargets;
 import net.coderbot.iris.uniforms.CameraUniforms;
 import net.coderbot.iris.uniforms.CapturedRenderingState;
+import net.coderbot.iris.uniforms.MatrixUniforms;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.AbstractTexture;
@@ -35,6 +37,7 @@ public final class Iris16Compat {
     private static final Field CUSTOM_TEXTURE_MANAGER = field(NewWorldRenderingPipeline.class, "customTextureManager");
     private static final Field WHITE_PIXEL = field(NewWorldRenderingPipeline.class, "whitePixel");
     private static final Field SHADOW_TARGETS_SUPPLIER = field(NewWorldRenderingPipeline.class, "shadowTargetsSupplier");
+    private static final Field PACK_DIRECTIVES = field(NewWorldRenderingPipeline.class, "packDirectives");
     private static final Field SSBO_BUFFERS = field(ShaderStorageBufferHolder.class, "buffers");
     private static final Method GET_OR_CREATE_RENDER_TARGET = optionalMethod(RenderTargets.class, "getOrCreate", int.class);
     private static final Method UNIFORM3I = optionalMethod(DynamicLocationalUniformHolder.class, "uniform3i",
@@ -78,8 +81,10 @@ public final class Iris16Compat {
     }
 
     /** Supplies uniforms added after Iris 1.6, plus Voxy matrices that its custom-uniform bridge drops. */
-    public static void addMissingUniforms(DynamicLocationalUniformHolder uniforms) {
+    public static void addMissingUniforms(NewWorldRenderingPipeline pipeline,
+                                          DynamicLocationalUniformHolder uniforms) {
         VoxyUniforms.addUniforms(uniforms);
+        MatrixUniforms.addMatrixUniforms(uniforms, get(PACK_DIRECTIVES, pipeline, PackDirectives.class));
         if (UNIFORM3I != null) {
             invoke(UNIFORM3I, uniforms, UniformUpdateFrequency.PER_FRAME, "cameraPositionInt",
                     (Supplier<Vector3i>)Iris16Compat::cameraPositionInt);

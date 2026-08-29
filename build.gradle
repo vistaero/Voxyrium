@@ -95,6 +95,9 @@ if (usesIris16Pipeline) {
                         .replace('            case VEC3, VEC3I, MAT3 -> 2;', '            case VEC3, MAT3 -> 2;')
                         .replaceAll(/(?s)        } else if \(uniform instanceof Int3VectorCachedUniform v3icu\) \{.*?        } else if \(uniform instanceof Float4MatrixCachedUniform f4mcu\) \{/, '        } else if (uniform instanceof Float4MatrixCachedUniform f4mcu) {')
                         .replaceAll(/(?s)            @Override\s+public DynamicLocationalUniformHolder uniform3i\(UniformUpdateFrequency updateFrequency, String name, Supplier<Vector3i> value\) \{.*?            }\s+\n/, '')
+                        .replace(
+                                '            Logger.error("The following uniforms could not be found: [" + uniformsUnseen.stream().sorted(String::compareToIgnoreCase).collect(Collectors.joining(","))+"]");',
+                                '            uniformsUnseen.remove("cameraPositionInt");\n            if (!uniformsUnseen.isEmpty()) {\n                Logger.error("The following uniforms could not be found: [" + uniformsUnseen.stream().sorted(String::compareToIgnoreCase).collect(Collectors.joining(","))+"]");\n            }')
                 pipelineData.setText(source, "UTF-8")
 
                 def renderPipeline = iris16Sources.get().file("me/cortex/voxy/client/core/IrisVoxyRenderPipeline.java").asFile

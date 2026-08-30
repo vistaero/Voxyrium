@@ -11,6 +11,7 @@ import me.cortex.voxy.client.core.rendering.util.LightMapHelper;
 import me.cortex.voxy.client.mixin.iris.CustomUniformsAccessor;
 import me.cortex.voxy.client.mixin.iris.IrisRenderingPipelineAccessor;
 import me.cortex.voxy.common.Logger;
+import net.irisshaders.iris.gl.IrisRenderSystem;
 import net.irisshaders.iris.gl.buffer.ShaderStorageBufferHolder;
 import net.irisshaders.iris.gl.image.ImageHolder;
 import net.irisshaders.iris.gl.sampler.GlSampler;
@@ -36,9 +37,7 @@ import java.util.function.LongConsumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-import static org.lwjgl.opengl.ARBDirectStateAccess.glBindTextureUnit;
 import static org.lwjgl.opengl.ARBUniformBufferObject.glBindBufferBase;
-import static org.lwjgl.opengl.GL33C.glBindSampler;
 import static org.lwjgl.opengl.GL43C.GL_SHADER_STORAGE_BUFFER;
 
 public class IrisVoxyRenderPipelineData {
@@ -550,13 +549,16 @@ public class IrisVoxyRenderPipelineData {
             for (int j = 0; j < samplers.length; j++) {
                 int unit = j+base;
                 var ts = samplers[j];
-                glBindTextureUnit(unit, ts.texture.getAsInt());
+                // Keep Iris' texture and sampler caches in sync. Raw OpenGL
+                // bindings here allow a later Iris pass to skip a required
+                // rebind and sample one of Voxy's textures instead.
+                IrisRenderSystem.bindTextureToUnit(TextureType.TEXTURE_2D.getGlType(), unit, ts.texture.getAsInt());
                 int sampler = ts.sampler.getAsInt();
                 // Sampler bindings are unit state, not program state. Clear an
                 // Iris sampler left on this unit when the texture relies on its
                 // own filtering and wrap parameters (notably Voxy depth used by
                 // shader-pack screen-space reflections).
-                glBindSampler(unit, sampler != -1 ? sampler : 0);
+                IrisRenderSystem.bindSamplerToUnit(unit, sampler != -1 ? sampler : 0);
             }
         };
         return new ImageSet(builder.toString(), bindingFunction);

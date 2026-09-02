@@ -1,7 +1,9 @@
 plugins {
     id 'net.fabricmc.fabric-loom' version "${loom_version}"
     id 'maven-publish'
+    id "me.champeau.jmh" version "0.7.3"
 }
+
 def INCLUDE_OTHER_ARCHS = "true".equalsIgnoreCase(project.findProperty("includeOtherArchs"))
 
 def isInGHA = System.getenv("GITHUB_ACTIONS") == "true"
@@ -473,6 +475,11 @@ tasks.register('verifyBlaze3dBackendIsolation') {
 
 tasks.named('check') {
     dependsOn tasks.named('verifyBlaze3dBackendIsolation')
+}
+
+jmh {
+    zip64 = true
+    //profilers = ["xperfasm"]
 }
 
 /*

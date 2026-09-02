@@ -52,11 +52,18 @@ public final class IrisUtil {
         return action.get();
     }
 
-    public static void clearIrisSamplers() {
+    public static int textureUnitCleanupCount() {
+        // Iris expands Minecraft's legacy 12-entry texture-state array. Voxy's
+        // shader-pack bindings currently reach unit 17, so clear a full 32-unit
+        // range whenever Iris is present while retaining the vanilla-safe limit.
+        return IRIS_INSTALLED ? 32 : 12;
+    }
+
+    public static void clearIrisSamplers(int unitCount) {
         if (!IRIS_INSTALLED) {
             return;
         }
-        for (int unit = 0; unit < 16; unit++) {
+        for (int unit = 0; unit < unitCount; unit++) {
             IrisRenderSystem.bindSamplerToUnit(unit, 0);
         }
     }

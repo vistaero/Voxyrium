@@ -47,7 +47,11 @@ public final class IrisUtil {
         return action.get();
     }
 
-    public static void clearIrisSamplers() {
+    public static int textureUnitCleanupCount() {
+        return IRIS_INSTALLED ? 32 : 12;
+    }
+
+    public static void clearIrisSamplers(int unitCount) {
         // Iris restores the sampler state through its existing Sodium hook.
     }
 

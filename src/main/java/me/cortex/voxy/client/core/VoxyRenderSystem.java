@@ -75,6 +75,20 @@ public class VoxyRenderSystem {
         return MDICSectionRenderer.FACTORY;
     }
 
+    private static void clearTextureUnitState() {
+        // Shader-pack samplers start at unit 6 and can extend beyond Minecraft's
+        // legacy 0-11 cleanup range. Leaving one of those units bound leaks Voxy's
+        // block atlas into later Iris passes (notably temporal water reflections).
+        int unitCount = IrisUtil.textureUnitCleanupCount();
+        for (int unit = 0; unit < unitCount; unit++) {
+            GlStateManager._activeTexture(GlConst.GL_TEXTURE0 + unit);
+            GlStateManager._bindTexture(0);
+            glBindSampler(unit, 0);
+        }
+        IrisUtil.clearIrisSamplers(unitCount);
+        GlStateManager._activeTexture(GlConst.GL_TEXTURE0);
+    }
+
     public VoxyRenderSystem(WorldEngine world, ServiceManager sm) {
         //Keep the world loaded, NOTE: this is done FIRST, to keep and ensure that even if the rest of loading takes more
         // than timeout, we keep the world acquired
@@ -170,11 +184,7 @@ public class VoxyRenderSystem {
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, i, oldBufferBindings[i]);
         }
 
-        for (int i = 0; i < 12; i++) {
-            GlStateManager._activeTexture(GlConst.GL_TEXTURE0+i);
-            GlStateManager._bindTexture(0);
-            glBindSampler(i, 0);
-        }
+        clearTextureUnitState();
     }
 
 
@@ -340,14 +350,7 @@ public class VoxyRenderSystem {
             GlStateManager._glBindVertexArray(0);//Clear binding
             glBindVertexArray(0);
 
-            GlStateManager._activeTexture(GlConst.GL_TEXTURE1);
-            for (int i = 0; i < 12; i++) {
-                GlStateManager._activeTexture(GlConst.GL_TEXTURE0+i);
-                GlStateManager._bindTexture(0);
-                glBindSampler(i, 0);
-            }
-
-            IrisUtil.clearIrisSamplers();//Thanks iris (sigh)
+            clearTextureUnitState();
 
             //TODO: should/needto actually restore all of these, not just clear them
             //Clear all the bindings

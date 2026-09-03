@@ -169,7 +169,10 @@ function ConvertTo-CommandLineArgument {
 
 function Start-OfflineProfile {
     param([string]$SelectedProfileId, [object]$Profile)
-    $versionId = [string]$Profile.lastVersionId
+    # Older compatibility builds accidentally stored the Fabric installer's
+    # console output alongside the actual version ID. The intended ID is the
+    # final pipeline value returned by Install-FabricVersion.
+    $versionId = [string](@($Profile.lastVersionId)[-1])
     $gameDirectory = if ($Profile.gameDir) { [string]$Profile.gameDir } else { $MinecraftDirectory }
     New-Item -ItemType Directory -Path $gameDirectory -Force | Out-Null
     $chain = Get-VersionChain $versionId

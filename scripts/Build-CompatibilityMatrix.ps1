@@ -815,7 +815,7 @@ function Install-FabricVersion {
         "-mcversion", $MinecraftVersion,
         "-loader", $LoaderVersion,
         "-noprofile"
-    ) -WorkingDirectory $RepositoryRoot
+    ) -WorkingDirectory $RepositoryRoot | Out-Host
 
     if (-not (Test-Path -LiteralPath $versionJson)) {
         throw "Fabric installer did not create $versionJson"

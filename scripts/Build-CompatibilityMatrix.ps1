@@ -445,29 +445,44 @@ function Get-ModrinthPrimaryFile {
         [Parameter(Mandatory)][string]$ProjectId,
         [Parameter(Mandatory)][string]$MinecraftVersion,
         [string]$Loader = "fabric",
-        $VersionConstraint = "*"
+        $VersionConstraint = "*",
+        [string]$RequiredVersionId,
+        [string]$VersionNumberPattern
     )
 
-    $loaders = [uri]::EscapeDataString((ConvertTo-Json @($Loader) -Compress))
-    $gameVersions = [uri]::EscapeDataString((ConvertTo-Json @($MinecraftVersion) -Compress))
-    $uri = "https://api.modrinth.com/v2/project/$ProjectId/version?loaders=$loaders&game_versions=$gameVersions&include_changelog=false"
     $headers = @{
         "User-Agent" = "vistaero-Voxyrium-compatibility-script/1.0"
     }
-    $response = Invoke-RestMethod -Uri $uri -Headers $headers
     $versions = [System.Collections.Generic.List[object]]::new()
-    foreach ($version in $response) {
+    if ($RequiredVersionId) {
+        $version = Invoke-RestMethod -Uri "https://api.modrinth.com/v2/version/$RequiredVersionId" -Headers $headers
+        if ($version.project_id -ne $ProjectId -or
+            $version.status -ne "listed" -or
+            $version.game_versions -notcontains $MinecraftVersion -or
+            $version.loaders -notcontains $Loader) {
+            throw "Modrinth dependency version $RequiredVersionId is not a listed $Loader version for Minecraft $MinecraftVersion."
+        }
         $versions.Add($version)
+    }
+    else {
+        $loaders = [uri]::EscapeDataString((ConvertTo-Json @($Loader) -Compress))
+        $gameVersions = [uri]::EscapeDataString((ConvertTo-Json @($MinecraftVersion) -Compress))
+        $uri = "https://api.modrinth.com/v2/project/$ProjectId/version?loaders=$loaders&game_versions=$gameVersions&include_changelog=false"
+        $response = Invoke-RestMethod -Uri $uri -Headers $headers
+        foreach ($version in $response) {
+            $versions.Add($version)
+        }
     }
     $listed = @($versions | Where-Object {
         $_.status -eq "listed" -and
         $_.files.Count -gt 0 -and
+        (-not $RequiredVersionId -or $_.id -eq $RequiredVersionId) -and
+        (-not $VersionNumberPattern -or $_.version_number -match $VersionNumberPattern) -and
         (Test-ModVersionConstraint -ProjectId $ProjectId -VersionNumber $_.version_number -Constraint $VersionConstraint)
     })
     if ($listed.Count -eq 0) {
         throw "Modrinth project $ProjectId has no listed Fabric version for Minecraft $MinecraftVersion matching constraint '$($VersionConstraint | ConvertTo-Json -Compress)'."
     }
-
     $selectedVersion = $null
     foreach ($channel in @("release", "beta", "alpha")) {
         $selectedVersion = $listed |
@@ -498,6 +513,7 @@ function Get-ModrinthPrimaryFile {
         FileName = $selectedFile.filename
         Url = $selectedFile.url
         Sha512 = $selectedFile.hashes.sha512
+        Dependencies = @($selectedVersion.dependencies)
     }
 }
 
@@ -570,6 +586,11 @@ function Sync-ModrinthRuntimeMods {
         "modmenu" = "*"
         "iris" = "*"
     }
+    # Iris 1.7.6's Modrinth metadata still recommends a 0.5.12 beta, while its
+    # Fabric manifest accepts Sodium 0.5.x and this Voxy target requires 0.5.13.
+    if ($MinecraftVersion -eq "1.20.1") {
+        $constraints.sodium = "=0.5.13"
+    }
     if ($VoxyArtifact) {
         $voxyManifest = Get-FabricManifestFromJar -JarPath $VoxyArtifact
         foreach ($dependency in $voxyManifest.depends.PSObject.Properties) {
@@ -582,9 +603,35 @@ function Sync-ModrinthRuntimeMods {
     }
 
     $newEntries = [System.Collections.Generic.List[object]]::new()
-    foreach ($dependencyId in $constraints.Keys | Sort-Object) {
+    $resolvedFiles = @{}
+    foreach ($dependencyId in @($constraints.Keys | Where-Object { $_ -notin @("sodium", "iris") } | Sort-Object) + @("iris", "sodium")) {
         $project = $dependencyMap[$dependencyId]
-        $modrinthFile = Get-ModrinthPrimaryFile -ProjectId $project.ProjectId -MinecraftVersion $MinecraftVersion -VersionConstraint $constraints[$dependencyId]
+        $requiredVersionId = $null
+        if ($dependencyId -eq "sodium" -and $resolvedFiles.ContainsKey("iris")) {
+            $sodiumDependency = @($resolvedFiles["iris"].Dependencies | Where-Object {
+                $_.project_id -eq $dependencyMap.sodium.ProjectId -and $_.dependency_type -eq "required"
+            } | Select-Object -First 1)
+            if ($sodiumDependency.Count -gt 0) {
+                $irisRequiredVersionId = [string]$sodiumDependency[0].version_id
+                if ($irisRequiredVersionId) {
+                    $irisSodiumFile = Get-ModrinthPrimaryFile -ProjectId $project.ProjectId -MinecraftVersion $MinecraftVersion -VersionConstraint "*" -RequiredVersionId $irisRequiredVersionId
+                    if (Test-ModVersionConstraint -ProjectId $project.ProjectId -VersionNumber $irisSodiumFile.VersionNumber -Constraint $constraints.sodium) {
+                        $requiredVersionId = $irisRequiredVersionId
+                    }
+                    elseif ($script:UpdateLogPath) {
+                        Write-UpdateLog "[$MinecraftVersion] Ignored Iris Sodium recommendation $($irisSodiumFile.VersionNumber); required constraint is $($constraints.sodium)."
+                    }
+                }
+                else {
+                    $constraints.sodium = [string]$sodiumDependency[0].version_req
+                }
+            }
+        }
+        $versionNumberPattern = if ($dependencyId -eq "iris") {
+            "\+" + [regex]::Escape($MinecraftVersion) + "(?:$|[-+])"
+        }
+        $modrinthFile = Get-ModrinthPrimaryFile -ProjectId $project.ProjectId -MinecraftVersion $MinecraftVersion -VersionConstraint $constraints[$dependencyId] -RequiredVersionId $requiredVersionId -VersionNumberPattern $versionNumberPattern
+        $resolvedFiles[$dependencyId] = $modrinthFile
         $cachedFile = Get-CachedModrinthFile -ModrinthFile $modrinthFile
         $fileName = [string](@($modrinthFile.FileName)[0])
 

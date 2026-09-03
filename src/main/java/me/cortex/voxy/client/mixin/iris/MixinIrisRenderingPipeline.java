@@ -82,7 +82,6 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
             }
         }
     }
-
     @Override
     public IrisShaderPatch voxy$getPatchData() {
         return this.patchData;

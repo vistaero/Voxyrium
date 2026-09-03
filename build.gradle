@@ -3,7 +3,7 @@ plugins {
     id 'maven-publish'
 }
 
-// This branch intentionally covers all three Minecraft releases. Their Sodium/Fabric
+// This branch intentionally covers the maintained Minecraft 1.20.x releases. Their Sodium/Fabric
 // generations are not interchangeable, so select a tested dependency set from the
 // requested Minecraft version instead of letting Gradle assemble an accidental mix.
 def compatibilityTargets = [
@@ -27,6 +27,21 @@ def compatibilityTargets = [
                 lithium_version: "mc1.20.2-0.12.0",
                 iris_version: "1.6.14+1.20.2",
                 chunky_version: "NHWYq9at"
+        ],
+        "1.20.4": [
+                fabric_api_version: "0.97.3+1.20.4",
+                sodium_version_modrinth: "mc1.20.4-0.5.8",
+                lithium_version: "mc1.20.4-0.12.1",
+                iris_version: "1.7.2+1.20.4",
+                chunky_version: "NHWYq9at"
+        ],
+        "1.20.6": [
+                fabric_api_version: "0.100.8+1.20.6",
+                sodium_version_modrinth: "mc1.20.6-0.5.11",
+                lithium_version: "mc1.20.6-0.12.5",
+                iris_version: "1.7.2+1.20.6",
+                chunky_version: "ZrmnYk7q",
+                vivecraft_version: "1.20.6-1.1.14-b1-fabric"
         ]
 ]
 def compatibilityTarget = compatibilityTargets[project.minecraft_version.toString()]
@@ -46,7 +61,7 @@ base {
     archivesName = "${project.archives_base_name}-${project.minecraft_version}"
 }
 
-def usesIris17Pipeline = project.minecraft_version.toString() == "1.20.1"
+def usesIris17Pipeline = ["1.20.1", "1.20.4", "1.20.6"].contains(project.minecraft_version.toString())
 def usesIris16Pipeline = ["1.20", "1.20.2"].contains(project.minecraft_version.toString())
 def usesLegacyIrisPipeline = usesIris17Pipeline || usesIris16Pipeline
 
@@ -115,7 +130,32 @@ if (usesIris16Pipeline) {
     tasks.named("compileJava").configure { dependsOn("generateIris16Sources") }
 }
 
-// Minecraft 1.20 through 1.20.2 predates Minecraft's public GpuDevice/RenderPipeline API and
+// Minecraft 1.20.4 and 1.20.6 changed a small number of Mojang APIs while the
+// renderer implementation remained the same. Generate their source view from
+// the shared Java 17 baseline instead of maintaining parallel branches.
+def usesPost1202Api = ["1.20.4", "1.20.6"].contains(project.minecraft_version.toString())
+if (usesPost1202Api) {
+    def post1202Sources = layout.buildDirectory.dir("generated/sources/post1202/java")
+    tasks.register("generatePost1202Sources", Sync) {
+        from("src/main/java")
+        into(post1202Sources)
+        filter { line -> line
+                .replace("import net.minecraft.nbt.NbtIo;", "import net.minecraft.nbt.NbtAccounter;\nimport net.minecraft.nbt.NbtIo;")
+                .replace("NbtIo.readCompressed(new ByteArrayInputStream(data))", "NbtIo.readCompressed(new ByteArrayInputStream(data), NbtAccounter.unlimitedHeap())") }
+        if (project.minecraft_version.toString() == "1.20.6") {
+            filter { line -> line
+                    .replace("net.minecraft.world.level.chunk.ChunkStatus", "net.minecraft.world.level.chunk.status.ChunkStatus")
+                    .replace("new ZipFile(zip)", "ZipFile.builder().setFile(zip).get()")
+                    .replace("implements Supplier<Matrix4f>", "implements Supplier<Matrix4fc>")
+                    .replace("public Matrix4f get()", "public Matrix4fc get()")
+                    .replace("Supplier<Matrix4f> value", "Supplier<Matrix4fc> value") }
+        }
+    }
+    sourceSets.main.java.setSrcDirs([post1202Sources])
+    tasks.named("compileJava").configure { dependsOn("generatePost1202Sources") }
+}
+
+// Minecraft 1.20 through 1.20.6 predates Minecraft's public GpuDevice/RenderPipeline API and
 // cannot host the Vulkan or public-Blaze3D renderers from current dev. Keep the
 // current native OpenGL renderer and omit only integrations whose host APIs do
 // not exist on this target.
@@ -347,6 +387,9 @@ processResources {
     "iris.MixinProgramSet",
     "iris.MixinShaderPackSourceNames",
     "iris.MixinStandardMacros",'''
+            if (["1.20.4", "1.20.6"].contains(project.minecraft_version.toString())) {
+                irisMixins = irisMixins.replace('    "iris.MixinIrisPipelineManager",\n', '')
+            }
             if (usesIris16Pipeline) {
                 irisMixins = irisMixins.replace("iris.MixinIrisSamplers", "iris.MixinIrisSamplers16")
             }
@@ -493,7 +536,7 @@ dependencies {
 }
 
 
-def targetJavaVersion = 17
+def targetJavaVersion = project.minecraft_version.toString() == "1.20.6" ? 21 : 17
 tasks.withType(JavaCompile).configureEach {
     it.options.encoding = "UTF-8"
     it.options.release = targetJavaVersion

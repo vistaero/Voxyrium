@@ -45,11 +45,11 @@ $matrix = @(
     [pscustomobject]@{ Branch = "mc_1.21.4";              ExpectedSourceVersion = "1.21.4";  TestVersions = @("1.21.4");                       PreBuildTasks = @() },
     [pscustomobject]@{ Branch = "mc_1.21.3";              ExpectedSourceVersion = "1.21.3";  TestVersions = @("1.21.3");                       PreBuildTasks = @("clean", "processIncludeJars") },
     [pscustomobject]@{ Branch = "mc_1.21-1.21.1";         ExpectedSourceVersion = "1.21";    TestVersions = @("1.21", "1.21.1");              PreBuildTasks = @() },
-    [pscustomobject]@{ Branch = "mc_1.20.6";              ExpectedSourceVersion = "1.20.6";  TestVersions = @("1.20.6");                       PreBuildTasks = @() },
-    [pscustomobject]@{ Branch = "mc_1.20.4";              ExpectedSourceVersion = "1.20.4";  TestVersions = @("1.20.4");                       PreBuildTasks = @() },
-    [pscustomobject]@{ Branch = "mc_1.20-1.20.2";         ExpectedSourceVersion = "1.20.2";  BuildVersion = "1.20";   ArtifactKey = "mc_1.20-1.20.2__1.20";   TestVersions = @("1.20");   PreBuildTasks = @() },
-    [pscustomobject]@{ Branch = "mc_1.20-1.20.2";         ExpectedSourceVersion = "1.20.2";  BuildVersion = "1.20.1"; ArtifactKey = "mc_1.20-1.20.2__1.20.1"; TestVersions = @("1.20.1"); PreBuildTasks = @() },
-    [pscustomobject]@{ Branch = "mc_1.20-1.20.2";         ExpectedSourceVersion = "1.20.2";  BuildVersion = "1.20.2"; ArtifactKey = "mc_1.20-1.20.2__1.20.2"; TestVersions = @("1.20.2"); PreBuildTasks = @() }
+    [pscustomobject]@{ Branch = "mc_1.20-1.20.6";         ExpectedSourceVersion = "1.20.2";  BuildVersion = "1.20.6"; JavaVersion = 21; ArtifactKey = "mc_1.20-1.20.6__1.20.6"; TestVersions = @("1.20.6"); PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.20-1.20.6";         ExpectedSourceVersion = "1.20.2";  BuildVersion = "1.20.4"; JavaVersion = 17; ArtifactKey = "mc_1.20-1.20.6__1.20.4"; TestVersions = @("1.20.4"); PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.20-1.20.6";         ExpectedSourceVersion = "1.20.2";  BuildVersion = "1.20.2"; JavaVersion = 17; ArtifactKey = "mc_1.20-1.20.6__1.20.2"; TestVersions = @("1.20.2"); PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.20-1.20.6";         ExpectedSourceVersion = "1.20.2";  BuildVersion = "1.20.1"; JavaVersion = 17; ArtifactKey = "mc_1.20-1.20.6__1.20.1"; TestVersions = @("1.20.1"); PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.20-1.20.6";         ExpectedSourceVersion = "1.20.2";  BuildVersion = "1.20";   JavaVersion = 17; ArtifactKey = "mc_1.20-1.20.6__1.20";   TestVersions = @("1.20");   PreBuildTasks = @() }
 )
 
 if ($Branches -and $Versions) {
@@ -975,11 +975,16 @@ try {
             }
 
             $gradle = Join-Path $worktree "gradlew.bat"
-            $javaTargetMatch = Select-String -LiteralPath (Join-Path $worktree "build.gradle") -Pattern 'targetJavaVersion\s*=\s*(?<version>\d+)' | Select-Object -First 1
-            if (-not $javaTargetMatch) {
-                throw "Could not determine targetJavaVersion for $($entry.Branch)."
+            if ($entry.PSObject.Properties.Name -contains "JavaVersion") {
+                $requiredJava = [int]$entry.JavaVersion
             }
-            $requiredJava = [int]$javaTargetMatch.Matches[0].Groups["version"].Value
+            else {
+                $javaTargetMatch = Select-String -LiteralPath (Join-Path $worktree "build.gradle") -Pattern 'targetJavaVersion\s*=\s*(?<version>\d+)' | Select-Object -First 1
+                if (-not $javaTargetMatch) {
+                    throw "Could not determine targetJavaVersion for $($entry.Branch)."
+                }
+                $requiredJava = [int]$javaTargetMatch.Matches[0].Groups["version"].Value
+            }
             if (-not $resolvedJavaHomes.ContainsKey($requiredJava)) {
                 $configuredHome = switch ($requiredJava) {
                     17 { $Java17Home }

@@ -8,20 +8,15 @@ import net.coderbot.iris.gl.image.ImageHolder;
 import net.coderbot.iris.gl.sampler.SamplerHolder;
 import net.coderbot.iris.gl.uniform.DynamicLocationalUniformHolder;
 import net.coderbot.iris.gl.uniform.UniformUpdateFrequency;
-import net.coderbot.iris.pipeline.CustomTextureManager;
 import net.coderbot.iris.pipeline.newshader.NewWorldRenderingPipeline;
 import net.coderbot.iris.rendertarget.RenderTarget;
 import net.coderbot.iris.rendertarget.RenderTargets;
-import net.coderbot.iris.samplers.IrisSamplers;
 import net.coderbot.iris.shaderpack.PackDirectives;
-import net.coderbot.iris.shaderpack.texture.TextureStage;
-import net.coderbot.iris.shadows.ShadowRenderTargets;
 import net.coderbot.iris.uniforms.CameraUniforms;
 import net.coderbot.iris.uniforms.CapturedRenderingState;
 import net.coderbot.iris.uniforms.MatrixUniforms;
 import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.AbstractTexture;
 import org.joml.Vector3d;
 import org.joml.Vector3f;
 import org.joml.Vector3i;
@@ -32,11 +27,7 @@ import java.util.function.Supplier;
 
 /** API bridge for the net.coderbot Iris 1.6 releases used by Minecraft 1.20 and 1.20.2. */
 public final class Iris16Compat {
-    private static final Field RENDER_TARGETS = field(NewWorldRenderingPipeline.class, "renderTargets");
     private static final Field FLIPPED_AFTER_PREPARE = field(NewWorldRenderingPipeline.class, "flippedAfterPrepare");
-    private static final Field CUSTOM_TEXTURE_MANAGER = field(NewWorldRenderingPipeline.class, "customTextureManager");
-    private static final Field WHITE_PIXEL = field(NewWorldRenderingPipeline.class, "whitePixel");
-    private static final Field SHADOW_TARGETS_SUPPLIER = field(NewWorldRenderingPipeline.class, "shadowTargetsSupplier");
     private static final Field PACK_DIRECTIVES = field(NewWorldRenderingPipeline.class, "packDirectives");
     private static final Field SSBO_BUFFERS = field(ShaderStorageBufferHolder.class, "buffers");
     private static final Method GET_OR_CREATE_RENDER_TARGET = optionalMethod(RenderTargets.class, "getOrCreate", int.class);
@@ -62,22 +53,8 @@ public final class Iris16Compat {
                                                    boolean hasTexture,
                                                    boolean hasLightmap,
                                                    boolean hasOverlay) {
-        RenderTargets renderTargets = get(RENDER_TARGETS, pipeline, RenderTargets.class);
-        CustomTextureManager textures = get(CUSTOM_TEXTURE_MANAGER, pipeline, CustomTextureManager.class);
-        AbstractTexture whitePixel = get(WHITE_PIXEL, pipeline, AbstractTexture.class);
-
-        IrisSamplers.addRenderTargetSamplers(samplers, flipped, renderTargets, false);
-        IrisSamplers.addCustomTextures(samplers, textures.getCustomTextureIdMap(TextureStage.GBUFFERS_AND_SHADOW));
-        IrisSamplers.addCustomTextures(samplers, textures.getIrisCustomTextures());
-        IrisSamplers.addLevelSamplers(samplers, pipeline, whitePixel,
+        pipeline.addGbufferOrShadowSamplers(samplers, images, flipped, shadowPass,
                 new InputAvailability(hasTexture, hasLightmap, hasOverlay));
-        IrisSamplers.addWorldDepthSamplers(samplers, renderTargets);
-        IrisSamplers.addNoiseSampler(samplers, textures.getNoiseTexture());
-
-        if (shadowPass || IrisSamplers.hasShadowSamplers(samplers)) {
-            Supplier<ShadowRenderTargets> shadowTargets = get(SHADOW_TARGETS_SUPPLIER, pipeline, Supplier.class);
-            IrisSamplers.addShadowSamplers(samplers, shadowTargets.get(), null, false);
-        }
     }
 
     /** Supplies uniforms added after Iris 1.6, plus Voxy matrices that its custom-uniform bridge drops. */

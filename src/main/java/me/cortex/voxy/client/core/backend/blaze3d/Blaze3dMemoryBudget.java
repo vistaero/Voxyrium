@@ -56,6 +56,24 @@ public final class Blaze3dMemoryBudget {
         return name.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
     }
 
+    public static long detectMeshCacheLimit() {
+        long limit = 256L * MIB;
+        try {
+            long available = new SystemInfo().getHardware().getMemory().getAvailable();
+            Runtime runtime = Runtime.getRuntime();
+            long heapGrowth = Math.max(0L, runtime.maxMemory() - runtime.totalMemory());
+            // Expanded meshes use native RAM, outside the JVM heap. Reserve future heap growth
+            // and most remaining memory for the game, meshing workers and other applications.
+            limit = clamp(Math.max(0L, available - heapGrowth) / 4L, 0L, 2L * GIB);
+        } catch (RuntimeException | LinkageError exception) {
+            Logger.warn("Unable to determine RAM headroom for Blaze3D mesh cache: " + exception.getMessage());
+        }
+        Long configuredMiB = Long.getLong("voxy.blaze3d.meshCacheMiB");
+        if (configuredMiB != null) limit = Math.min(limit, clamp(configuredMiB, 0L, 8192L) * MIB);
+        Logger.info("Blaze3D nearby mesh RAM cache budget: " + formatBytes(limit));
+        return limit;
+    }
+
     public static Estimate estimate(float sectionRenderDistance, float subdivisionSize) {
         double renderDistanceChunks = Math.max(20.0, sectionRenderDistance * 32.0);
         double safeSubdivisionSize = Math.max(28.0, subdivisionSize);

@@ -108,6 +108,7 @@ public final class VoxyBlaze3DProbeRenderer {
     private static final int LOD_VALIDATIONS_PER_FRAME = 32;
     private static final long LOD_VALIDATION_BUDGET_NANOS = 1_000_000L;
     private static final long LOD_MEMORY_RETRY_FRAMES = 60L;
+    private static final double ZOOM_RETAIN_DISTANCE = 512.0;
     private static final int MAX_ASYNC_MESHES = 32;
     private static final int MAX_GPU_UPLOADS_PER_FRAME = 8;
     private static final int LOD_SELECTION_NODES_PER_FRAME = 512;
@@ -242,6 +243,18 @@ public final class VoxyBlaze3DProbeRenderer {
     private static final Map<Long, LodSectionMesh> lodMeshes = new HashMap<>();
     private static final Map<Long, Long> lodMeshFingerprints = new HashMap<>();
     private static final Map<Long, Long> lodMeshLastUsedFrames = new HashMap<>();
+    private static final Set<Long> zoomRetainedKeys = new HashSet<>();
+    // Render-thread owned. Each native vertex allocation belongs to exactly one of this cache
+    // or preparedLodMeshes; GPU eviction deliberately does not invalidate this CPU copy.
+    private static final Map<Long, CachedLodMesh> cachedLodMeshes = new HashMap<>();
+    private static long cachedLodMeshBytes;
+    private static long lodMeshCacheBudgetBytes;
+    private static long lodMeshCacheHits;
+    private static boolean zoomRetentionActive;
+    private static List<LodSectionCoordinate> preZoomSelection = List.of();
+    private static double preZoomCameraX, preZoomCameraY, preZoomCameraZ;
+    private static float preZoomSubdivision;
+    private static int preZoomMinimumLevel;
     private static final Map<Long, BudgetDeferredMesh> budgetDeferredMeshes = new HashMap<>();
     private static final ConcurrentHashMap<Long, Long> pendingMeshFingerprints = new ConcurrentHashMap<>();
     private static final ConcurrentLinkedQueue<PreparedLodMesh> preparedLodMeshes = new ConcurrentLinkedQueue<>();
@@ -423,6 +436,9 @@ public final class VoxyBlaze3DProbeRenderer {
                 + ", allocationFailures=" + lodAllocationFailures
                 + ", uploadRetryFrames=" + Math.max(0L, lodUploadRetryFrame - frameCount)
                 + ", dirtySections=" + dirtyLodKeys.size()
+                + ", zoomRetained=" + zoomRetainedKeys.size()
+                + ", ramCache=" + formatBytes(cachedLodMeshBytes) + "/" + formatBytes(lodMeshCacheBudgetBytes)
+                + ", ramCacheHits=" + lodMeshCacheHits
                 + ", rootLimit=" + (lodBudgetRootLimit == Integer.MAX_VALUE ? "auto" : lodBudgetRootLimit)
                 + ", cacheEvictions=" + lodCacheEvictions
                 + ", budgetDeferred=" + budgetDeferredMeshes.size()
@@ -1165,6 +1181,7 @@ public final class VoxyBlaze3DProbeRenderer {
         }
 
         loggedMissingLodSection = false;
+        updateZoomRetention(matrices, camera);
         updateDynamicMemoryBudgets();
         ensureAsyncMesher(world, encoder);
         long meshUploadStart = profileNow();
@@ -1528,7 +1545,7 @@ public final class VoxyBlaze3DProbeRenderer {
                 && inspected++ < readyAtStart
                 && (prepared = preparedLodMeshes.poll()) != null) {
             if (!isActiveRenderMesh(prepared.mesh().position())) {
-                prepared.mesh().close();
+                cachePreparedLodMesh(prepared);
                 preparedLodMeshBytes.addAndGet(-prepared.geometryBytes());
                 pendingMeshFingerprints.remove(prepared.mesh().position(), prepared.fingerprint());
                 continue;
@@ -1537,9 +1554,10 @@ public final class VoxyBlaze3DProbeRenderer {
                 preparedLodMeshes.add(prepared);
                 continue;
             }
-            try (Blaze3dSectionMesh mesh = prepared.mesh()) {
-                applyPreparedLodMesh(world, prepared.fingerprint(), mesh);
+            try {
+                applyPreparedLodMesh(world, prepared.fingerprint(), prepared.mesh());
             } finally {
+                cachePreparedLodMesh(prepared);
                 preparedLodMeshBytes.addAndGet(-prepared.geometryBytes());
                 pendingMeshFingerprints.remove(prepared.mesh().position(), prepared.fingerprint());
             }
@@ -1602,13 +1620,13 @@ public final class VoxyBlaze3DProbeRenderer {
                 opaque = RenderSystem.getDevice().createBuffer(
                         () -> "Voxy Blaze3D Cortex opaque " + WorldEngine.pprintPos(key),
                         GpuBuffer.USAGE_VERTEX | GpuBuffer.USAGE_COPY_DST,
-                        mesh.opaqueVertices());
+                        mesh.opaqueVertices().duplicate());
             }
             if (mesh.translucentVertices() != null) {
                 translucent = RenderSystem.getDevice().createBuffer(
                         () -> "Voxy Blaze3D Cortex translucent " + WorldEngine.pprintPos(key),
                         GpuBuffer.USAGE_VERTEX | GpuBuffer.USAGE_COPY_DST,
-                        mesh.translucentVertices());
+                        mesh.translucentVertices().duplicate());
             }
         } catch (RuntimeException | OutOfMemoryError exception) {
             releaseLodMeshBuffer(opaque, key);
@@ -1648,6 +1666,7 @@ public final class VoxyBlaze3DProbeRenderer {
             budgetDeferredMeshes.remove(coordinate.key());
             updateGeometryBudgetState();
             removeLodMesh(coordinate.key());
+            removeCachedLodMesh(coordinate.key());
             lodMeshFingerprints.remove(coordinate.key());
             return;
         }
@@ -1674,9 +1693,75 @@ public final class VoxyBlaze3DProbeRenderer {
                 updateGeometryBudgetState();
             }
         }
-        if (pendingMeshFingerprints.putIfAbsent(coordinate.key(), fingerprint) == null) {
-            renderGenerationService.enqueueTask(coordinate.key());
+        CachedLodMesh cached = cachedLodMeshes.get(coordinate.key());
+        if (cached != null && cached.prepared().fingerprint() != fingerprint) {
+            removeCachedLodMesh(coordinate.key());
+            cached = null;
         }
+        if (pendingMeshFingerprints.putIfAbsent(coordinate.key(), fingerprint) == null) {
+            if (cached != null) {
+                PreparedLodMesh prepared = cached.prepared();
+                if (!reserveStagingBytes(prepared.geometryBytes())) {
+                    pendingMeshFingerprints.remove(coordinate.key(), fingerprint);
+                    return;
+                }
+                // Transfer ownership without copying or expanding the geometry again.
+                cachedLodMeshes.remove(coordinate.key());
+                cachedLodMeshBytes -= prepared.geometryBytes();
+                preparedLodMeshes.add(prepared);
+                lodMeshCacheHits++;
+            } else {
+                renderGenerationService.enqueueTask(coordinate.key());
+            }
+        }
+    }
+
+    private static void cachePreparedLodMesh(PreparedLodMesh prepared) {
+        long key = prepared.mesh().position();
+        removeCachedLodMesh(key);
+        if (prepared.mesh().isEmpty() || prepared.geometryBytes() > lodMeshCacheBudgetBytes) {
+            prepared.mesh().close();
+            return;
+        }
+        cachedLodMeshes.put(key, new CachedLodMesh(prepared, frameCount));
+        cachedLodMeshBytes += prepared.geometryBytes();
+        while (cachedLodMeshBytes > lodMeshCacheBudgetBytes) {
+            // Include the incoming mesh in the candidates: distant zoom results must not displace
+            // nearby terrain just because they were uploaded more recently.
+            CachedLodMesh victim = null;
+            double farthest = -1.0;
+            for (CachedLodMesh candidate : cachedLodMeshes.values()) {
+                long position = candidate.prepared().mesh().position();
+                LodSectionCoordinate coordinate = new LodSectionCoordinate(position,
+                        WorldEngine.getX(position), WorldEngine.getY(position), WorldEngine.getZ(position));
+                double distance = distanceSquaredToCamera(coordinate,
+                        currentDrawCameraX, currentDrawCameraY, currentDrawCameraZ);
+                if (victim == null || distance > farthest
+                        || (distance == farthest && candidate.usedFrame() < victim.usedFrame())) {
+                    victim = candidate;
+                    farthest = distance;
+                }
+            }
+            if (victim == null) break;
+            removeCachedLodMesh(victim.prepared().mesh().position());
+        }
+    }
+
+    private static void removeCachedLodMesh(long key) {
+        CachedLodMesh cached = cachedLodMeshes.remove(key);
+        if (cached != null) {
+            cachedLodMeshBytes -= cached.prepared().geometryBytes();
+            cached.prepared().mesh().close();
+        }
+    }
+
+    private static void clearCachedLodMeshes() {
+        for (CachedLodMesh cached : cachedLodMeshes.values()) cached.prepared().mesh().close();
+        cachedLodMeshes.clear();
+        cachedLodMeshBytes = 0L;
+    }
+
+    private record CachedLodMesh(PreparedLodMesh prepared, long usedFrame) {
     }
 
     private static void refreshChangedLodSections(WorldEngine world) {
@@ -1713,6 +1798,10 @@ public final class VoxyBlaze3DProbeRenderer {
     }
 
     private static void shutdownAsyncMesher() {
+        clearCachedLodMeshes();
+        zoomRetainedKeys.clear();
+        preZoomSelection = List.of();
+        zoomRetentionActive = false;
         watchedLodKeys = Set.of();
         if (mesherWorld != null && lodChangeListener != null) {
             mesherWorld.removeChangeListener(lodChangeListener);
@@ -1793,6 +1882,72 @@ public final class VoxyBlaze3DProbeRenderer {
         int maxY = (Minecraft.getInstance().level.getMaxSectionY() - 1) >> (lodLevel + 1);
         int radius = Math.max(1, (int) Math.ceil((VoxyConfig.CONFIG.sectionRenderDistance + 1.0f) * 512.0f / sectionSize));
         return new LodGridKey(lodLevel, centerX, centerZ, minY, maxY, radius);
+    }
+
+    private static void updateZoomRetention(ChunkRenderMatrices matrices, CameraTransform camera) {
+        // Compare projection magnification with the configured FOV, so a deliberately small
+        // normal FOV is not mistaken for a temporary zoom. Hysteresis tolerates FOV animation.
+        double normalScale = 1.0 / Math.tan(Math.toRadians(Minecraft.getInstance().options.fov().get()) * 0.5);
+        double magnification = Math.abs(matrices.projection().m11()) / normalScale;
+        boolean zooming = magnification > (zoomRetentionActive ? 1.10 : 1.25);
+        if (zooming && !zoomRetentionActive) {
+            preZoomSelection = selectedLodSections;
+            preZoomCameraX = camera.x;
+            preZoomCameraY = camera.y;
+            preZoomCameraZ = camera.z;
+            preZoomSubdivision = VoxyConfig.CONFIG.subDivisionSize;
+            preZoomMinimumLevel = minimumLodLevel;
+            zoomRetainedKeys.clear();
+            for (LodSectionMesh mesh : lodMeshes.values()) {
+                if (isActiveRenderMesh(mesh.coordinate().key()) && isNearZoomCamera(mesh.coordinate(), camera)) {
+                    zoomRetainedKeys.add(mesh.coordinate().key());
+                }
+            }
+            // Do not finish an obsolete normal-FOV traversal after zoom has already started.
+            pendingLodSelection = null;
+            lastLodSelectionFrame = Long.MIN_VALUE;
+        }
+        zoomRetainedKeys.removeIf(key -> {
+            LodSectionMesh mesh = lodMeshes.get(key);
+            return mesh == null || !isNearZoomCamera(mesh.coordinate(), camera);
+        });
+        if (!zooming && zoomRetentionActive) {
+            pendingLodSelection = null;
+            lastLodSelectionFrame = Long.MIN_VALUE;
+            lodBudgetBackoffPending = false;
+            budgetDeferredMeshes.clear();
+            updateGeometryBudgetState();
+            double dx = camera.x - preZoomCameraX;
+            double dy = camera.y - preZoomCameraY;
+            double dz = camera.z - preZoomCameraZ;
+            if (!preZoomSelection.isEmpty() && dx * dx + dy * dy + dz * dz < 64.0
+                    && preZoomSubdivision == VoxyConfig.CONFIG.subDivisionSize
+                    && preZoomMinimumLevel == minimumLodLevel) {
+                // Publish the previous hierarchy immediately; the normal-FOV traversal can
+                // update it afterwards. Nearby meshes do not wait for meshing or GPU uploads.
+                selectedLodSections = preZoomSelection;
+                selectedLodSectionKeys = sectionKeys(selectedLodSections);
+                prepareLodTransition(selectedLodSections);
+                lodSelectionTransitionPending = true;
+                nextLodSectionRefresh = 0;
+                nextLodSectionValidation = 0;
+                lastLodRefreshFrame = Long.MIN_VALUE;
+            }
+            preZoomSelection = List.of();
+            // Keep pins until the replacement normal-FOV selection has been published.
+        }
+        zoomRetentionActive = zooming;
+    }
+
+    private static boolean isNearZoomCamera(LodSectionCoordinate coordinate, CameraTransform camera) {
+        int size = sectionSize(WorldEngine.getLevel(coordinate.key()));
+        double x = coordinate.x() * (double) size;
+        double y = coordinate.y() * (double) size;
+        double z = coordinate.z() * (double) size;
+        double dx = Math.max(Math.max(x - camera.x, camera.x - x - size), 0.0);
+        double dy = Math.max(Math.max(y - camera.y, camera.y - y - size), 0.0);
+        double dz = Math.max(Math.max(z - camera.z, camera.z - z - size), 0.0);
+        return dx * dx + dy * dy + dz * dz <= ZOOM_RETAIN_DISTANCE * ZOOM_RETAIN_DISTANCE;
     }
 
     private static void updateLodSelection(WorldEngine world,
@@ -1941,6 +2096,7 @@ public final class VoxyBlaze3DProbeRenderer {
         }
         markActiveMeshesUsed();
         evictMeshesOutsideRenderGrid();
+        if (!zoomRetentionActive) zoomRetainedKeys.clear();
         nextLodHierarchyRecheck = 0;
         if (!topologyChanged && lodGeometryBudgetExhausted) {
             requestCoarserLodSelectionForBudget();
@@ -3369,6 +3525,10 @@ public final class VoxyBlaze3DProbeRenderer {
     }
 
     private static void clearLodMeshes() {
+        clearCachedLodMeshes();
+        zoomRetainedKeys.clear();
+        preZoomSelection = List.of();
+        zoomRetentionActive = false;
         int meshCount = lodMeshes.size();
         for (LodSectionMesh mesh : lodMeshes.values()) {
             releaseLodMeshBuffer(mesh.opaqueVertexBuffer(), mesh.coordinate().key());
@@ -3723,6 +3883,11 @@ public final class VoxyBlaze3DProbeRenderer {
      * outside render distance go first, then the farthest and finest stale geometry.
      */
     private static void evictInactiveCachedGeometry(long requestedBytes, long replacingKey) {
+        if (lodGeometryBytes > lodGeometryBudgetBytes) {
+            // A real capacity reduction/allocation failure may override zoom retention.
+            zoomRetainedKeys.clear();
+            preZoomSelection = List.of();
+        }
         long retainedBytes = lodGeometryBytes;
         long capacity = geometryAdmissionLimit(replacingKey);
         if (retainedBytes + requestedBytes <= capacity) {
@@ -3742,6 +3907,7 @@ public final class VoxyBlaze3DProbeRenderer {
         List<LodSectionMesh> candidates = lodMeshes.values().stream()
                 .filter(mesh -> mesh.coordinate().key() != replacingKey)
                 .filter(mesh -> !isActiveRenderMesh(mesh.coordinate().key()))
+                .filter(mesh -> !zoomRetainedKeys.contains(mesh.coordinate().key()))
                 .sorted(Comparator
                         .comparingInt((LodSectionMesh mesh) -> isOutsideCurrentRenderGrid(mesh.coordinate()) ? 0 : 1)
                         .thenComparing(Comparator.comparingDouble((LodSectionMesh mesh) ->
@@ -3802,6 +3968,8 @@ public final class VoxyBlaze3DProbeRenderer {
     }
 
     private static void requestCoarserLodSelectionForBudget() {
+        // Optional zoom detail must not evict local coverage or permanently degrade its quality.
+        if (!zoomRetainedKeys.isEmpty() && lodGeometryBytes <= lodGeometryBudgetBytes) return;
         if (lodBudgetBackoffPending) return;
         if (lodBudgetSubdivisionScale >= MAX_LOD_BUDGET_SUBDIVISION_SCALE) {
             int roots = lodRenderGrid == null ? 0 : Math.min(lodBudgetRootLimit, lodRenderGrid.sections().size());
@@ -3895,6 +4063,8 @@ public final class VoxyBlaze3DProbeRenderer {
         if (lodDeviceGeometryLimit == 0L) {
             lodDeviceGeometryLimit = Blaze3dMemoryBudget.detectGeometryLimit(
                     RenderSystem.getDevice().getDeviceInfo().name());
+            lodMeshCacheBudgetBytes = Blaze3dMemoryBudget.detectMeshCacheLimit();
+            lodMeshCacheHits = 0L;
         }
         long geometryBudget = Math.min(readGeometryBudgetBytes(),
                 Math.min(lodDeviceGeometryLimit, lodAllocationGeometryLimit));

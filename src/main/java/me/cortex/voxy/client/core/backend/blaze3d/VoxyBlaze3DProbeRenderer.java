@@ -76,6 +76,7 @@ import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.ArrayDeque;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -86,6 +87,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalDouble;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.nio.ByteOrder;
 import java.util.concurrent.ConcurrentHashMap;
@@ -200,7 +202,7 @@ public final class VoxyBlaze3DProbeRenderer {
         RenderPipeline.Builder builder = RenderPipeline.builder()
                 .withLocation(Identifier.fromNamespaceAndPath("voxy", name))
                 .withBindGroupLayout(BindGroupLayouts.MATRICES_PROJECTION)
-                .withBindGroupLayout(BindGroupLayouts.SAMPLER0_SAMPLER1)
+                .withBindGroupLayout(BindGroupLayouts.SAMPLER0_SAMPLER1_SAMPLER2)
                 .withVertexShader(Identifier.fromNamespaceAndPath("voxy", "core/blaze3d_lod_composite"))
                 .withFragmentShader(Identifier.fromNamespaceAndPath("voxy", "core/blaze3d_lod_composite"))
                 .withVertexBinding(0, DefaultVertexFormat.POSITION)
@@ -239,6 +241,8 @@ public final class VoxyBlaze3DProbeRenderer {
     private static GpuTextureView lodDepthTextureView;
     private static GpuTexture lodOpaqueDepthTexture;
     private static GpuTextureView lodOpaqueDepthTextureView;
+    private static GpuTexture sodiumCoverageDepthTexture;
+    private static GpuTextureView sodiumCoverageDepthTextureView;
     private static final Map<Long, LodSectionMesh> lodMeshes = new HashMap<>();
     private static final Map<Long, Long> lodMeshFingerprints = new HashMap<>();
     private static final Map<Long, Long> lodMeshLastUsedFrames = new HashMap<>();
@@ -288,6 +292,10 @@ public final class VoxyBlaze3DProbeRenderer {
     private static final Map<Long, Integer> transitionPendingChildren = new HashMap<>();
     private static final Set<Long> transitionParentKeys = new HashSet<>();
     private static final Set<Long> transitionCoverageReadyKeys = new HashSet<>();
+    private static final Set<Long> unavailableLodSections = new HashSet<>();
+    private static double buildPriorityCameraX, buildPriorityCameraZ;
+    private static double buildRingWidth = 256.0;
+    private static int activeBuildRing;
     private static final ArrayDeque<Long> transitionRevealQueue = new ArrayDeque<>();
     private static final Set<Long> transitionRevealKeys = new HashSet<>();
     private static long lastTransitionRevealFrame = Long.MIN_VALUE;
@@ -433,6 +441,7 @@ public final class VoxyBlaze3DProbeRenderer {
                 + ", pendingHandoffs=" + transitionRevealQueue.size()
                 + ", frameUploads=" + lastFrameUploadCount + "/" + formatBytes(lastFrameUploadBytes)
                 + ", uploadLimit=" + getLodUploadsPerFrame()
+                + ", loadingRing=" + activeBuildRing + ", innerRingBlocks=" + Math.round(buildRingWidth)
                 + ", selectionRuns=" + lodSelectionRuns
                 + ", topologyChanges=" + lodTopologyChanges
                 + ", priorityOnly=" + lodPriorityOnlyChanges
@@ -514,6 +523,11 @@ public final class VoxyBlaze3DProbeRenderer {
 
             CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
             ensureOffscreenTargets(colorTarget);
+            ensureSodiumCoverageDepth(depthTarget);
+            // Snapshot Sodium solid/cutout coverage before Voxy writes to the shared depth target.
+            // Reuse this snapshot for water; Voxy's own opaque terrain is not Sodium coverage.
+            encoder.copyTextureToTexture(depthTarget.texture(), sodiumCoverageDepthTexture,
+                    0, 0, 0, 0, 0, depthTarget.getWidth(0), depthTarget.getHeight(0));
             encoder.clearColorAndDepthTextures(lodColorTexture, new Vector4f(0.0f), lodDepthTexture, 0.0);
             uploadLodProjection(encoder, matrices.projection());
             if (testCubeVisible) {
@@ -683,6 +697,7 @@ public final class VoxyBlaze3DProbeRenderer {
                                            GpuTextureView colorTarget, GpuTextureView depthTarget,
                                            boolean translucent) {
         Matrix4f inverseLodProjection = createLodProjection(matrices.projection()).invert();
+        Matrix4f viewRotation = new Matrix4f(matrices.modelView());
         boolean zeroToOne = RenderSystem.getDevice().getDeviceInfo().isZZeroToOne();
         float transitionEnd = getSodiumRenderDistanceBlocks();
         float transitionStart = Math.max(0.0f, transitionEnd - vanillaTransitionChunks * 16.0f);
@@ -695,7 +710,7 @@ public final class VoxyBlaze3DProbeRenderer {
             RenderSystem.bindDefaultUniforms(pass);
             pass.setUniform("DynamicTransforms", RenderSystem.getDynamicUniforms().writeTransform(
                     inverseLodProjection,
-                    new Vector4f(1.0f),
+                    new Vector4f(viewRotation.m10(), viewRotation.m11(), viewRotation.m12(), 1.0f),
                     new Vector3f(zeroToOne ? 1.0f : 0.0f, transitionStart, transitionEnd),
                     new Matrix4f(matrices.projection())));
             pass.setPipeline(translucent ? LOD_TRANSLUCENT_COMPOSITE_PIPELINE : LOD_COMPOSITE_PIPELINE);
@@ -703,9 +718,24 @@ public final class VoxyBlaze3DProbeRenderer {
                     RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
             pass.bindTexture("Sampler1", lodDepthTextureView,
                     RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
+            pass.bindTexture("Sampler2", sodiumCoverageDepthTextureView,
+                    RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
             pass.setVertexBuffer(0, compositeVertexBuffer.slice());
             pass.draw(COMPOSITE_VERTEX_COUNT, 1, 0, 0);
         }
+    }
+
+    private static void ensureSodiumCoverageDepth(GpuTextureView depthTarget) {
+        if (sodiumCoverageDepthTexture != null
+                && sodiumCoverageDepthTexture.getWidth(0) == depthTarget.getWidth(0)
+                && sodiumCoverageDepthTexture.getHeight(0) == depthTarget.getHeight(0)
+                && sodiumCoverageDepthTexture.getFormat() == depthTarget.texture().getFormat()) return;
+        if (sodiumCoverageDepthTextureView != null) sodiumCoverageDepthTextureView.close();
+        if (sodiumCoverageDepthTexture != null) sodiumCoverageDepthTexture.close();
+        sodiumCoverageDepthTexture = RenderSystem.getDevice().createTexture(
+                "Voxy Sodium opaque coverage", GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_TEXTURE_BINDING,
+                depthTarget.texture().getFormat(), depthTarget.getWidth(0), depthTarget.getHeight(0), 1, 1);
+        sodiumCoverageDepthTextureView = RenderSystem.getDevice().createTextureView(sodiumCoverageDepthTexture);
     }
 
     private static void ensureOffscreenTargets(GpuTextureView colorTarget) {
@@ -1023,6 +1053,10 @@ public final class VoxyBlaze3DProbeRenderer {
         releaseBuffer(globalFogProjectionBuffer, "global fog projection");
         globalFogProjectionBuffer = null;
         releaseOffscreenTargets();
+        if (sodiumCoverageDepthTextureView != null) sodiumCoverageDepthTextureView.close();
+        if (sodiumCoverageDepthTexture != null) sodiumCoverageDepthTexture.close();
+        sodiumCoverageDepthTextureView = null;
+        sodiumCoverageDepthTexture = null;
         clearLodMeshes();
         lodMeshFingerprints.clear();
         blockRenderDefinitions.clear();
@@ -1236,7 +1270,7 @@ public final class VoxyBlaze3DProbeRenderer {
                 selectedLodSectionKeys = sectionKeys(selectedLodSections);
                 watchedLodKeys = Set.copyOf(selectedLodSectionKeys);
                 dirtyLodKeys.retainAll(watchedLodKeys);
-                transitionBuildSections = selectedLodSections;
+                transitionBuildSections = orderLodBuildsByRing(selectedLodSections);
                 transitionPendingChildren.clear();
                 transitionParentKeys.clear();
                 clearTransitionReveals();
@@ -1303,13 +1337,21 @@ public final class VoxyBlaze3DProbeRenderer {
             long deadline = System.nanoTime() + LOD_VALIDATION_BUDGET_NANOS;
             int inspected = 0;
             while (nextLodSectionRefresh < transitionBuildSections.size()
-                    && inspected++ < LOD_VALIDATIONS_PER_FRAME && System.nanoTime() < deadline
+                    && inspected++ < LOD_SELECTION_NODES_PER_FRAME && System.nanoTime() < deadline
                     && pendingMeshFingerprints.size() < MAX_ASYNC_MESHES
                     && hasStagingCapacity()) {
-                LodSectionCoordinate section = transitionBuildSections.get(nextLodSectionRefresh++);
-                if (transitionCoverageReadyKeys.contains(section.key()) || !isActiveRenderMesh(section.key())) {
-                    continue;
+                LodSectionCoordinate section = transitionBuildSections.get(nextLodSectionRefresh);
+                int ring = buildRing(section);
+                if (ring > activeBuildRing) {
+                    if (hasPendingWorkInBuildRing()) {
+                        int retry = firstIncompleteInBuildRing();
+                        if (retry >= 0) nextLodSectionRefresh = retry;
+                        break;
+                    }
+                    activeBuildRing = ring;
                 }
+                nextLodSectionRefresh++;
+                if (transitionCoverageReadyKeys.contains(section.key()) || !isActiveRenderMesh(section.key())) continue;
                 scheduleLodSection(world, section);
             }
         }
@@ -1568,6 +1610,19 @@ public final class VoxyBlaze3DProbeRenderer {
         int uploaded = 0;
         int inspected = 0;
         int readyAtStart = preparedLodMeshes.size();
+        // Worker completion order is not spatial priority. Reorder a bounded snapshot on the
+        // render thread, keeping concurrently completed results for the next frame.
+        List<PreparedLodMesh> ready = new ArrayList<>(readyAtStart);
+        for (int index = 0; index < readyAtStart; index++) {
+            PreparedLodMesh mesh = preparedLodMeshes.poll();
+            if (mesh == null) break;
+            ready.add(mesh);
+        }
+        ready.sort(Comparator.comparingInt((PreparedLodMesh prepared) -> {
+            long key = prepared.mesh().position();
+            return buildRing(new LodSectionCoordinate(key, WorldEngine.getX(key), WorldEngine.getY(key), WorldEngine.getZ(key)));
+        }).thenComparingInt(prepared -> -WorldEngine.getLevel(prepared.mesh().position())));
+        for (int index = ready.size() - 1; index >= 0; index--) preparedLodMeshes.addFirst(ready.get(index));
         PreparedLodMesh prepared;
         while (uploaded < uploadLimit
                 && inspected++ < readyAtStart
@@ -1576,6 +1631,16 @@ public final class VoxyBlaze3DProbeRenderer {
                 cachePreparedLodMesh(prepared);
                 preparedLodMeshBytes.addAndGet(-prepared.geometryBytes());
                 pendingMeshFingerprints.remove(prepared.mesh().position(), prepared.fingerprint());
+                continue;
+            }
+            long preparedKey = prepared.mesh().position();
+            if (lodSelectionTransitionPending && buildRing(new LodSectionCoordinate(preparedKey,
+                    WorldEngine.getX(preparedKey), WorldEngine.getY(preparedKey), WorldEngine.getZ(preparedKey))) > activeBuildRing) {
+                // Do not leave far work occupying all staging/pending slots while a nearer ring
+                // needs workers. The RAM cache owns it until that ring is allowed to proceed.
+                cachePreparedLodMesh(prepared);
+                preparedLodMeshBytes.addAndGet(-prepared.geometryBytes());
+                pendingMeshFingerprints.remove(preparedKey, prepared.fingerprint());
                 continue;
             }
             if (blazeModelStore == null || !blazeModelStore.isTextureVersionUploaded(prepared.textureVersion())) {
@@ -1685,6 +1750,7 @@ public final class VoxyBlaze3DProbeRenderer {
     }
 
     private static void scheduleLodSection(WorldEngine world, LodSectionCoordinate coordinate) {
+        if (lodSelectionTransitionPending && buildRing(coordinate) > activeBuildRing) return;
         if (pendingMeshFingerprints.containsKey(coordinate.key())
                 || pendingMeshFingerprints.size() >= MAX_ASYNC_MESHES || !hasStagingCapacity()) return;
         lodMeshBuildAttempts++;
@@ -1698,8 +1764,10 @@ public final class VoxyBlaze3DProbeRenderer {
             removeLodMesh(coordinate.key());
             removeCachedLodMesh(coordinate.key());
             lodMeshFingerprints.remove(coordinate.key());
+            unavailableLodSections.add(coordinate.key());
             return;
         }
+        unavailableLodSections.remove(coordinate.key());
         if (Long.valueOf(fingerprint).equals(lodMeshFingerprints.get(coordinate.key()))) {
             lodMeshUnchanged++;
             if (lodSelectionTransitionPending) markTransitionCoverageReady(coordinate.key());
@@ -2064,9 +2132,19 @@ public final class VoxyBlaze3DProbeRenderer {
                 viewportWidth, viewportHeight, vanillaBoundary,
                 VoxyConfig.CONFIG.subDivisionSize * lodBudgetSubdivisionScale
                         * VoxyConfig.CONFIG.subDivisionSize * lodBudgetSubdivisionScale,
-                new ArrayDeque<>(), new ArrayList<>(), frameCount, invalidationReason);
+                new ArrayList<>(), frameCount, invalidationReason);
         if (retainLocalDetail) selection.retainedRefinements = captureRefinedDrawAncestors(camera);
-        enqueueSelectionNodes(selection, budgetedRoots(camera), false);
+        for (LodSectionCoordinate previous : selectedLodSections) {
+            int level = WorldEngine.getLevel(previous.key());
+            for (int ancestorLevel = level; ancestorLevel <= WorldEngine.MAX_LOD_LAYER; ancestorLevel++) {
+                int shift = ancestorLevel - level;
+                long ancestor = WorldEngine.getWorldSectionId(ancestorLevel,
+                        Math.floorDiv(previous.x(), 1 << shift), Math.floorDiv(previous.y(), 1 << shift),
+                        Math.floorDiv(previous.z(), 1 << shift));
+                selection.previousDescendants.computeIfAbsent(ancestor, ignored -> new ArrayList<>()).add(previous);
+            }
+        }
+        enqueueSelectionNodes(selection, budgetedRoots(camera));
         pendingLodSelection = selection;
         advanceLodSelection(pendingLodSelection);
     }
@@ -2092,27 +2170,42 @@ public final class VoxyBlaze3DProbeRenderer {
         while (!selection.pending().isEmpty()
                 && processedThisFrame < LOD_SELECTION_NODES_PER_FRAME
                 && System.nanoTime() < deadline) {
-            selectLodSection(selection, selection.pending().removeFirst());
+            selectLodSection(selection, selection.pending().remove());
             processedThisFrame++;
             selection.processedNodes++;
         }
 
-        if (!selection.pending().isEmpty()) {
-            return;
+        boolean complete = selection.pending().isEmpty();
+        int completedRing = complete ? WorldEngine.MAX_LOD_LAYER
+                : lodRing(selection.pending().peek(), selection.cameraX(), selection.cameraZ(), selection.ringWidth) - 1;
+        if (!complete && completedRing <= selection.publishedRing) return;
+        selection.publishedRing = completedRing;
+        List<LodSectionCoordinate> frontier = new ArrayList<>(selection.selected());
+        if (!complete) {
+            // Publish completed near rings immediately. Preserve the previous detail in branches
+            // still waiting for traversal; queued coarse nodes must not undo the existing scene.
+            for (LodSectionCoordinate waiting : selection.pending()) {
+                List<LodSectionCoordinate> previous = selection.previousDescendants.get(waiting.key());
+                if (previous == null || previous.isEmpty()) frontier.add(waiting);
+                else frontier.addAll(previous);
+            }
         }
-
-        selection.selected().sort(Comparator.comparingDouble(section -> distanceSquaredToCamera(section, selection.cameraX(), selection.cameraY(), selection.cameraZ())));
-        List<LodSectionCoordinate> selected = List.copyOf(selection.selected());
+        frontier.sort(Comparator
+                .comparingInt((LodSectionCoordinate node) -> lodRing(node, selection.cameraX(), selection.cameraZ(), selection.ringWidth))
+                .thenComparingDouble(node -> distanceSquaredToCamera(node, selection.cameraX(), selection.cameraY(), selection.cameraZ())));
+        List<LodSectionCoordinate> selected = List.copyOf(frontier);
         lastSelectionFrustumCulledNodes = selection.frustumCulledNodes;
         lastSelectionScreenTestedNodes = selection.screenTestedNodes;
-        lastSelectionReason = selection.invalidationReason();
+        lastSelectionReason = selection.invalidationReason() + (complete ? "" : "+ring-" + completedRing);
         publishedLodViewProjection = new Matrix4f(selection.viewProjection());
         publishedLodCameraX = selection.cameraX();
         publishedLodCameraY = selection.cameraY();
         publishedLodCameraZ = selection.cameraZ();
         lodSelectionRuns++;
-        pendingLodSelection = null;
-        lodBudgetBackoffPending = false;
+        if (complete) {
+            pendingLodSelection = null;
+            lodBudgetBackoffPending = false;
+        }
         // Timestamp the hierarchy that remained visible while this incremental selection ran.
         markActiveMeshesUsed();
         Set<Long> selectedKeys = sectionKeys(selected);
@@ -2151,13 +2244,17 @@ public final class VoxyBlaze3DProbeRenderer {
             // Camera motion can reorder the same leaves. Update future validation priority without
             // restarting a transition whose geometry is already complete or in flight.
             selectedLodSections = selected;
+            if (lodSelectionTransitionPending) {
+                transitionBuildSections = orderLodBuildsByRing(transitionBuildSections);
+                nextLodSectionRefresh = 0;
+            }
             lodPriorityOnlyChanges++;
         }
         markActiveMeshesUsed();
         evictMeshesOutsideRenderGrid();
         if (!zoomRetentionActive) zoomRetainedKeys.clear();
         nextLodHierarchyRecheck = 0;
-        if (!topologyChanged && lodGeometryBudgetExhausted) {
+        if (complete && !topologyChanged && lodGeometryBudgetExhausted) {
             requestCoarserLodSelectionForBudget();
         }
     }
@@ -2176,7 +2273,7 @@ public final class VoxyBlaze3DProbeRenderer {
                 camera.x, camera.y, camera.z, viewportWidth, viewportHeight, vanillaBoundary,
                 VoxyConfig.CONFIG.subDivisionSize * lodBudgetSubdivisionScale
                         * VoxyConfig.CONFIG.subDivisionSize * lodBudgetSubdivisionScale,
-                new ArrayDeque<>(), new ArrayList<>(), frameCount, "hierarchy-probe");
+                new ArrayList<>(), frameCount, "hierarchy-probe");
         int sectionCount = selectedLodSections.size();
         int checks = Math.min(sectionCount, LOD_HIERARCHY_RECHECKS_PER_FRAME);
         for (int checked = 0; checked < checks; checked++) {
@@ -2185,7 +2282,9 @@ public final class VoxyBlaze3DProbeRenderer {
             }
             LodSectionCoordinate coordinate = selectedLodSections.get(nextLodHierarchyRecheck++);
             int lodLevel = WorldEngine.getLevel(coordinate.key());
-            boolean minimumRequiresSubdivision = lodLevel > minimumLodLevel;
+            boolean minimumRequiresSubdivision = lodBudgetSubdivisionScale < MAX_LOD_BUDGET_SUBDIVISION_SCALE
+                    && ((lodBudgetSubdivisionScale <= 1.0f && lodLevel > minimumLodLevel)
+                    || lodLevel > lodRing(coordinate, camera.x, camera.z, probe.ringWidth));
             if (lodLevel == 0
                     || (!minimumRequiresSubdivision
                     && (isOutsideVoxyFrustum(coordinate, probe.frustum(),
@@ -2253,7 +2352,9 @@ public final class VoxyBlaze3DProbeRenderer {
             section.release();
             return;
         }
-        boolean minimumRequiresSubdivision = lodBudgetSubdivisionScale <= 1.0f && lodLevel > minimumLodLevel;
+        int distanceLevel = lodRing(coordinate, selection.cameraX(), selection.cameraZ(), selection.ringWidth);
+        boolean minimumRequiresSubdivision = (lodBudgetSubdivisionScale <= 1.0f && lodLevel > minimumLodLevel)
+                || lodLevel > distanceLevel;
         boolean retainSubdivision = selection.retainedRefinements.contains(coordinate.key());
         byte children;
         try {
@@ -2311,25 +2412,37 @@ public final class VoxyBlaze3DProbeRenderer {
             selection.selected().add(coordinate);
             return;
         }
-        enqueueSelectionNodes(selection, childSections, true);
+        enqueueSelectionNodes(selection, childSections);
+    }
+
+    private static double lodRingWidth(float subdivisionArea) {
+        return Math.max(32.0, Math.min(512.0, 256.0 * 64.0 / Math.sqrt(subdivisionArea)));
+    }
+
+    private static double horizontalSectionDistance(LodSectionCoordinate coordinate, double cameraX, double cameraZ) {
+        int size = sectionSize(WorldEngine.getLevel(coordinate.key()));
+        double x = coordinate.x() * (double) size;
+        double z = coordinate.z() * (double) size;
+        double dx = Math.max(Math.max(x - cameraX, cameraX - x - size), 0.0);
+        double dz = Math.max(Math.max(z - cameraZ, cameraZ - z - size), 0.0);
+        return Math.sqrt(dx * dx + dz * dz);
+    }
+
+    private static int lodRing(LodSectionCoordinate coordinate, double cameraX, double cameraZ, double width) {
+        double distance = horizontalSectionDistance(coordinate, cameraX, cameraZ);
+        int ring = 0;
+        while (ring < WorldEngine.MAX_LOD_LAYER && distance >= width) {
+            ring++;
+            width *= 2.0;
+        }
+        return ring;
     }
 
     private static void enqueueSelectionNodes(LodSelectionTask selection,
-                                              List<LodSectionCoordinate> coordinates,
-                                              boolean atFront) {
-        List<LodSectionCoordinate> prioritized = new ArrayList<>(coordinates);
-        prioritized.sort(Comparator
-                .comparingInt((LodSectionCoordinate coordinate) -> isOutsideVoxyFrustum(coordinate,
-                        selection.frustum(), selection.cameraX(), selection.cameraY(), selection.cameraZ()) ? 1 : 0)
-                .thenComparingDouble(coordinate -> distanceSquaredToCamera(coordinate,
-                        selection.cameraX(), selection.cameraY(), selection.cameraZ())));
-        if (atFront) {
-            for (int index = prioritized.size() - 1; index >= 0; index--) {
-                selection.pending().addFirst(prioritized.get(index));
-            }
-        } else {
-            selection.pending().addAll(prioritized);
-        }
+                                              List<LodSectionCoordinate> coordinates) {
+        // One global frontier: never finish an entire distant root before visiting a nearer
+        // branch in another root. Visibility only breaks ties within the same distance ring.
+        selection.pending().addAll(coordinates);
     }
 
     private static boolean shouldSubdivide(LodSectionCoordinate coordinate, LodSelectionTask selection) {
@@ -3585,6 +3698,8 @@ public final class VoxyBlaze3DProbeRenderer {
     }
 
     private static void clearLodMeshes() {
+        unavailableLodSections.clear();
+        activeBuildRing = 0;
         publishedLodViewProjection = null;
         clearCachedLodMeshes();
         zoomRetainedKeys.clear();
@@ -3656,12 +3771,11 @@ public final class VoxyBlaze3DProbeRenderer {
             }
         }
 
-        // A parent cannot stop drawing until every required direct child has coverage. Ordering
-        // one leaf L4 -> L0 at a time therefore strands its L4 parent while thousands of deep
-        // descendants are built. Complete each nearby parent's immediate frontier first, then
-        // recurse into its closest child. This produces real L4 -> L3 -> L2 -> L1 -> L0 handoffs.
-        transitionBuildSections = orderTransitionFrontiers(requiredNodes, childrenByParent);
+        // Finish every nearby ring before spending workers on distant detail. Siblings share
+        // their parent's priority so each branch can hand off without waiting on a farther ring.
+        transitionBuildSections = orderLodBuildsByRing(requiredNodes.values());
         budgetDeferredMeshes.keySet().retainAll(requiredNodes.keySet());
+        unavailableLodSections.retainAll(requiredNodes.keySet());
         updateGeometryBudgetState();
         transitionPendingChildren.clear();
         transitionParentKeys.clear();
@@ -3926,70 +4040,49 @@ public final class VoxyBlaze3DProbeRenderer {
         }
     }
 
-    private static List<LodSectionCoordinate> orderTransitionFrontiers(
-            Map<Long, LodSectionCoordinate> requiredNodes,
-            Map<Long, List<Long>> childrenByParent) {
-        double cameraX = currentDrawFrustumValid ? currentDrawCameraX : lastLodSelectionX;
-        double cameraY = currentDrawFrustumValid ? currentDrawCameraY : lastLodSelectionY;
-        double cameraZ = currentDrawFrustumValid ? currentDrawCameraZ : lastLodSelectionZ;
-        if (!Double.isFinite(cameraX)) cameraX = 0.0;
-        if (!Double.isFinite(cameraY)) cameraY = 0.0;
-        if (!Double.isFinite(cameraZ)) cameraZ = 0.0;
-        final double priorityCameraX = cameraX;
-        final double priorityCameraY = cameraY;
-        final double priorityCameraZ = cameraZ;
-        Comparator<LodSectionCoordinate> nearestFirst = Comparator.comparingDouble(coordinate ->
-                distanceSquaredToCamera(coordinate, priorityCameraX, priorityCameraY, priorityCameraZ));
-
-        List<LodSectionCoordinate> roots = requiredNodes.values().stream()
-                .filter(coordinate -> WorldEngine.getLevel(coordinate.key()) == WorldEngine.MAX_LOD_LAYER)
-                .sorted(nearestFirst)
-                .toList();
-        List<LodSectionCoordinate> ordered = new ArrayList<>(requiredNodes.size());
-        Set<Long> added = new HashSet<>(requiredNodes.size());
-        for (LodSectionCoordinate root : roots) {
-            if (added.add(root.key())) {
-                ordered.add(root);
-            }
-            appendTransitionFrontier(root.key(), requiredNodes, childrenByParent,
-                    nearestFirst, added, ordered);
-        }
-        // Defensive fallback for a malformed/disconnected hierarchy; normal trees reach every
-        // required node from an L4 root.
-        requiredNodes.values().stream()
-                .filter(coordinate -> added.add(coordinate.key()))
-                .sorted(nearestFirst)
-                .forEach(ordered::add);
-        return List.copyOf(ordered);
+    private static List<LodSectionCoordinate> orderLodBuildsByRing(Collection<LodSectionCoordinate> nodes) {
+        buildPriorityCameraX = currentDrawFrustumValid ? currentDrawCameraX : lastLodSelectionX;
+        buildPriorityCameraZ = currentDrawFrustumValid ? currentDrawCameraZ : lastLodSelectionZ;
+        if (!Double.isFinite(buildPriorityCameraX)) buildPriorityCameraX = 0.0;
+        if (!Double.isFinite(buildPriorityCameraZ)) buildPriorityCameraZ = 0.0;
+        float subdivision = VoxyConfig.CONFIG.subDivisionSize * lodBudgetSubdivisionScale;
+        buildRingWidth = lodRingWidth(subdivision * subdivision);
+        activeBuildRing = 0;
+        return nodes.stream().sorted(Comparator
+                .comparingInt(VoxyBlaze3DProbeRenderer::buildRing)
+                .thenComparingInt(node -> -WorldEngine.getLevel(node.key()))
+                .thenComparingDouble(node -> horizontalSectionDistance(node, buildPriorityCameraX, buildPriorityCameraZ))
+                .thenComparingLong(LodSectionCoordinate::key)).toList();
     }
 
-    private static void appendTransitionFrontier(
-            long parentKey,
-            Map<Long, LodSectionCoordinate> requiredNodes,
-            Map<Long, List<Long>> childrenByParent,
-            Comparator<LodSectionCoordinate> nearestFirst,
-            Set<Long> added,
-            List<LodSectionCoordinate> ordered) {
-        List<Long> childKeys = childrenByParent.get(parentKey);
-        if (childKeys == null || childKeys.isEmpty()) {
-            return;
+    private static int buildRing(LodSectionCoordinate coordinate) {
+        // All siblings needed to reveal a parent share its ring. Completing that immediate
+        // frontier is a prerequisite for nearby detail, even if a sibling straddles a ring edge.
+        if (WorldEngine.getLevel(coordinate.key()) < WorldEngine.MAX_LOD_LAYER) {
+            long parent = parentKey(coordinate);
+            coordinate = new LodSectionCoordinate(parent, WorldEngine.getX(parent),
+                    WorldEngine.getY(parent), WorldEngine.getZ(parent));
         }
-        List<LodSectionCoordinate> children = childKeys.stream()
-                .map(requiredNodes::get)
-                .filter(Objects::nonNull)
-                .sorted(nearestFirst)
-                .toList();
-        // Publish the whole immediate frontier before descending. Once these meshes are ready,
-        // markTransitionCoverageReady can release the parent without waiting for deeper leaves.
-        for (LodSectionCoordinate child : children) {
-            if (added.add(child.key())) {
-                ordered.add(child);
-            }
+        return lodRing(coordinate, buildPriorityCameraX, buildPriorityCameraZ, buildRingWidth);
+    }
+
+    private static boolean hasPendingWorkInBuildRing() {
+        if (firstIncompleteInBuildRing() >= 0) return true;
+        for (long key : transitionRevealKeys) {
+            if (buildRing(new LodSectionCoordinate(key, WorldEngine.getX(key), WorldEngine.getY(key),
+                    WorldEngine.getZ(key))) <= activeBuildRing) return true;
         }
-        for (LodSectionCoordinate child : children) {
-            appendTransitionFrontier(child.key(), requiredNodes, childrenByParent,
-                    nearestFirst, added, ordered);
+        return false;
+    }
+
+    private static int firstIncompleteInBuildRing() {
+        for (int index = 0; index < transitionBuildSections.size(); index++) {
+            LodSectionCoordinate node = transitionBuildSections.get(index);
+            if (buildRing(node) > activeBuildRing) break;
+            if (isActiveRenderMesh(node.key()) && !transitionCoverageReadyKeys.contains(node.key())
+                    && !unavailableLodSections.contains(node.key())) return index;
         }
+        return -1;
     }
 
     private static void evictMeshesOutsideRenderGrid() {
@@ -4304,7 +4397,10 @@ public final class VoxyBlaze3DProbeRenderer {
         private final int viewportHeight;
         private final VanillaRenderBoundary vanillaBoundary;
         private final float subdivisionArea;
-        private final ArrayDeque<LodSectionCoordinate> pending;
+        private final PriorityQueue<LodSectionCoordinate> pending;
+        private final double ringWidth;
+        private int publishedRing = -1;
+        private final Map<Long, List<LodSectionCoordinate>> previousDescendants = new HashMap<>();
         private final List<LodSectionCoordinate> selected;
         private final long startedFrame;
         private final String invalidationReason;
@@ -4323,7 +4419,6 @@ public final class VoxyBlaze3DProbeRenderer {
                                  int viewportHeight,
                                  VanillaRenderBoundary vanillaBoundary,
                                  float subdivisionArea,
-                                 ArrayDeque<LodSectionCoordinate> pending,
                                  List<LodSectionCoordinate> selected,
                                  long startedFrame,
                                  String invalidationReason) {
@@ -4337,7 +4432,13 @@ public final class VoxyBlaze3DProbeRenderer {
             this.viewportHeight = viewportHeight;
             this.vanillaBoundary = vanillaBoundary;
             this.subdivisionArea = subdivisionArea;
-            this.pending = pending;
+            this.ringWidth = lodRingWidth(subdivisionArea);
+            this.pending = new PriorityQueue<>(Comparator
+                    .comparingInt((LodSectionCoordinate node) -> lodRing(node, cameraX, cameraZ, this.ringWidth))
+                    .thenComparingInt(node -> -WorldEngine.getLevel(node.key()))
+                    .thenComparingInt(node -> isOutsideVoxyFrustum(node, this.frustum, cameraX, cameraY, cameraZ) ? 1 : 0)
+                    .thenComparingDouble(node -> distanceSquaredToCamera(node, cameraX, cameraY, cameraZ))
+                    .thenComparingLong(LodSectionCoordinate::key));
             this.selected = selected;
             this.startedFrame = startedFrame;
             this.invalidationReason = invalidationReason;
@@ -4353,7 +4454,7 @@ public final class VoxyBlaze3DProbeRenderer {
         private int viewportHeight() { return viewportHeight; }
         private VanillaRenderBoundary vanillaBoundary() { return vanillaBoundary; }
         private float subdivisionArea() { return subdivisionArea; }
-        private ArrayDeque<LodSectionCoordinate> pending() { return pending; }
+        private PriorityQueue<LodSectionCoordinate> pending() { return pending; }
         private List<LodSectionCoordinate> selected() { return selected; }
         private long startedFrame() { return startedFrame; }
         private String invalidationReason() { return invalidationReason; }

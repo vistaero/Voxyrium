@@ -54,6 +54,21 @@ public class VoxyCommands {
                 .executes(VoxyCommands::voxyLodDebug);
     }
 
+    public static LiteralArgumentBuilder<FabricClientCommandSource> registerVoxyLodUploadsPerFrame() {
+        return ClientCommands.literal("setVoxyLodUploadsPerFrame")
+                .executes(ctx -> reportLodUploadsPerFrame(ctx, VoxyBlaze3DProbeRenderer.getLodUploadsPerFrame()))
+                .then(ClientCommands.argument("chunks", IntegerArgumentType.integer(1, 32))
+                        .executes(ctx -> reportLodUploadsPerFrame(ctx,
+                                VoxyBlaze3DProbeRenderer.setLodUploadsPerFrame(
+                                        IntegerArgumentType.getInteger(ctx, "chunks")))));
+    }
+
+    private static int reportLodUploadsPerFrame(CommandContext<FabricClientCommandSource> ctx, int chunks) {
+        ctx.getSource().sendFeedback(Component.literal("Voxy Blaze3D: up to " + chunks
+                + " LoD sections uploaded per frame (1-32, default 8). Setting saved across sessions."));
+        return chunks;
+    }
+
     public static LiteralArgumentBuilder<FabricClientCommandSource> registerSetVoxyVanillaTransition() {
         return ClientCommands.literal("setVoxyVanillaTransition")
                 .then(ClientCommands.argument("chunks", IntegerArgumentType.integer(0, 4))

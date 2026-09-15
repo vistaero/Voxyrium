@@ -110,10 +110,6 @@ public final class VoxyBlaze3DProbeRenderer {
     private static final long LOD_MEMORY_RETRY_FRAMES = 60L;
     private static final double ZOOM_RETAIN_DISTANCE = 512.0;
     private static final int MAX_ASYNC_MESHES = 32;
-    private static final int MAX_GPU_UPLOADS_PER_FRAME = 4;
-    private static final long GPU_UPLOAD_BYTES_PER_FRAME = 4L * 1024L * 1024L;
-    private static final long GPU_UPLOAD_BUDGET_NANOS = 1_500_000L;
-    private static final int MAX_LOD_HANDOFFS_PER_FRAME = 4;
     private static final int LOD_SELECTION_NODES_PER_FRAME = 512;
     private static final int LOD_HIERARCHY_RECHECKS_PER_FRAME = 128;
     private static final long LOD_SELECTION_BUDGET_NANOS = 4_000_000L;
@@ -320,6 +316,8 @@ public final class VoxyBlaze3DProbeRenderer {
     private static int lastLodSelectionViewportWidth = -1;
     private static int lastLodSelectionViewportHeight = -1;
     private static Matrix4f lastLodSelectionViewProjection;
+    private static Matrix4f publishedLodViewProjection;
+    private static double publishedLodCameraX, publishedLodCameraY, publishedLodCameraZ;
     private static VanillaRenderBoundary activeVanillaBoundary;
     private static volatile int sodiumRenderDistanceChunks = -1;
     private static volatile int vanillaTransitionChunks = 1;
@@ -411,6 +409,16 @@ public final class VoxyBlaze3DProbeRenderer {
         return clampedLevel;
     }
 
+    public static int getLodUploadsPerFrame() {
+        return Math.max(1, Math.min(32, VoxyConfig.CONFIG.blaze3dLodUploadsPerFrame));
+    }
+
+    public static int setLodUploadsPerFrame(int chunks) {
+        VoxyConfig.CONFIG.blaze3dLodUploadsPerFrame = Math.max(1, Math.min(32, chunks));
+        VoxyConfig.CONFIG.save();
+        return getLodUploadsPerFrame();
+    }
+
     public static String getLodDebugSummary() {
         String selectionState = pendingLodSelection == null
                 ? "idle"
@@ -424,6 +432,7 @@ public final class VoxyBlaze3DProbeRenderer {
                 + ", branchHandoffs=" + lodBranchHandoffs
                 + ", pendingHandoffs=" + transitionRevealQueue.size()
                 + ", frameUploads=" + lastFrameUploadCount + "/" + formatBytes(lastFrameUploadBytes)
+                + ", uploadLimit=" + getLodUploadsPerFrame()
                 + ", selectionRuns=" + lodSelectionRuns
                 + ", topologyChanges=" + lodTopologyChanges
                 + ", priorityOnly=" + lodPriorityOnlyChanges
@@ -1242,9 +1251,10 @@ public final class VoxyBlaze3DProbeRenderer {
                     // Selection is deliberately incremental, but entering a new L4 cell while
                     // travelling must not leave an uncovered ring until that traversal completes.
                     // Add only roots with no selected descendant; refined branches are preserved.
+                    Set<Long> refinedParents = captureRefinedDrawAncestors(null);
                     selectedLodSections = coveredSelection;
                     selectedLodSectionKeys = sectionKeys(coveredSelection);
-                    prepareLodTransition(coveredSelection);
+                    prepareLodTransition(coveredSelection, refinedParents);
                     nextLodSectionRefresh = 0;
                     nextLodSectionValidation = 0;
                     lodSelectionTransitionPending = true;
@@ -1297,7 +1307,7 @@ public final class VoxyBlaze3DProbeRenderer {
                     && pendingMeshFingerprints.size() < MAX_ASYNC_MESHES
                     && hasStagingCapacity()) {
                 LodSectionCoordinate section = transitionBuildSections.get(nextLodSectionRefresh++);
-                if (transitionCoverageReadyKeys.contains(section.key())) {
+                if (transitionCoverageReadyKeys.contains(section.key()) || !isActiveRenderMesh(section.key())) {
                     continue;
                 }
                 scheduleLodSection(world, section);
@@ -1554,13 +1564,12 @@ public final class VoxyBlaze3DProbeRenderer {
         lastFrameUploadBytes = 0L;
         lastFrameUploadCount = 0;
         if (frameCount < lodUploadRetryFrame) return;
-        long deadline = System.nanoTime() + GPU_UPLOAD_BUDGET_NANOS;
+        int uploadLimit = getLodUploadsPerFrame();
         int uploaded = 0;
         int inspected = 0;
         int readyAtStart = preparedLodMeshes.size();
         PreparedLodMesh prepared;
-        while (uploaded < MAX_GPU_UPLOADS_PER_FRAME
-                && System.nanoTime() < deadline
+        while (uploaded < uploadLimit
                 && inspected++ < readyAtStart
                 && (prepared = preparedLodMeshes.poll()) != null) {
             if (!isActiveRenderMesh(prepared.mesh().position())) {
@@ -1573,12 +1582,6 @@ public final class VoxyBlaze3DProbeRenderer {
                 preparedLodMeshes.add(prepared);
                 continue;
             }
-            // A single oversized section may proceed on an otherwise empty frame, so the byte
-            // limit cannot starve it. GPU allocation/upload itself is not preemptible.
-            if (uploaded != 0 && prepared.geometryBytes() > GPU_UPLOAD_BYTES_PER_FRAME - lastFrameUploadBytes) {
-                preparedLodMeshes.addFirst(prepared);
-                break;
-            }
             try {
                 applyPreparedLodMesh(world, prepared.fingerprint(), prepared.mesh());
             } finally {
@@ -1589,7 +1592,7 @@ public final class VoxyBlaze3DProbeRenderer {
             uploaded++;
             lastFrameUploadCount = uploaded;
             lastFrameUploadBytes += prepared.geometryBytes();
-            if (frameCount < lodUploadRetryFrame || lastFrameUploadBytes >= GPU_UPLOAD_BYTES_PER_FRAME) break;
+            if (frameCount < lodUploadRetryFrame) break;
         }
     }
 
@@ -1952,9 +1955,10 @@ public final class VoxyBlaze3DProbeRenderer {
                     && preZoomMinimumLevel == minimumLodLevel) {
                 // Publish the previous hierarchy immediately; the normal-FOV traversal can
                 // update it afterwards. Nearby meshes do not wait for meshing or GPU uploads.
+                Set<Long> refinedParents = captureRefinedDrawAncestors(null);
                 selectedLodSections = preZoomSelection;
                 selectedLodSectionKeys = sectionKeys(selectedLodSections);
-                prepareLodTransition(selectedLodSections);
+                prepareLodTransition(selectedLodSections, refinedParents);
                 lodSelectionTransitionPending = true;
                 nextLodSectionRefresh = 0;
                 nextLodSectionValidation = 0;
@@ -1984,12 +1988,27 @@ public final class VoxyBlaze3DProbeRenderer {
                                            int viewportHeight,
                                            VanillaRenderBoundary vanillaBoundary) {
         int vanillaRenderDistance = vanillaBoundary.radius();
+        Matrix4f viewProjection = createViewProjection(matrices);
         if (pendingLodSelection != null) {
-            advanceLodSelection(pendingLodSelection);
-            return;
+            double dx = camera.x - publishedLodCameraX;
+            double dy = camera.y - publishedLodCameraY;
+            double dz = camera.z - publishedLodCameraZ;
+            if (!lodBudgetBackoffPending && publishedLodViewProjection != null
+                    && dx * dx + dy * dy + dz * dz < 64.0
+                    && selectionViewDirectionDot(viewProjection, publishedLodViewProjection) > 0.985
+                    && selectionViewDirectionDot(viewProjection, pendingLodSelection.viewProjection()) < 0.96) {
+                // The camera returned before traversal finished: discard the obsolete view.
+                pendingLodSelection = null;
+                lastLodSelectionFrame = Long.MIN_VALUE;
+            } else {
+                advanceLodSelection(pendingLodSelection);
+                return;
+            }
         }
 
-        Matrix4f viewProjection = createViewProjection(matrices);
+        boolean retainLocalDetail = !lodBudgetBackoffPending
+                && lastSubdivisionSize == VoxyConfig.CONFIG.subDivisionSize
+                && lastLodSelectionMinimumLevel == minimumLodLevel;
         boolean hierarchyAvailable = lastLodSelectionFrame != Long.MIN_VALUE
                 && pollHierarchyAvailability(world, viewProjection, camera,
                 viewportWidth, viewportHeight, vanillaBoundary);
@@ -2046,9 +2065,17 @@ public final class VoxyBlaze3DProbeRenderer {
                 VoxyConfig.CONFIG.subDivisionSize * lodBudgetSubdivisionScale
                         * VoxyConfig.CONFIG.subDivisionSize * lodBudgetSubdivisionScale,
                 new ArrayDeque<>(), new ArrayList<>(), frameCount, invalidationReason);
+        if (retainLocalDetail) selection.retainedRefinements = captureRefinedDrawAncestors(camera);
         enqueueSelectionNodes(selection, budgetedRoots(camera), false);
         pendingLodSelection = selection;
         advanceLodSelection(pendingLodSelection);
+    }
+
+    private static double selectionViewDirectionDot(Matrix4f first, Matrix4f second) {
+        double dot = first.m02() * second.m02() + first.m12() * second.m12() + first.m22() * second.m22();
+        double lengthSquaredFirst = first.m02() * first.m02() + first.m12() * first.m12() + first.m22() * first.m22();
+        double lengthSquaredSecond = second.m02() * second.m02() + second.m12() * second.m12() + second.m22() * second.m22();
+        return dot / Math.sqrt(Math.max(1.0e-20, lengthSquaredFirst * lengthSquaredSecond));
     }
 
     private static List<LodSectionCoordinate> budgetedRoots(CameraTransform camera) {
@@ -2079,6 +2106,10 @@ public final class VoxyBlaze3DProbeRenderer {
         lastSelectionFrustumCulledNodes = selection.frustumCulledNodes;
         lastSelectionScreenTestedNodes = selection.screenTestedNodes;
         lastSelectionReason = selection.invalidationReason();
+        publishedLodViewProjection = new Matrix4f(selection.viewProjection());
+        publishedLodCameraX = selection.cameraX();
+        publishedLodCameraY = selection.cameraY();
+        publishedLodCameraZ = selection.cameraZ();
         lodSelectionRuns++;
         pendingLodSelection = null;
         lodBudgetBackoffPending = false;
@@ -2089,9 +2120,10 @@ public final class VoxyBlaze3DProbeRenderer {
         boolean priorityChanged = !selected.equals(selectedLodSections);
         if (topologyChanged) {
             lodTopologyChanges++;
+            Set<Long> refinedParents = captureRefinedDrawAncestors(null);
             selectedLodSections = selected;
             selectedLodSectionKeys = selectedKeys;
-            prepareLodTransition(selected);
+            prepareLodTransition(selected, refinedParents);
             nextLodSectionRefresh = 0;
             nextLodSectionValidation = 0;
             lastLodRefreshFrame = Long.MIN_VALUE;
@@ -2222,9 +2254,10 @@ public final class VoxyBlaze3DProbeRenderer {
             return;
         }
         boolean minimumRequiresSubdivision = lodBudgetSubdivisionScale <= 1.0f && lodLevel > minimumLodLevel;
+        boolean retainSubdivision = selection.retainedRefinements.contains(coordinate.key());
         byte children;
         try {
-            if (!minimumRequiresSubdivision && isOutsideVoxyFrustum(coordinate, selection.frustum(),
+            if (!minimumRequiresSubdivision && !retainSubdivision && isOutsideVoxyFrustum(coordinate, selection.frustum(),
                     selection.cameraX(), selection.cameraY(), selection.cameraZ())) {
                 // The native GPU traversal can discover a newly visible branch in the same frame.
                 // Our CPU traversal is incremental, so retain this node as coarse omnidirectional
@@ -2243,7 +2276,7 @@ public final class VoxyBlaze3DProbeRenderer {
             section.release();
         }
 
-        if (children == 0 || (!minimumRequiresSubdivision && !shouldSubdivide(coordinate, selection))) {
+        if (children == 0 || (!minimumRequiresSubdivision && !retainSubdivision && !shouldSubdivide(coordinate, selection))) {
             selection.selected().add(coordinate);
             return;
         }
@@ -3552,6 +3585,7 @@ public final class VoxyBlaze3DProbeRenderer {
     }
 
     private static void clearLodMeshes() {
+        publishedLodViewProjection = null;
         clearCachedLodMeshes();
         zoomRetainedKeys.clear();
         preZoomSelection = List.of();
@@ -3573,7 +3607,29 @@ public final class VoxyBlaze3DProbeRenderer {
         }
     }
 
-    private static void prepareLodTransition(List<LodSectionCoordinate> selected) {
+    private static Set<Long> captureRefinedDrawAncestors(@Nullable CameraTransform nearCamera) {
+        Set<Long> refined = new HashSet<>();
+        for (LodSectionMesh mesh : lodMeshes.values()) {
+            LodSectionCoordinate coordinate = mesh.coordinate();
+            if (!isActiveRenderMesh(coordinate.key()) || isCoveredByCoarserMesh(coordinate)
+                    || (nearCamera != null && lodGeometryBudgetExhausted
+                    && !isNearZoomCamera(coordinate, nearCamera))) continue;
+            // Frustum visibility affects draw calls only. A camera turn must not undo a resident
+            // branch's refinement, nor let an ancestor hide it while a different sibling loads.
+            // Retain distant detail too while it fits; real budget backoff bypasses retention.
+            int level = WorldEngine.getLevel(coordinate.key());
+            for (int ancestorLevel = level + 1; ancestorLevel <= WorldEngine.MAX_LOD_LAYER; ancestorLevel++) {
+                int shift = ancestorLevel - level;
+                refined.add(WorldEngine.getWorldSectionId(ancestorLevel,
+                        Math.floorDiv(coordinate.x(), 1 << shift),
+                        Math.floorDiv(coordinate.y(), 1 << shift),
+                        Math.floorDiv(coordinate.z(), 1 << shift)));
+            }
+        }
+        return refined;
+    }
+
+    private static void prepareLodTransition(List<LodSectionCoordinate> selected, Set<Long> refinedParents) {
         Set<Long> pendingReveals = Set.copyOf(transitionRevealKeys);
         LinkedHashMap<Long, LodSectionCoordinate> requiredNodes = new LinkedHashMap<>();
         for (LodSectionCoordinate leaf : selected) {
@@ -3633,7 +3689,7 @@ public final class VoxyBlaze3DProbeRenderer {
 
         for (Map.Entry<Long, List<Long>> entry : childrenByParent.entrySet()) {
             long parentKey = entry.getKey();
-            if (!selectedLodSectionKeys.contains(parentKey)) {
+            if (!selectedLodSectionKeys.contains(parentKey) && !refinedParents.contains(parentKey)) {
                 transitionParentKeys.add(parentKey);
             }
             int pendingChildren = 0;
@@ -3721,7 +3777,7 @@ public final class VoxyBlaze3DProbeRenderer {
         int remaining = Math.min(transitionRevealQueue.size(), 256);
         long deadline = System.nanoTime() + 500_000L;
         int revealed = 0;
-        while (remaining-- > 0 && revealed < MAX_LOD_HANDOFFS_PER_FRAME && System.nanoTime() < deadline) {
+        while (remaining-- > 0 && revealed < getLodUploadsPerFrame() && System.nanoTime() < deadline) {
             long key = transitionRevealQueue.removeFirst();
             if (!transitionParentKeys.contains(key) || transitionPendingChildren.containsKey(key)
                     || !transitionCoverageReadyKeys.contains(key)) {
@@ -4237,6 +4293,7 @@ public final class VoxyBlaze3DProbeRenderer {
     }
 
     private static final class LodSelectionTask {
+        private Set<Long> retainedRefinements = Set.of();
         private final WorldEngine world;
         private final Matrix4f viewProjection;
         private final FrustumIntersection frustum;

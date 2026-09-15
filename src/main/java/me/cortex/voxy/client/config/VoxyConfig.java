@@ -34,6 +34,7 @@ public class VoxyConfig {
     public float sectionRenderDistance = 16;
     public int serviceThreads = (int) Math.max(CpuLayout.getCoreCount()/1.5, 1);
     public float subDivisionSize = 64;
+    public int blaze3dLodUploadsPerFrame = 8;
     public String fogMode;
     public boolean dontUseSodiumBuilderThreads = false;
     public String rendererBackend = "native";

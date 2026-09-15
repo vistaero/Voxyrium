@@ -89,7 +89,7 @@ import java.util.OptionalDouble;
 import java.util.Set;
 import java.nio.ByteOrder;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -110,7 +110,10 @@ public final class VoxyBlaze3DProbeRenderer {
     private static final long LOD_MEMORY_RETRY_FRAMES = 60L;
     private static final double ZOOM_RETAIN_DISTANCE = 512.0;
     private static final int MAX_ASYNC_MESHES = 32;
-    private static final int MAX_GPU_UPLOADS_PER_FRAME = 8;
+    private static final int MAX_GPU_UPLOADS_PER_FRAME = 4;
+    private static final long GPU_UPLOAD_BYTES_PER_FRAME = 4L * 1024L * 1024L;
+    private static final long GPU_UPLOAD_BUDGET_NANOS = 1_500_000L;
+    private static final int MAX_LOD_HANDOFFS_PER_FRAME = 4;
     private static final int LOD_SELECTION_NODES_PER_FRAME = 512;
     private static final int LOD_HIERARCHY_RECHECKS_PER_FRAME = 128;
     private static final long LOD_SELECTION_BUDGET_NANOS = 4_000_000L;
@@ -257,7 +260,7 @@ public final class VoxyBlaze3DProbeRenderer {
     private static int preZoomMinimumLevel;
     private static final Map<Long, BudgetDeferredMesh> budgetDeferredMeshes = new HashMap<>();
     private static final ConcurrentHashMap<Long, Long> pendingMeshFingerprints = new ConcurrentHashMap<>();
-    private static final ConcurrentLinkedQueue<PreparedLodMesh> preparedLodMeshes = new ConcurrentLinkedQueue<>();
+    private static final ConcurrentLinkedDeque<PreparedLodMesh> preparedLodMeshes = new ConcurrentLinkedDeque<>();
     private static final AtomicLong preparedLodMeshBytes = new AtomicLong();
     private static volatile Set<Long> watchedLodKeys = Set.of();
     private static final Set<Long> dirtyLodKeys = ConcurrentHashMap.newKeySet();
@@ -289,6 +292,11 @@ public final class VoxyBlaze3DProbeRenderer {
     private static final Map<Long, Integer> transitionPendingChildren = new HashMap<>();
     private static final Set<Long> transitionParentKeys = new HashSet<>();
     private static final Set<Long> transitionCoverageReadyKeys = new HashSet<>();
+    private static final ArrayDeque<Long> transitionRevealQueue = new ArrayDeque<>();
+    private static final Set<Long> transitionRevealKeys = new HashSet<>();
+    private static long lastTransitionRevealFrame = Long.MIN_VALUE;
+    private static long lastFrameUploadBytes;
+    private static int lastFrameUploadCount;
     private static final FrustumIntersection currentDrawFrustum = new FrustumIntersection();
     private static boolean currentDrawFrustumValid;
     private static double currentDrawCameraX;
@@ -414,6 +422,8 @@ public final class VoxyBlaze3DProbeRenderer {
                 + ", transitionScan=" + nextLodSectionRefresh + "/" + transitionBuildSections.size()
                 + ", blockedParents=" + transitionPendingChildren.size()
                 + ", branchHandoffs=" + lodBranchHandoffs
+                + ", pendingHandoffs=" + transitionRevealQueue.size()
+                + ", frameUploads=" + lastFrameUploadCount + "/" + formatBytes(lastFrameUploadBytes)
                 + ", selectionRuns=" + lodSelectionRuns
                 + ", topologyChanges=" + lodTopologyChanges
                 + ", priorityOnly=" + lodPriorityOnlyChanges
@@ -1027,6 +1037,7 @@ public final class VoxyBlaze3DProbeRenderer {
         transitionBuildSections = List.of();
         transitionPendingChildren.clear();
         transitionParentKeys.clear();
+        clearTransitionReveals();
         transitionCoverageReadyKeys.clear();
         currentDrawFrustumValid = false;
         nextLodSectionRefresh = 0;
@@ -1173,6 +1184,7 @@ public final class VoxyBlaze3DProbeRenderer {
             transitionBuildSections = List.of();
             transitionPendingChildren.clear();
             transitionParentKeys.clear();
+            clearTransitionReveals();
             transitionCoverageReadyKeys.clear();
             lodSelectionTransitionPending = false;
             lastLodSelectionViewProjection = null;
@@ -1218,6 +1230,7 @@ public final class VoxyBlaze3DProbeRenderer {
                 transitionBuildSections = selectedLodSections;
                 transitionPendingChildren.clear();
                 transitionParentKeys.clear();
+                clearTransitionReveals();
                 transitionCoverageReadyKeys.clear();
                 nextLodSectionRefresh = 0;
                 nextLodSectionValidation = 0;
@@ -1261,6 +1274,7 @@ public final class VoxyBlaze3DProbeRenderer {
         if (renderGenerationService != null && frameCount >= lodUploadRetryFrame) {
             refreshChangedLodSections(world);
         }
+        drainTransitionReveals();
 
         boolean initialPopulation = lodSelectionTransitionPending;
         int refreshInterval = initialPopulation ? LOD_INITIAL_REFRESH_INTERVAL_FRAMES : LOD_STEADY_REFRESH_INTERVAL_FRAMES;
@@ -1290,7 +1304,8 @@ public final class VoxyBlaze3DProbeRenderer {
             }
         }
         if (initialPopulation && nextLodSectionRefresh == transitionBuildSections.size()) {
-            if (!pendingMeshFingerprints.isEmpty() || !preparedLodMeshes.isEmpty()) {
+            if (!pendingMeshFingerprints.isEmpty() || !preparedLodMeshes.isEmpty()
+                    || !transitionRevealQueue.isEmpty()) {
                 return;
             }
             int incompleteSection = findIncompleteSelectedSection();
@@ -1536,12 +1551,16 @@ public final class VoxyBlaze3DProbeRenderer {
     }
 
     private static void drainPreparedLodMeshes(WorldEngine world) {
+        lastFrameUploadBytes = 0L;
+        lastFrameUploadCount = 0;
         if (frameCount < lodUploadRetryFrame) return;
+        long deadline = System.nanoTime() + GPU_UPLOAD_BUDGET_NANOS;
         int uploaded = 0;
         int inspected = 0;
         int readyAtStart = preparedLodMeshes.size();
         PreparedLodMesh prepared;
         while (uploaded < MAX_GPU_UPLOADS_PER_FRAME
+                && System.nanoTime() < deadline
                 && inspected++ < readyAtStart
                 && (prepared = preparedLodMeshes.poll()) != null) {
             if (!isActiveRenderMesh(prepared.mesh().position())) {
@@ -1554,6 +1573,12 @@ public final class VoxyBlaze3DProbeRenderer {
                 preparedLodMeshes.add(prepared);
                 continue;
             }
+            // A single oversized section may proceed on an otherwise empty frame, so the byte
+            // limit cannot starve it. GPU allocation/upload itself is not preemptible.
+            if (uploaded != 0 && prepared.geometryBytes() > GPU_UPLOAD_BYTES_PER_FRAME - lastFrameUploadBytes) {
+                preparedLodMeshes.addFirst(prepared);
+                break;
+            }
             try {
                 applyPreparedLodMesh(world, prepared.fingerprint(), prepared.mesh());
             } finally {
@@ -1562,7 +1587,9 @@ public final class VoxyBlaze3DProbeRenderer {
                 pendingMeshFingerprints.remove(prepared.mesh().position(), prepared.fingerprint());
             }
             uploaded++;
-            if (frameCount < lodUploadRetryFrame) break;
+            lastFrameUploadCount = uploaded;
+            lastFrameUploadBytes += prepared.geometryBytes();
+            if (frameCount < lodUploadRetryFrame || lastFrameUploadBytes >= GPU_UPLOAD_BYTES_PER_FRAME) break;
         }
     }
 
@@ -3547,6 +3574,7 @@ public final class VoxyBlaze3DProbeRenderer {
     }
 
     private static void prepareLodTransition(List<LodSectionCoordinate> selected) {
+        Set<Long> pendingReveals = Set.copyOf(transitionRevealKeys);
         LinkedHashMap<Long, LodSectionCoordinate> requiredNodes = new LinkedHashMap<>();
         for (LodSectionCoordinate leaf : selected) {
             int leafLevel = WorldEngine.getLevel(leaf.key());
@@ -3581,6 +3609,7 @@ public final class VoxyBlaze3DProbeRenderer {
         updateGeometryBudgetState();
         transitionPendingChildren.clear();
         transitionParentKeys.clear();
+        clearTransitionReveals();
         transitionCoverageReadyKeys.clear();
 
         // An existing node covers its branch immediately. A missing intermediate node is also
@@ -3629,7 +3658,13 @@ public final class VoxyBlaze3DProbeRenderer {
                 }
             }
             for (long parentKey : readyParents) {
-                releaseTransitionParent(parentKey);
+                // Already-resident branches should not regress merely because the camera moved.
+                // Preserve pacing only for handoffs that were waiting on uploads/recovery.
+                if (pendingReveals.contains(parentKey)) {
+                    releaseTransitionParent(parentKey);
+                } else {
+                    finishTransitionParent(parentKey);
+                }
             }
         }
         Set<Long> watched = new HashSet<>(selectedLodSectionKeys);
@@ -3670,6 +3705,55 @@ public final class VoxyBlaze3DProbeRenderer {
                 || !transitionCoverageReadyKeys.contains(parentKey)) {
             return;
         }
+        if (transitionRevealKeys.add(parentKey)) transitionRevealQueue.addLast(parentKey);
+    }
+
+    private static void clearTransitionReveals() {
+        transitionRevealQueue.clear();
+        transitionRevealKeys.clear();
+        lastTransitionRevealFrame = Long.MIN_VALUE;
+    }
+
+    private static void drainTransitionReveals() {
+        if (lastTransitionRevealFrame == frameCount) return;
+        lastTransitionRevealFrame = frameCount;
+        Set<Long> revealedThisFrame = new HashSet<>();
+        int remaining = Math.min(transitionRevealQueue.size(), 256);
+        long deadline = System.nanoTime() + 500_000L;
+        int revealed = 0;
+        while (remaining-- > 0 && revealed < MAX_LOD_HANDOFFS_PER_FRAME && System.nanoTime() < deadline) {
+            long key = transitionRevealQueue.removeFirst();
+            if (!transitionParentKeys.contains(key) || transitionPendingChildren.containsKey(key)
+                    || !transitionCoverageReadyKeys.contains(key)) {
+                transitionRevealKeys.remove(key);
+                continue;
+            }
+            int level = WorldEngine.getLevel(key);
+            boolean hidden = false;
+            for (int ancestorLevel = level + 1; ancestorLevel <= WorldEngine.MAX_LOD_LAYER; ancestorLevel++) {
+                int shift = ancestorLevel - level;
+                long ancestor = WorldEngine.getWorldSectionId(ancestorLevel,
+                        Math.floorDiv(WorldEngine.getX(key), 1 << shift),
+                        Math.floorDiv(WorldEngine.getY(key), 1 << shift),
+                        Math.floorDiv(WorldEngine.getZ(key), 1 << shift));
+                if (revealedThisFrame.contains(ancestor)
+                        || (transitionParentKeys.contains(ancestor) && lodMeshes.containsKey(ancestor))) {
+                    hidden = true;
+                    break;
+                }
+            }
+            if (hidden) {
+                transitionRevealQueue.addLast(key);
+                continue;
+            }
+            transitionRevealKeys.remove(key);
+            finishTransitionParent(key);
+            revealedThisFrame.add(key);
+            revealed++;
+        }
+    }
+
+    private static void finishTransitionParent(long parentKey) {
         transitionParentKeys.remove(parentKey);
         if (lodMeshFingerprints.containsKey(parentKey)) {
             // The parent stops drawing, but remains resident just like Cortex's native node
@@ -3765,6 +3849,7 @@ public final class VoxyBlaze3DProbeRenderer {
         // native renderer turn the camera without regenerating the same geometry repeatedly.
         transitionPendingChildren.clear();
         transitionParentKeys.clear();
+        clearTransitionReveals();
         transitionCoverageReadyKeys.clear();
         transitionBuildSections = sections;
         nextLodSectionRefresh = sections.size();

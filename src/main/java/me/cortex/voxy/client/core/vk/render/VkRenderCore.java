@@ -276,25 +276,26 @@ public class VkRenderCore {
             try {
                 //Idle the device BEFORE destroying anything, so no destroy races
                 // GPU work still referencing these objects
-                this.frameCtx.waitIdleRetireAll();
+                //Discard readback callbacks as their CPU recipients are stopped.
+                //This also drains the current frame before any source is freed.
+                this.downloadStream.waitDiscard();
                 //modelService.shutdown() joins the (CPU) baking thread and frees
                 // the VkModelStore exactly once. It OWNS the store's lifetime —
                 // VkRenderCore must not free modelStore itself (double
                 // vkDestroySampler, observed NVIDIA SIGSEGV on world unload).
-                this.modelService.shutdown();
-                this.boundRenderer.free();
-                this.visibleSectionStream.free();
-                this.traversal.free();
-                this.nodeCleaner.free();
-                this.geometryData.free();
-                this.terrainRenderer.free();
-                this.ssao.free();
-                this.compositor.free();
-                this.viewportSelector.free();
-                this.downloadStream.flushWaitClear();
-                this.uploadStream.free();
-                this.downloadStream.free();
-                this.frameCtx.free();
+                cleanupComponent("model service", this.modelService::shutdown);
+                cleanupComponent("bound renderer", this.boundRenderer::free);
+                cleanupComponent("visible section stream", this.visibleSectionStream::free);
+                cleanupComponent("traversal", this.traversal::free);
+                cleanupComponent("node cleaner", this.nodeCleaner::free);
+                cleanupComponent("geometry data", this.geometryData::free);
+                cleanupComponent("terrain renderer", this.terrainRenderer::free);
+                cleanupComponent("SSAO", this.ssao::free);
+                cleanupComponent("compositor", this.compositor::free);
+                cleanupComponent("viewport selector", this.viewportSelector::free);
+                cleanupComponent("upload stream", this.uploadStream::free);
+                cleanupComponent("download stream", this.downloadStream::free);
+                cleanupComponent("frame context", this.frameCtx::free);
             } catch (Exception e) {
                 Logger.error("Error shutting down VK render core GPU resources", e);
             }
@@ -313,6 +314,14 @@ public class VkRenderCore {
 
     public StreamedBoundStore getVisibleSectionStream() {
         return this.visibleSectionStream;
+    }
+
+    private static void cleanupComponent(String name, Runnable cleanup) {
+        try {
+            cleanup.run();
+        } catch (Exception e) {
+            Logger.error("Error shutting down VK render core component: " + name, e);
+        }
     }
 
     public WorldEngine getEngine() {

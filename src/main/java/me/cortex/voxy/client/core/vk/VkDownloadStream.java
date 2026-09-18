@@ -40,6 +40,7 @@ public class VkDownloadStream extends AbstractDownloadStream {
     // node-visibility callbacks) a whole frame late. Capture the true recording
     // frame at commit() instead.
     private long recordFrame = -1;
+    private boolean discardingResults;
 
     public VkDownloadStream(VkFrameCtx ctx, long size) {
         this.ctx = ctx;
@@ -126,19 +127,30 @@ public class VkDownloadStream extends AbstractDownloadStream {
     private void retireUpTo(long retiredFrame) {
         while (!this.frames.isEmpty() && this.frames.peek().frameIdx <= retiredFrame) {
             var frame = this.frames.pop();
-            for (var data : frame.data) {
-                data.resultConsumer.consume(this.readbackPtr + data.downloadStreamOffset, data.size);
+            try {
+                if (!this.discardingResults) {
+                    for (var data : frame.data) {
+                        data.resultConsumer.consume(this.readbackPtr + data.downloadStreamOffset, data.size);
+                    }
+                }
+            } finally {
+                frame.allocations.forEach(this.allocationArena::free);
             }
-            frame.allocations.forEach(this.allocationArena::free);
         }
     }
 
     @Override
     public void waitDiscard() {
-        this.ctx.waitIdleRetireAll();
-        while (!this.frames.isEmpty()) {
-            var frame = this.frames.pop();
-            frame.allocations.forEach(this.allocationArena::free);
+        //Retirement runs our listener synchronously. Suppress callbacks BEFORE
+        // waiting: their recipients may already be stopped during teardown.
+        boolean wasDiscarding = this.discardingResults;
+        this.discardingResults = true;
+        try {
+            //Include copies recorded since the last tick, not just older frames.
+            this.tick();
+            this.ctx.waitIdleRetireAll();
+        } finally {
+            this.discardingResults = wasDiscarding;
         }
     }
 

@@ -45,6 +45,44 @@ def lithiumVersions = [
     '1.21.11': 'mc1.21.11-0.21.0-fabric'
 ]
 
+// 1.21.10 predates the Identifier/RenderSystem and Sodium config API changes
+// used by the current development sources.  Keep that compatibility shim in
+// the build, so newer targets continue compiling against their native APIs.
+if (project.minecraft_version == '1.21.10') {
+    def compatibilitySources = file("${buildDir}/generated/compat-1.21.10/java")
+    tasks.register('prepareCompatibilitySources') {
+        outputs.dir(compatibilitySources)
+        doLast {
+            def destination = compatibilitySources
+            delete destination
+            def files = providers.exec {
+                commandLine 'git', 'ls-tree', '-r', '--name-only', 'upstream/mc12110', 'src/main/java'
+            }.standardOutput.asText.get().readLines()
+            files.each { path ->
+                def output = new File(destination, path.substring('src/main/java/'.length()))
+                output.parentFile.mkdirs()
+                def contents = providers.exec {
+                    commandLine 'git', 'show', "upstream/mc12110:${path}"
+                }.standardOutput.asText.get()
+                if (path.endsWith('/ModelStore.java')) {
+                    contents = contents.replaceAll('(?s)int mipLvl = \\(\\(TextureAtlas\\).*?\\.mipLevel;', 'int mipLvl = Integer.numberOfTrailingZeros(ModelFactory.MODEL_TEXTURE_SIZE);')
+                }
+                output.text = contents
+            }
+            ['client.voxy.mixins.json', 'common.voxy.mixins.json', 'fabric.mod.json'].each { name ->
+                def output = new File(buildDir, "generated/compat-1.21.10/resources/${name}")
+                output.parentFile.mkdirs()
+                output.text = providers.exec {
+                    commandLine 'git', 'show', "upstream/mc12110:src/main/resources/${name}"
+                }.standardOutput.asText.get()
+            }
+        }
+    }
+    sourceSets.main.java.setSrcDirs([compatibilitySources])
+    tasks.named('compileJava') { dependsOn 'prepareCompatibilitySources' }
+    sourceSets.main.resources.srcDirs('src/main/resources', "${buildDir}/generated/compat-1.21.10/resources")
+}
+
 version = project.mod_version
 group = project.maven_group
 

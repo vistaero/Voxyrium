@@ -166,6 +166,11 @@ def default_minecraft_directory():
 def parse_args():
     minecraft = default_minecraft_directory()
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--action", choices=("profiles", "dependencies", "jdks", "compile"))
+    parser.add_argument("--jdk-versions", type=int, nargs="+")
+    parser.add_argument("--allow-build-downloads", action="store_true",
+                        help="Allow dependency/toolchain downloads during command-line builds; compilation is offline by default.")
+    parser.add_argument("--java8-home")
     parser.add_argument("--repository-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--output-directory", type=Path)
     parser.add_argument("--minecraft-directory", type=Path, default=minecraft)
@@ -183,13 +188,41 @@ def parse_args():
     parser.add_argument("--fabric-installer-version", default="1.1.0")
     for name in ("skip-fabric-install", "skip-runtime-mods", "skip-profile-creation", "profiles-only", "reuse-existing-artifacts", "no-interactive-menu", "keep-worktrees", "continue-on-build-failure"):
         parser.add_argument("--" + name, action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.build_workers < 1 or (args.gradle_workers is not None and args.gradle_workers < 1):
+        parser.error("Worker counts must be positive.")
+    if args.jdk_versions and any(major < 1 for major in args.jdk_versions):
+        parser.error("JDK versions must be positive.")
+    return args
+
+
+def select_action(args):
+    if args.action:
+        return args.action
+    if args.profiles_only:
+        return "profiles"
+    if args.no_interactive_menu or args.versions or args.branches:
+        return "compile"
+    if not sys.stdin.isatty():
+        fail("Use --action with --versions or --no-interactive-menu outside a terminal.")
+    choices = ("profiles", "dependencies", "jdks", "compile")
+    while True:
+        print("\n1. Create/update profiles")
+        print("2. Update profile dependencies")
+        print("3. Install JDK versions")
+        print("4. Compile versions (offline)")
+        choice = input("\nSelect an action (1-4, Q to quit): ").strip().lower()
+        if choice == "q":
+            raise SystemExit(0)
+        if choice in ("1", "2", "3", "4"):
+            return choices[int(choice) - 1]
+        print("Invalid selection.")
 
 
 def select_matrix(args):
     if args.branches and args.versions:
         fail("--branches and --versions cannot be used together.")
-    if not args.no_interactive_menu and not args.branches and not args.versions and not args.profiles_only:
+    if not args.no_interactive_menu and not args.branches and not args.versions:
         args.versions = interactive_version_selection(MATRIX)
     matrix = [dict(entry, versions=list(entry["versions"])) for entry in MATRIX]
     if args.branches:
@@ -257,7 +290,7 @@ def find_java_home(major):
     return None
 
 
-def get_java_home(major, configured, toolchains):
+def get_java_home(major, configured, toolchains, offline=False):
     if configured:
         configured = Path(configured).expanduser().resolve()
         if java_major(java_executable(configured)) != major:
@@ -271,6 +304,8 @@ def get_java_home(major, configured, toolchains):
     for java in target.glob(f"**/bin/{java_name}"):
         if java_major(java) == major:
             return java.parent.parent
+    if offline:
+        fail(f"JDK {major} is not installed. Run 'Install JDK versions' first.")
     architecture = "aarch64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
     operating_system = "windows" if os.name == "nt" else ("mac" if sys.platform == "darwin" else "linux")
     extension = ".zip" if os.name == "nt" else ".tar.gz"
@@ -471,7 +506,10 @@ class RuntimeUpdater:
             self.log(f"[{version}] Target directory: {game}")
             try:
                 self.log(f"[{version}] Updating runtime mods, including Iris.")
-                self.sync_mods(version, game / "mods")
+                voxy_jars = [jar for jar in (game / "mods").glob("*.jar") if jar_mod_id(jar) == "voxy"]
+                if len(voxy_jars) > 1:
+                    fail(f"Multiple Voxy JARs found in {game / 'mods'}; keep only the version being tested.")
+                self.sync_mods(version, game / "mods", voxy_jars[0] if voxy_jars else None)
             except Exception as error:
                 self.log(f"[{version}] Runtime mod update failed: {error}", "ERROR")
                 self.failures.append(f"Runtime mod update for Minecraft {version}: {error}")
@@ -564,15 +602,29 @@ def build_matrix(args, matrix, output_directory):
                     required_java = entry.get("java") or target_java_version(worktree / "build.gradle", branch)
                     with java_homes_lock:
                         if required_java not in java_homes:
-                            java_homes[required_java] = get_java_home(required_java, getattr(args, f"java{required_java}_home", None), toolchains)
+                            java_homes[required_java] = get_java_home(required_java, getattr(args, f"java{required_java}_home", None), toolchains, offline=not args.allow_build_downloads)
                         java_home = java_homes[required_java]
                     environment = dict(os.environ)
                     environment.update({"JAVA_HOME": str(java_home), "PATH": str(java_home / "bin") + os.pathsep + environment.get("PATH", "")})
                     print(f"[{branch}] Using JDK {required_java} from {java_home}", flush=True)
                     gradle = worktree / ("gradlew.bat" if os.name == "nt" else "gradlew")
-                    if os.name != "nt":
+                    if not args.allow_build_downloads:
+                        # Invoke an already installed distribution directly: the
+                        # wrapper can download Gradle even when passed --offline.
+                        properties = worktree / "gradle/wrapper/gradle-wrapper.properties"
+                        url = property_value(properties, "distributionUrl")
+                        distribution = url.rsplit("/", 1)[-1].removesuffix(".zip")
+                        gradle_home = Path(environment.get("GRADLE_USER_HOME", Path.home() / ".gradle"))
+                        binaries = sorted((gradle_home / "wrapper/dists" / distribution).glob(
+                            "*/gradle-*/bin/" + ("gradle.bat" if os.name == "nt" else "gradle")))
+                        if not binaries:
+                            fail(f"Gradle distribution {distribution} is not cached. Prepare it online before compiling offline.")
+                        gradle = binaries[0]
+                    if os.name != "nt" and args.allow_build_downloads:
                         gradle.chmod(gradle.stat().st_mode | 0o111)
                     arguments = [gradle, "--no-daemon", f"--max-workers={gradle_workers}"] + ([f"-Pminecraft_version={build_version}"] if "build_version" in entry else [])
+                    if not args.allow_build_downloads:
+                        arguments += ["--offline", "-Porg.gradle.java.installations.auto-download=false"]
                     logs = output_directory / "build-logs"
                     logs.mkdir(parents=True, exist_ok=True)
                     log_path = logs / f"{safe}-{datetime.now():%Y%m%d-%H%M%S}.log"
@@ -681,7 +733,11 @@ def save_profiles(args, matrix, artifacts, version_ids, updater, failures):
                     updater.sync_shaders(version, game)
                 except Exception as error:
                     failures.append(f"Shader packs for Minecraft {version}: {error}")
-            profiles[f"voxy-test-{safe}"] = {"created": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"), "gameDir": str(game), "icon": "Grass", "lastVersionId": version_ids[version], "name": f"Voxy Test {version}", "type": "custom"}
+            profile = profiles.setdefault(f"voxy-test-{safe}", {})
+            profile.setdefault("created", datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"))
+            profile.setdefault("icon", "Grass")
+            profile.setdefault("name", f"Voxy Test {version}")
+            profile.update({"gameDir": str(game), "lastVersionId": version_ids[version], "type": "custom"})
     temporary = profiles_path.with_name(profiles_path.name + ".codex-new")
     temporary.write_text(json.dumps(launcher, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     json.loads(temporary.read_text(encoding="utf-8"))
@@ -690,24 +746,43 @@ def save_profiles(args, matrix, artifacts, version_ids, updater, failures):
 
 def main():
     args = parse_args()
+    action = select_action(args)
     if args.profiles_only and args.skip_profile_creation:
         fail("--profiles-only and --skip-profile-creation cannot be used together.")
-    matrix = select_matrix(args)
+    matrix = [] if action == "jdks" else select_matrix(args)
     args.repository_root = args.repository_root.expanduser().resolve()
     args.minecraft_directory = args.minecraft_directory.expanduser().resolve()
     args.profiles_directory = args.profiles_directory.expanduser().resolve()
-    if not (args.repository_root / ".git").exists():
+    if action == "compile" and not (args.repository_root / ".git").exists():
         fail(f"Repository root is not a Git working tree: {args.repository_root}")
     output_directory = (args.output_directory or args.repository_root / "compatibility-builds").expanduser().resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
     updater = RuntimeUpdater(output_directory)
     failures = []
-    if not args.skip_runtime_mods:
+    if action == "jdks":
+        majors = args.jdk_versions
+        if not majors and not args.no_interactive_menu and sys.stdin.isatty():
+            value = input("JDK versions to install [8 17 21 25] (space separated; additional versions accepted): ").strip()
+            if value and (not all(part.isdigit() for part in value.split()) or any(int(part) < 1 for part in value.split())):
+                fail("Enter positive JDK major versions, for example: 8 17 21 25 26.")
+            majors = list(map(int, value.split())) if value else None
+        for major in dict.fromkeys(majors or [8, 17, 21, 25]):
+            try:
+                home = get_java_home(major, getattr(args, f"java{major}_home", None), output_directory / ".toolchains")
+                print(f"JDK {major}: {home}")
+            except Exception as error:
+                failures.append(f"JDK {major}: {error}")
+    elif action == "dependencies":
         updater.update_selected(matrix, args.profiles_directory)
         failures.extend(updater.failures)
-    artifacts, build_failures = build_matrix(args, matrix, output_directory)
-    failures.extend(build_failures)
-    if not args.skip_profile_creation:
+    elif action == "compile":
+        artifacts, build_failures = build_matrix(args, matrix, output_directory)
+        failures.extend(build_failures)
+    elif action == "profiles":
+        # Profile preparation neither builds nor updates mods/shaders.
+        args.skip_runtime_mods = True
+        if launcher_is_running():
+            fail("Close Minecraft Launcher before updating profiles.")
         installer = output_directory / f"fabric-installer-{args.fabric_installer_version}.jar"
         if not args.skip_fabric_install:
             download(f"https://maven.fabricmc.net/net/fabricmc/fabric-installer/{args.fabric_installer_version}/{installer.name}", installer)
@@ -715,12 +790,12 @@ def main():
         for version in sorted(unique_versions(matrix), key=version_tuple):
             loader = fabric_loader_version(version)
             version_ids[version] = f"fabric-loader-{loader}-{version}" if args.skip_fabric_install else install_fabric(args.minecraft_directory, version, loader, installer)
-        save_profiles(args, matrix, artifacts, version_ids, updater, failures)
+        save_profiles(args, matrix, {}, version_ids, updater, failures)
     print(f"\nArtifacts: {output_directory}")
     print(f"Test profiles: {args.profiles_directory}")
     print(f"Update log: {updater.log_path}")
     if failures:
-        print("Incomplete branches/builds:\n - " + "\n - ".join(failures), file=sys.stderr)
+        print("Incomplete operations:\n - " + "\n - ".join(failures), file=sys.stderr)
         return 1
     return 0
 

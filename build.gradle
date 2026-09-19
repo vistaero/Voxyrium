@@ -76,6 +76,10 @@ if (project.minecraft_version == '1.21.10') {
                     commandLine 'git', 'show', "upstream/mc12110:src/main/resources/${name}"
                 }.standardOutput.asText.get()
             }
+            // Loom resolves the access widener during configuration, before
+            // generated resources exist; mirror the selected file at the
+            // conventional path for this isolated build worktree.
+            file('src/main/resources/voxy.accesswidener').text = new File(buildDir, 'generated/compat-1.21.10/resources/voxy.accesswidener').text
         }
     }
     sourceSets.main.java.setSrcDirs([compatibilitySources])

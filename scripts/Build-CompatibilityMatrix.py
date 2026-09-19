@@ -30,6 +30,9 @@ else:
 
 USER_AGENT = "vistaero-Voxyrium-compatibility-script/1.0"
 MATRIX = [
+    {"branch": "dev", "expected": "26.2", "versions": ["26.2"], "tasks": []},
+    {"branch": "mc_26.1", "expected": "26.1.2", "versions": ["26.1.2"], "tasks": []},
+    {"branch": "mc_26.1.1", "expected": "26.1.1", "versions": ["26.1.1"], "tasks": []},
     *[{"branch": "mc_1.21-1.21.11", "expected": "1.21.11", "build_version": version,
        "java": 21, "key": f"mc_1.21-1.21.11__{version}", "versions": [version], "tasks": []}
       for version in ["1.21"] + [f"1.21.{patch}" for patch in range(1, 12)]],

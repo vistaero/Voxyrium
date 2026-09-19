@@ -80,7 +80,11 @@ if (project.minecraft_version == '1.21.10') {
     }
     sourceSets.main.java.setSrcDirs([compatibilitySources])
     tasks.named('compileJava') { dependsOn 'prepareCompatibilitySources' }
-    sourceSets.main.resources.srcDirs('src/main/resources', "${buildDir}/generated/compat-1.21.10/resources")
+    processResources {
+        exclude 'client.voxy.mixins.json', 'common.voxy.mixins.json', 'fabric.mod.json'
+        from "${buildDir}/generated/compat-1.21.10/resources"
+        dependsOn 'prepareCompatibilitySources'
+    }
 }
 
 version = project.mod_version

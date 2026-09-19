@@ -1,13 +1,9 @@
 package me.cortex.voxy.client.config;
 
 import me.cortex.voxy.client.ClientSessionEvents;
-import me.cortex.voxy.client.VoxyClient;
 import me.cortex.voxy.client.config.SodiumConfigBuilder.*;
-import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
-import me.cortex.voxy.client.core.NormalRenderPipeline;
+import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import me.cortex.voxy.client.core.SSAO;
-import me.cortex.voxy.client.core.backend.VoxyGraphicsBackend;
-import me.cortex.voxy.client.core.backend.blaze3d.Blaze3dMemoryBudget;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.util.cpu.CpuLayout;
 import me.cortex.voxy.commonImpl.VoxyCommon;
@@ -17,10 +13,9 @@ import net.caffeinemc.mods.sodium.api.config.option.OptionFlag;
 import net.caffeinemc.mods.sodium.api.config.option.OptionImpact;
 import net.caffeinemc.mods.sodium.api.config.option.Range;
 import net.caffeinemc.mods.sodium.api.config.structure.ConfigBuilder;
+import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
-
-import java.util.Locale;
 
 public class VoxyConfigMenu implements ConfigEntryPoint {
     @Override
@@ -56,7 +51,7 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
                                         })
                                         .setPostChangeRunner(c->{
                                             if (!c) {
-                                                var vrsh = IVoxyRenderSystemHolder.getNullableHolder();
+                                                var vrsh = (IGetVoxyRenderSystem) Minecraft.getInstance().levelRenderer;
                                                 if (vrsh != null) {
                                                     vrsh.voxy$shutdownRenderer();
                                                 }
@@ -89,7 +84,7 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
                                         Component.translatable("voxy.config.general.rendering"),
                                         ()->CFG.enableRendering, v->CFG.enableRendering=v)
                                         .setPostChangeRunner(c->{
-                                            var vrsh = IVoxyRenderSystemHolder.getNullableHolder();
+                                            var vrsh = (IGetVoxyRenderSystem)Minecraft.getInstance().levelRenderer;
                                             if (vrsh != null) {
                                                 if (c) {
                                                     vrsh.voxy$createRenderer();
@@ -99,15 +94,6 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
                                             }
                                         },"voxy:enabled", RENDER_RELOAD)
                                         .setPostChangeFlags("voxy:iris_reload")
-                                        .setEnabler("voxy:enabled"),
-                                new EnumOption<>(
-                                        "voxy:renderer_backend",
-                                        VoxyGraphicsBackend.RendererMode.class,
-                                        Component.translatable("voxy.config.general.renderer_backend"),
-                                        CFG::getRendererBackendMode,
-                                        VoxyClient::requestRendererSelection)
-                                        .setNameProvider(value->Component.translatable(
-                                                "voxy.config.general.renderer_backend." + value.name().toLowerCase(java.util.Locale.ROOT)))
                                         .setEnabler("voxy:enabled")
                         ), new Group(
                                 new IntOption(
@@ -116,9 +102,6 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
                                         ()->subDiv2ln(CFG.subDivisionSize), v->CFG.subDivisionSize=ln2subDiv(v),
                                         new Range(0, SUBDIV_IN_MAX, 1))
                                         .setFormatter(v->Component.literal(Integer.toString(Math.round(ln2subDiv(v)))))
-                                        .setTooltipSupplier(v->memoryEstimateTooltip(
-                                                "voxy.config.general.subDivisionSize.tooltip",
-                                                CFG.sectionRenderDistance, ln2subDiv(v)))
                                         .setImpact(OptionImpact.HIGH),
                                 new IntOption(
                                         "voxy:render_distance",
@@ -127,31 +110,28 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
                                         new Range(10/*1*16*/, 64*16, 1))
                                         //The value is stored as a float with respect to the size of top level lods, it its increment is a fraction with respect to the size of the bottom level lod
                                         // the value is displayed as a chunk render distance
-                                        .setFormatter(v->Component.literal(Integer.toString(v * 2)))
-                                        .setTooltipSupplier(v->memoryEstimateTooltip(
-                                                "voxy.config.general.renderDistance.tooltip",
-                                                (float) v / 16.0f, CFG.subDivisionSize))
+                                        .setFormatter(v->Component.literal(Integer.toString(v*2)))
                                         .setPostChangeRunner(c->{
-                                            var vrs = IVoxyRenderSystemHolder.getNullable();
-                                            if (vrs != null) {
-                                                //CFG.sectionRenderDistance == c/16
-                                                vrs.setRenderDistance(CFG.sectionRenderDistance);
+                                            var vrsh = (IGetVoxyRenderSystem)Minecraft.getInstance().levelRenderer;
+                                            if (vrsh != null) {
+                                                var vrs = vrsh.voxy$getRenderSystem();
+                                                if (vrs != null) {
+                                                    //CFG.sectionRenderDistance == c/16
+                                                    vrs.setRenderDistance(CFG.sectionRenderDistance);
+                                                }
                                             }
                                         }, "voxy:rendering", RENDER_RELOAD)
                                         .setImpact(OptionImpact.MEDIUM)
                         ), new Group(
-                                new EnumOption<>(
+                                new BoolOption(
                                         "voxy:eviromental_fog",
-                                        NormalRenderPipeline.FogMode.class,
                                         Component.translatable("voxy.config.general.environmental_fog"),
-                                        CFG::getFogMode, CFG::setFogMode)
-                                        .setNameProvider(c->Component.translatable("voxy.config.general.environmental_fog."+c.name().toLowerCase(Locale.ROOT)))
+                                        ()->CFG.useEnvironmentalFog, v->CFG.useEnvironmentalFog=v)
                                         .setPostChangeFlags(RENDER_RELOAD),
                                 new EnumOption<>("voxy:ssao_mode",
                                         SSAO.SSAOMode.class,
                                         Component.translatable("voxy.config.general.ssao_mode"),
-                                        CFG::getSSAOMode, CFG::setSSAOMode)
-                                        .setNameProvider(c->Component.translatable("voxy.config.general.ssao_mode."+c.name().toLowerCase(Locale.ROOT)))
+                                        ()->CFG.getSSAOMode(), v->CFG.setSSAOMode(v))
                                         .setImpact(OptionImpact.MEDIUM)//TODO make it on igpus this is high
                                         .setPostChangeFlags(RENDER_RELOAD)
                         ).setEnablerInherit(s->!IrisUtil.irisShadersEnabledInConfig(), ConfigState.UPDATE_ON_REBUILD)
@@ -175,24 +155,5 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
     //Out range is 0->200
     private static int subDiv2ln(float in) {
         return (int) (((Math.log(((double)in)/SUBDIV_MIN)/Math.log(2))/SUBDIV_CONST)*SUBDIV_IN_MAX);
-    }
-
-    private static Component memoryEstimateTooltip(String descriptionKey,
-                                                     float renderDistance,
-                                                     float subdivisionSize) {
-        if (!VoxyGraphicsBackend.usesBlaze3dRenderer()) {
-            return Component.translatable(descriptionKey);
-        }
-        Blaze3dMemoryBudget.Estimate estimate = Blaze3dMemoryBudget.estimate(renderDistance, subdivisionSize);
-        var tooltip = Component.translatable(descriptionKey)
-                .append("\n")
-                .append(Component.translatable("voxy.config.general.blaze3d_memory_estimate",
-                        Blaze3dMemoryBudget.formatBytes(estimate.requiredVramBytes()),
-                        Blaze3dMemoryBudget.formatBytes(estimate.requiredRamBytes())));
-        if (estimate.exceedsSafetyLimit()) {
-            tooltip = tooltip.append("\n")
-                    .append(Component.translatable("voxy.config.general.blaze3d_memory_estimate.limit"));
-        }
-        return tooltip;
     }
 }

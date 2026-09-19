@@ -70,12 +70,6 @@ public class Mapper {
         return (id&(((1L<<20)-1)<<27)) == 0;
     }
 
-    public static int isNotAirInt(long id) {
-        //This is stupid and insane that even have todo this
-        // works cause 0 is air, so !=0 is not air
-        return Math.min(getBlockId(id), 1);
-    }
-
     public static int getBlockId(long id) {
         return (int) ((id>>27)&((1<<20)-1));
     }
@@ -365,7 +359,7 @@ public class Mapper {
             if (state.getBlock() instanceof LeavesBlock) {
                 this.opacity = 15;
             } else {
-                this.opacity = state.getLightDampening();
+                this.opacity = state.getLightBlock();
             }
         }
 

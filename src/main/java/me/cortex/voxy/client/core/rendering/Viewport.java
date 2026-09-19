@@ -12,9 +12,8 @@ import java.lang.reflect.Field;
 
 public abstract class Viewport <A extends Viewport<A>> {
     //public final HiZBuffer2 hiZBuffer = new HiZBuffer2();
-    //Null on backends that do not use the GL helpers (pure Vulkan)
     public final HiZBuffer hiZBuffer;
-    public final DepthFramebuffer depthBoundingBuffer;
+    public final DepthFramebuffer depthBoundingBuffer = new DepthFramebuffer();
 
     private static final Field planesField;
     static {
@@ -55,18 +54,7 @@ public abstract class Viewport <A extends Viewport<A>> {
         this.frustumPlanes = planes;
 
         this.properties = properties;
-        if (this.useGlViewportHelpers()) {
-            this.hiZBuffer = new HiZBuffer(properties);
-            this.depthBoundingBuffer = new DepthFramebuffer();
-        } else {
-            this.hiZBuffer = null;
-            this.depthBoundingBuffer = null;
-        }
-    }
-
-    /** Overridden false by the pure-Vulkan viewport: no GL HiZ / depth-bound helpers. */
-    protected boolean useGlViewportHelpers() {
-        return true;
+        this.hiZBuffer = new HiZBuffer(properties);
     }
 
     public final void delete() {
@@ -74,8 +62,8 @@ public abstract class Viewport <A extends Viewport<A>> {
     }
 
     protected void delete0() {
-        if (this.hiZBuffer != null) this.hiZBuffer.free();
-        if (this.depthBoundingBuffer != null) this.depthBoundingBuffer.free();
+        this.hiZBuffer.free();
+        this.depthBoundingBuffer.free();
     }
 
     public A setVanillaProjection(Matrix4fc projection) {
@@ -129,12 +117,12 @@ public abstract class Viewport <A extends Viewport<A>> {
                 (float) (this.cameraY-(sy<<5)),
                 (float) (this.cameraZ-(sz<<5)));
 
-        if (this.depthBoundingBuffer != null && this.depthBoundingBuffer.resize(this.width, this.height)) {
+        if (this.depthBoundingBuffer.resize(this.width, this.height)) {
             this.depthBoundingBuffer.clear(this.properties.inverseClearDepth());
         }
 
         return (A) this;
     }
 
-    public abstract IRenderList getRenderList();
+    public abstract GlBuffer getRenderList();
 }

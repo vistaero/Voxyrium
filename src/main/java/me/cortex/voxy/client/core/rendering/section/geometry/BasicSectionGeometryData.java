@@ -5,13 +5,12 @@ import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.ThreadUtils;
 
-import static org.lwjgl.opengl.ARBSparseBuffer.GL_SPARSE_STORAGE_BIT_ARB;
-import static org.lwjgl.opengl.ARBSparseBuffer.glBufferPageCommitmentARB;
+import static org.lwjgl.opengl.ARBSparseBuffer.*;
 import static org.lwjgl.opengl.GL11C.*;
 import static org.lwjgl.opengl.GL15C.GL_ARRAY_BUFFER;
 import static org.lwjgl.opengl.GL15C.glBindBuffer;
 
-public class BasicSectionGeometryData implements IBasicGeometryData {
+public class BasicSectionGeometryData implements IGeometryData {
     public static final int SECTION_METADATA_SIZE = 32;
     private final GlBuffer sectionMetadataBuffer;
     private final GlBuffer geometryBuffer;
@@ -96,16 +95,6 @@ public class BasicSectionGeometryData implements IBasicGeometryData {
 
     public GlBuffer getGeometryBuffer() {
         return this.geometryBuffer;
-    }
-
-    @Override
-    public me.cortex.voxy.client.core.rendering.util.IDeviceBuffer geometryBufferHandle() {
-        return this.geometryBuffer;
-    }
-
-    @Override
-    public me.cortex.voxy.client.core.rendering.util.IDeviceBuffer metadataBufferHandle() {
-        return this.sectionMetadataBuffer;
     }
 
     public GlBuffer getMetadataBuffer() {

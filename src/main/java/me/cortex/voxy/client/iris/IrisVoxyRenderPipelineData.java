@@ -30,10 +30,7 @@ import org.joml.*;
 import org.lwjgl.system.MemoryUtil;
 
 import java.util.*;
-import java.util.function.IntConsumer;
-import java.util.function.IntSupplier;
-import java.util.function.LongConsumer;
-import java.util.function.Supplier;
+import java.util.function.*;
 import java.util.stream.Collectors;
 
 import static org.lwjgl.opengl.ARBDirectStateAccess.glBindTextureUnit;

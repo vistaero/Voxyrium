@@ -3,32 +3,28 @@ package me.cortex.voxy.client.core.gl;
 import me.cortex.voxy.client.core.gl.shader.ShaderType;
 import me.cortex.voxy.common.Logger;
 import org.lwjgl.opengl.GL;
+import org.lwjgl.opengl.GL11C;
 import org.lwjgl.opengl.GL20C;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.system.MemoryUtil;
 
 import java.util.Locale;
+import java.util.Random;
 
 import static org.lwjgl.opengl.GL11.GL_NEAREST;
 import static org.lwjgl.opengl.GL11.GL_TEXTURE_2D;
 import static org.lwjgl.opengl.GL11.GL_TEXTURE_MAG_FILTER;
+import static org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE;
 import static org.lwjgl.opengl.GL15.glDeleteBuffers;
 import static org.lwjgl.opengl.GL30.GL_DEPTH_STENCIL;
 import static org.lwjgl.opengl.GL30C.GL_MAP_READ_BIT;
 import static org.lwjgl.opengl.GL32.glGetInteger64;
 import static org.lwjgl.opengl.GL43C.GL_MAX_SHADER_STORAGE_BLOCK_SIZE;
 import static org.lwjgl.opengl.GL44.GL_DYNAMIC_STORAGE_BIT;
+import static org.lwjgl.opengl.GL44.GL_MAP_COHERENT_BIT;
 import static org.lwjgl.opengl.GL45.glClearNamedFramebufferfi;
 import static org.lwjgl.opengl.GL45C.*;
-import static org.lwjgl.opengl.GL45C.GL_FLOAT;
-import static org.lwjgl.opengl.GL45C.GL_RED;
-import static org.lwjgl.opengl.GL45C.GL_TEXTURE_MIN_FILTER;
-import static org.lwjgl.opengl.GL45C.GL_VENDOR;
-import static org.lwjgl.opengl.GL45C.GL_VERSION;
-import static org.lwjgl.opengl.GL45C.glDeleteTextures;
-import static org.lwjgl.opengl.GL45C.glFinish;
-import static org.lwjgl.opengl.GL45C.glGetInteger;
-import static org.lwjgl.opengl.GL45C.glGetString;
+import static org.lwjgl.opengl.GL45C.glCreateFramebuffers;
 import static org.lwjgl.opengl.NVXGPUMemoryInfo.*;
 
 public class Capabilities {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import urllib.parse
 import urllib.request
 import uuid
@@ -28,16 +30,9 @@ else:
 
 USER_AGENT = "vistaero-Voxyrium-compatibility-script/1.0"
 MATRIX = [
-    {"branch": "dev", "expected": "26.2", "versions": ["26.2"], "tasks": []},
-    {"branch": "mc_26.1", "expected": "26.1.2", "versions": ["26.1.2"], "tasks": []},
-    {"branch": "mc_26.1.1", "expected": "26.1.1", "versions": ["26.1.1"], "tasks": []},
-    {"branch": "mc_1.21.11", "expected": "1.21.11", "versions": ["1.21.11"], "tasks": []},
-    {"branch": "mc_1.21.9-1.21.10", "expected": "1.21.10", "versions": ["1.21.9", "1.21.10"], "tasks": []},
-    {"branch": "mc_1.21.6-1.21.8", "expected": "1.21.8", "versions": ["1.21.6", "1.21.7", "1.21.8"], "tasks": []},
-    {"branch": "mc_1.21.5", "expected": "1.21.5", "versions": ["1.21.5"], "tasks": []},
-    {"branch": "mc_1.21.4", "expected": "1.21.4", "versions": ["1.21.4"], "tasks": []},
-    {"branch": "mc_1.21.3", "expected": "1.21.3", "versions": ["1.21.3"], "tasks": ["clean", "processIncludeJars"]},
-    {"branch": "mc_1.21-1.21.1", "expected": "1.21", "versions": ["1.21", "1.21.1"], "tasks": []},
+    *[{"branch": "mc_1.21-1.21.11", "expected": "1.21.11", "build_version": version,
+       "java": 21, "key": f"mc_1.21-1.21.11__{version}", "versions": [version], "tasks": []}
+      for version in ["1.21"] + [f"1.21.{patch}" for patch in range(1, 12)]],
     {"branch": "mc_1.20-1.20.6", "expected": "1.20.2", "build_version": "1.20.6", "java": 21, "key": "mc_1.20-1.20.6__1.20.6", "versions": ["1.20.6"], "tasks": []},
     {"branch": "mc_1.20-1.20.6", "expected": "1.20.2", "build_version": "1.20.4", "java": 17, "key": "mc_1.20-1.20.6__1.20.4", "versions": ["1.20.4"], "tasks": []},
     {"branch": "mc_1.20-1.20.6", "expected": "1.20.2", "build_version": "1.20.2", "java": 17, "key": "mc_1.20-1.20.6__1.20.2", "versions": ["1.20.2"], "tasks": []},
@@ -176,6 +171,10 @@ def parse_args():
     parser.add_argument("--java17-home")
     parser.add_argument("--java21-home")
     parser.add_argument("--java25-home")
+    parser.add_argument("--build-workers", type=int, default=os.cpu_count() or 1,
+                        help="Maximum compatibility builds to run concurrently (default: one per logical CPU).")
+    parser.add_argument("--gradle-workers", type=int,
+                        help="Maximum Gradle workers per build (default: share logical CPUs among concurrent builds).")
     parser.add_argument("--fabric-installer-version", default="1.1.0")
     for name in ("skip-fabric-install", "skip-runtime-mods", "skip-profile-creation", "profiles-only", "reuse-existing-artifacts", "no-interactive-menu", "keep-worktrees", "continue-on-build-failure"):
         parser.add_argument("--" + name, action="store_true")
@@ -505,13 +504,19 @@ def build_matrix(args, matrix, output_directory):
     toolchains.mkdir(parents=True, exist_ok=True)
     worktree_root = args.worktree_base_directory.expanduser() / uuid.uuid4().hex[:8]
     worktree_root.mkdir(parents=True)
+    if args.build_workers < 1:
+        fail("--build-workers must be at least 1.")
+    if args.gradle_workers is not None and args.gradle_workers < 1:
+        fail("--gradle-workers must be at least 1.")
     artifacts, java_homes, failures = {}, {}, []
+    java_homes_lock = threading.Lock()
+    worktree_lock = threading.Lock()
     try:
+        builds = []
         for entry in matrix:
             branch = entry["branch"]
             key = entry.get("key", branch)
             safe = re.sub(r"[^A-Za-z0-9._-]", "_", key)
-            print(f"\n=== Building {branch} ===", flush=True)
             if subprocess.run(["git", "-C", str(root), "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"]).returncode:
                 message = f"{branch}: local branch does not exist"
                 failures.append(message)
@@ -528,49 +533,75 @@ def build_matrix(args, matrix, output_directory):
                 if args.profiles_only:
                     failures.append(f"{branch}: no matching artifact exists for commit {branch_commit}")
                     continue
-            worktree = worktree_root / safe
-            try:
-                if worktree.exists():
-                    remove_worktree(root, worktree, worktree_root)
-                run(["git", "-C", root, "-c", "core.longpaths=true", "worktree", "add", "--detach", worktree, branch])
-                source_version = property_value(worktree / "gradle.properties", "minecraft_version")
-                if source_version != entry["expected"]:
-                    fail(f"Branch {branch} targets Minecraft {source_version}, expected {entry['expected']}. Complete the port before distributing this build.")
-                source_manifest = json.loads((worktree / "src/main/resources/fabric.mod.json").read_text(encoding="utf-8"))
-                if source_manifest.get("id") != "voxy":
-                    fail(f"Branch {branch} contains mod id '{source_manifest.get('id')}', not 'voxy'. Complete the Voxy port before distributing this build.")
-                build_version = entry.get("build_version", source_version)
-                required_java = entry.get("java") or target_java_version(worktree / "build.gradle", branch)
-                if required_java not in java_homes:
-                    java_homes[required_java] = get_java_home(required_java, getattr(args, f"java{required_java}_home", None), toolchains)
-                java_home = java_homes[required_java]
-                environment = dict(os.environ)
-                environment.update({"JAVA_HOME": str(java_home), "PATH": str(java_home / "bin") + os.pathsep + environment.get("PATH", "")})
-                print(f"Using JDK {required_java} from {java_home}")
-                gradle = worktree / ("gradlew.bat" if os.name == "nt" else "gradlew")
-                if os.name != "nt":
-                    gradle.chmod(gradle.stat().st_mode | 0o111)
-                arguments = [gradle, "--no-daemon"] + ([f"-Pminecraft_version={build_version}"] if "build_version" in entry else [])
-                if entry["tasks"]:
-                    print(f"Preparing generated include JARs for {branch}...")
-                    run(arguments + entry["tasks"], cwd=worktree, env=environment)
-                    run(arguments + ["build"], cwd=worktree, env=environment)
-                else:
-                    run(arguments + ["clean", "build"], cwd=worktree, env=environment)
-                jar = built_jar(worktree)
-                if jar_mod_id(jar) != "voxy":
-                    fail(f"Built artifact '{jar.name}' contains mod id '{jar_mod_id(jar)}', not 'voxy'.")
-                commit = output(["git", "-C", worktree, "rev-parse", "--short=8", "HEAD"])
-                artifact = output_directory / f"voxy-compat-{safe}-mc{build_version}-{commit}.jar"
-                shutil.copy2(jar, artifact)
-                artifacts[key] = artifact
-            except Exception as error:
-                failures.append(f"{branch}: {error}")
-                if not args.continue_on_build_failure:
-                    raise
-            finally:
-                if worktree.exists() and not args.keep_worktrees:
-                    remove_worktree(root, worktree, worktree_root)
+            builds.append((entry, key, safe))
+
+        concurrent_builds = min(args.build_workers, len(builds))
+        if concurrent_builds:
+            gradle_workers = args.gradle_workers or max(1, (os.cpu_count() or 1) // concurrent_builds)
+            print(f"\n=== Building {len(builds)} configuration(s) with up to {concurrent_builds} concurrent build(s); "
+                  f"up to {gradle_workers} Gradle worker(s) per build ===", flush=True)
+
+            def build_entry(item):
+                entry, key, safe = item
+                branch = entry["branch"]
+                worktree = worktree_root / safe
+                try:
+                    print(f"\n=== Building {branch} ({entry.get('build_version', entry['expected'])}) ===", flush=True)
+                    with worktree_lock:
+                        run(["git", "-C", root, "-c", "core.longpaths=true", "worktree", "add", "--detach", worktree, branch])
+                    source_version = property_value(worktree / "gradle.properties", "minecraft_version")
+                    if source_version != entry["expected"]:
+                        fail(f"Branch {branch} targets Minecraft {source_version}, expected {entry['expected']}. Complete the port before distributing this build.")
+                    source_manifest = json.loads((worktree / "src/main/resources/fabric.mod.json").read_text(encoding="utf-8"))
+                    if source_manifest.get("id") != "voxy":
+                        fail(f"Branch {branch} contains mod id '{source_manifest.get('id')}', not 'voxy'. Complete the Voxy port before distributing this build.")
+                    build_version = entry.get("build_version", source_version)
+                    required_java = entry.get("java") or target_java_version(worktree / "build.gradle", branch)
+                    with java_homes_lock:
+                        if required_java not in java_homes:
+                            java_homes[required_java] = get_java_home(required_java, getattr(args, f"java{required_java}_home", None), toolchains)
+                        java_home = java_homes[required_java]
+                    environment = dict(os.environ)
+                    environment.update({"JAVA_HOME": str(java_home), "PATH": str(java_home / "bin") + os.pathsep + environment.get("PATH", "")})
+                    print(f"[{branch}] Using JDK {required_java} from {java_home}", flush=True)
+                    gradle = worktree / ("gradlew.bat" if os.name == "nt" else "gradlew")
+                    if os.name != "nt":
+                        gradle.chmod(gradle.stat().st_mode | 0o111)
+                    arguments = [gradle, "--no-daemon", f"--max-workers={gradle_workers}"] + ([f"-Pminecraft_version={build_version}"] if "build_version" in entry else [])
+                    if entry["tasks"]:
+                        print(f"[{branch}] Preparing generated include JARs...", flush=True)
+                        run(arguments + entry["tasks"], cwd=worktree, env=environment)
+                        run(arguments + ["build"], cwd=worktree, env=environment)
+                    else:
+                        run(arguments + ["clean", "build"], cwd=worktree, env=environment)
+                    jar = built_jar(worktree)
+                    if jar_mod_id(jar) != "voxy":
+                        fail(f"Built artifact '{jar.name}' contains mod id '{jar_mod_id(jar)}', not 'voxy'.")
+                    commit = output(["git", "-C", worktree, "rev-parse", "--short=8", "HEAD"])
+                    artifact = output_directory / f"voxy-compat-{safe}-mc{build_version}-{commit}.jar"
+                    shutil.copy2(jar, artifact)
+                    return key, artifact, None
+                except Exception as error:
+                    return key, None, f"{branch}: {error}"
+                finally:
+                    if worktree.exists() and not args.keep_worktrees:
+                        with worktree_lock:
+                            remove_worktree(root, worktree, worktree_root)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=concurrent_builds, thread_name_prefix="voxy-build") as executor:
+                futures = [executor.submit(build_entry, item) for item in builds]
+                for future in concurrent.futures.as_completed(futures):
+                    key, artifact, error = future.result()
+                    if artifact:
+                        artifacts[key] = artifact
+                    if error:
+                        failures.append(error)
+                        if not args.continue_on_build_failure:
+                            for pending in futures:
+                                pending.cancel()
+                            break
+            if failures and not args.continue_on_build_failure:
+                fail(failures[0])
     finally:
         if not args.keep_worktrees:
             subprocess.run(["git", "-C", str(root), "worktree", "prune"])

@@ -9,20 +9,17 @@ import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.api.v0.IrisApi;
 import net.irisshaders.iris.gl.IrisRenderSystem;
 import net.irisshaders.iris.shadows.ShadowRenderer;
-import net.irisshaders.iris.vertices.ImmediateState;
 
 import java.io.IOException;
-import java.util.function.Supplier;
 
 public class IrisUtil {
 
-    public record CapturedViewportParameters(ChunkRenderMatrices matrices, FogParameters parameters, int width, int height, double x, double y, double z) {
+    public record CapturedViewportParameters(ChunkRenderMatrices matrices, FogParameters parameters, double x, double y, double z) {
         public Viewport<?> apply(VoxyRenderSystem vrs) {
-            return vrs.setupViewport(this.matrices.projection(), this.matrices.modelView(), this.parameters, this.width, this.height, this.x, this.y, this.z);
+            return vrs.setupViewport(this.matrices.projection(), this.matrices.modelView(), this.parameters, this.x, this.y, this.z);
         }
     }
 
-    public static boolean USED_IRIS_VIEWPORT;
     public static CapturedViewportParameters CAPTURED_VIEWPORT_PARAMETERS;
 
     public static final boolean IRIS_INSTALLED = FabricLoader.getInstance().isModLoaded("iris");
@@ -33,36 +30,8 @@ public class IrisUtil {
         return ShadowRenderer.ACTIVE;
     }
 
-    public static boolean irisShaderpackActiveSafe() {
-        if (!IRIS_INSTALLED) return false;
-        try {
-            return net.irisshaders.iris.api.v0.IrisApi.getInstance().isShaderPackInUse();
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
     public static boolean irisShadowActive() {
         return IRIS_INSTALLED && irisShadowActive0();
-    }
-
-    public static <T> T runWithoutVertexFormatExtension(Supplier<T> action) {
-        if (!IRIS_INSTALLED) return action.get();
-        return runWithoutVertexFormatExtension0(action);
-    }
-
-    private static <T> T runWithoutVertexFormatExtension0(Supplier<T> action) {
-        Boolean previous = ImmediateState.skipExtension.get();
-        ImmediateState.skipExtension.set(true);
-        try {
-            return action.get();
-        } finally {
-            if (previous == null) {
-                ImmediateState.skipExtension.remove();
-            } else {
-                ImmediateState.skipExtension.set(previous);
-            }
-        }
     }
 
     public static void clearIrisSamplers() {

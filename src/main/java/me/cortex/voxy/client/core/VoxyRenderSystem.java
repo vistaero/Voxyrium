@@ -2,19 +2,19 @@ package me.cortex.voxy.client.core;
 
 import com.mojang.blaze3d.opengl.GlConst;
 import com.mojang.blaze3d.opengl.GlStateManager;
+import com.mojang.blaze3d.systems.RenderSystem;
 import me.cortex.voxy.client.TimingStatistics;
 import me.cortex.voxy.client.VoxyClient;
 import me.cortex.voxy.client.config.VoxyConfig;
-import me.cortex.voxy.client.core.backend.VoxyGraphicsBackend;
+import me.cortex.voxy.client.core.gl.Capabilities;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.GlTexture;
 import me.cortex.voxy.client.core.model.ModelBakerySubsystem;
+import me.cortex.voxy.client.core.model.ModelStore;
+import me.cortex.voxy.client.core.rendering.ChunkBoundRenderer;
 import me.cortex.voxy.client.core.rendering.RenderDistanceTracker;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.client.core.rendering.ViewportSelector;
-import me.cortex.voxy.client.core.rendering.bounding.BoundRenderer;
-import me.cortex.voxy.client.core.rendering.bounding.ColumnStreamedBoundStore;
-import me.cortex.voxy.client.core.rendering.bounding.StreamedBoundStore;
 import me.cortex.voxy.client.core.rendering.building.RenderGenerationService;
 import me.cortex.voxy.client.core.rendering.hierachical.AsyncNodeManager;
 import me.cortex.voxy.client.core.rendering.hierachical.HierarchicalOcclusionTraverser;
@@ -24,9 +24,9 @@ import me.cortex.voxy.client.core.rendering.section.backend.AbstractSectionRende
 import me.cortex.voxy.client.core.rendering.section.backend.mdic.MDICSectionRenderer;
 import me.cortex.voxy.client.core.rendering.section.geometry.BasicSectionGeometryData;
 import me.cortex.voxy.client.core.rendering.section.geometry.IGeometryData;
-import me.cortex.voxy.client.core.rendering.util.AbstractDownloadStream;
+import me.cortex.voxy.client.core.rendering.util.DownloadStream;
 import me.cortex.voxy.client.core.rendering.util.PrintfDebugUtil;
-import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
+import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import me.cortex.voxy.client.core.util.GPUTiming;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.Logger;
@@ -36,7 +36,6 @@ import me.cortex.voxy.commonImpl.VoxyCommon;
 import net.caffeinemc.mods.sodium.client.util.FogParameters;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
-import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.lwjgl.opengl.GL11;
@@ -44,7 +43,7 @@ import org.lwjgl.opengl.GL11;
 import java.util.Arrays;
 import java.util.List;
 
-import static org.lwjgl.opengl.ARBDirectStateAccess.glGetTextureLevelParameteri;
+import static org.lwjgl.opengl.GL11.GL_VIEWPORT;
 import static org.lwjgl.opengl.GL11.glGetIntegerv;
 import static org.lwjgl.opengl.GL11C.*;
 import static org.lwjgl.opengl.GL30C.*;
@@ -55,9 +54,6 @@ import static org.lwjgl.opengl.GL43C.GL_SHADER_STORAGE_BUFFER_BINDING;
 public class VoxyRenderSystem {
     private final WorldEngine worldIn;
 
-    //Non-null exactly when MC runs on Vulkan: the whole render path is the
-    // pure-VK core and every GL member below stays null.
-    public final @Nullable me.cortex.voxy.client.core.vk.render.VkRenderCore vkCore;
 
     private final ModelBakerySubsystem modelService;
     private final RenderGenerationService renderGen;
@@ -68,9 +64,7 @@ public class VoxyRenderSystem {
 
 
     private final RenderDistanceTracker renderDistanceTracker;
-    private final BoundRenderer boundOutlineRenderer;
-    public StreamedBoundStore visbleSectionStream;//Sodium mixin fed; backend-neutral (GL creates here, VK core supplies its own)
-    private @Nullable ColumnStreamedBoundStore columnStreamedBoundStore;//Only used when FREX is enabled
+    public final ChunkBoundRenderer chunkBoundRenderer;
 
     private final ViewportSelector<?> viewportSelector;
 
@@ -85,28 +79,6 @@ public class VoxyRenderSystem {
     public VoxyRenderSystem(WorldEngine world, ServiceManager sm) {
         //Keep the world loaded, NOTE: this is done FIRST, to keep and ensure that even if the rest of loading takes more
         // than timeout, we keep the world acquired
-        //When MC itself renders through Vulkan there is no GL context at all; the
-        // entire renderer is the VkRenderCore and nothing below may run.
-        if (VoxyGraphicsBackend.usesNativeVulkanRenderer()) {
-            this.worldIn = world;
-            this.vkCore = new me.cortex.voxy.client.core.vk.render.VkRenderCore(world, sm);
-            this.visbleSectionStream = this.vkCore.getVisibleSectionStream();//Sodium visibility mixins feed it on VK too
-            this.modelService = null;
-            this.renderGen = null;
-            this.geometryData = null;
-            this.nodeManager = null;
-            this.nodeCleaner = null;
-            this.traversal = null;
-            this.renderDistanceTracker = null;
-            this.boundOutlineRenderer = null;
-            this.viewportSelector = null;
-            this.pipeline = null;
-            this.properties = null;
-            return;
-        }
-        this.vkCore = null;
-        this.visbleSectionStream = new StreamedBoundStore(GlBuffer::new);
-        //OpenGL path (unchanged)
         world.acquireRef();
         Logger.info("Creating Voxy render system");
 
@@ -115,7 +87,7 @@ public class VoxyRenderSystem {
         if (Minecraft.getInstance().options.renderDistance().get()<3) {
             String msg = "Voxy: Having a vanilla render distance of 2 can cause rare culling near the edge of your screen issues, please use 3 or more";
             Logger.warn(msg);
-            Minecraft.getInstance().gui.chatListener().handleSystemMessage(Component.literal(msg), false);
+            Minecraft.getInstance().getChatListener().handleSystemMessage(Component.literal(msg), false);
         }
 
         //Fking HATE EVERYTHING AAAAAAAAAAAAAAAA
@@ -139,7 +111,7 @@ public class VoxyRenderSystem {
 
                 this.geometryData = new BasicSectionGeometryData(1<<20, RenderResourceReuse.getOrCreateGeometryBuffer());
 
-                this.nodeManager = new AsyncNodeManager(1 << 21, this.geometryData, this.renderGen, new me.cortex.voxy.client.core.rendering.hierachical.GlNodeGpuOps());
+                this.nodeManager = new AsyncNodeManager(1 << 21, this.geometryData, this.renderGen);
                 this.nodeCleaner = new NodeCleaner(this.nodeManager);
                 this.traversal = new HierarchicalOcclusionTraverser(this.nodeManager, this.nodeCleaner, this.renderGen);
 
@@ -181,7 +153,7 @@ public class VoxyRenderSystem {
                 this.setRenderDistance(VoxyConfig.CONFIG.sectionRenderDistance);
             }
 
-            this.boundOutlineRenderer = new BoundRenderer(this.pipeline);
+            this.chunkBoundRenderer = new ChunkBoundRenderer(this.pipeline);
 
             Logger.info("Voxy render system created with " + this.geometryData.getMaxCapacity() + " geometry capacity, using pipeline '" + this.pipeline.getClass().getSimpleName() + "' with renderer '" + sectionRenderer.getClass().getSimpleName() + "'");
         } catch (RuntimeException e) {
@@ -201,16 +173,7 @@ public class VoxyRenderSystem {
     }
 
 
-    //True when MC — and therefore Voxy — is on the Vulkan backend. On VK Voxy
-    // renders through its own frame hook (MixinSodiumOpaqueVkFrame), so the
-    // GL/Sodium-interop hooks stay inert (Sodium 0.9.1 also renders through MC's
-    // Vulkan device, so its texture views are VulkanGpuTextureView).
-    public boolean isVulkanBackend() {
-        return this.vkCore != null;
-    }
-
-    public Viewport<?> setupViewport(Matrix4fc vanillaProjection, Matrix4fc modelView, FogParameters fogParameters, int width, int height, double cameraX, double cameraY, double cameraZ) {
-        if (this.vkCore != null) return null;//VK path renders via its own hook
+    public Viewport<?> setupViewport(Matrix4fc vanillaProjection, Matrix4fc modelView, FogParameters fogParameters, double cameraX, double cameraY, double cameraZ) {
         var viewport = this.getViewport();
         if (viewport == null) {
             return null;
@@ -226,13 +189,11 @@ public class VoxyRenderSystem {
         //cameraY += 100;
         var voxyProjection = computeProjectionMat(this.properties, vanillaProjection);
 
-        /*
         int[] dims = new int[4];
         glGetIntegerv(GL_VIEWPORT, dims);
 
         int width = dims[2];
         int height = dims[3];
-        */
 
         {//Apply render scaling factor
             var factor = this.pipeline.getRenderScalingFactor();
@@ -262,20 +223,13 @@ public class VoxyRenderSystem {
         return viewport;
     }
 
-
-    public void renderOpaque(Viewport<?> viewport, int sourceDepthTexture, int sourceColourTexture) {
-        if (this.vkCore != null) return;//VK path renders via its own hook
+    public void renderOpaque(Viewport<?> viewport) {
         if (viewport == null) {
             return;
         }
-
         if (viewport.width <= 0 || viewport.height <= 0) {
             Logger.error("Viewport width or height was zero, this is bad bad bad, exiting frame");
             return;//Only render on valid viewport
-        }
-
-        if (sourceDepthTexture == 0) {
-            throw new IllegalStateException("Source depth texture cannot be 0");
         }
 
         TimingStatistics.resetSamplers();
@@ -290,39 +244,28 @@ public class VoxyRenderSystem {
             oldBufferBindings[i] = glGetIntegeri(GL_SHADER_STORAGE_BUFFER_BINDING, i);
         }
 
-        GlStateManager._enableDepthTest();
-        GlStateManager._depthFunc(this.properties.closerEqualDepthCompare());
-        GlStateManager._depthMask(true);
-        GlStateManager._disablePolygonOffset();
 
         int oldFB = GL11.glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING);
+        int boundFB = oldFB;
 
         int[] dims = new int[4];
         glGetIntegerv(GL_VIEWPORT, dims);
 
+        glViewport(0,0, viewport.width, viewport.height);
+
+        //var target = DefaultTerrainRenderPasses.CUTOUT.getTarget();
+        //boundFB = ((net.minecraft.client.texture.GlTexture) target.getColorAttachment()).getOrCreateFramebuffer(((GlBackend) RenderSystem.getDevice()).getFramebufferManager(), target.getDepthAttachment());
+        if (boundFB == 0) {
+            throw new IllegalStateException("Cannot use the default framebuffer as cannot source from it");
+        }
+
         //this.autoBalanceSubDivSize();
-
-
-        glViewport(0, 0, viewport.width, viewport.height);
-
-        int scrWidth  = glGetTextureLevelParameteri(sourceDepthTexture, 0, GL_TEXTURE_WIDTH);
-        int scrHeight = glGetTextureLevelParameteri(sourceDepthTexture, 0, GL_TEXTURE_HEIGHT);
 
         this.pipeline.preSetup(viewport);
 
         TimingStatistics.E.start();
-        if (this.visbleSectionStream != null && (!VoxyClient.disableSodiumChunkRender()) && !IrisUtil.irisShadowActive()) {
-            if (VoxyClient.isFrexActive()!=(this.columnStreamedBoundStore!=null)) {
-                if (this.columnStreamedBoundStore == null) {
-                    this.columnStreamedBoundStore = new ColumnStreamedBoundStore();
-                } else {
-                    this.columnStreamedBoundStore.free();
-                    this.columnStreamedBoundStore = null;
-                }
-            }
-            //viewport.depthBoundingBuffer.framebuffer.bind(GL_COLOR_ATTACHMENT0, sourceColourTexture).verify();
-            //If the bound renderer exists, it means we must be in FREX mode
-            this.boundOutlineRenderer.render(viewport, this.columnStreamedBoundStore==null?this.visbleSectionStream:this.columnStreamedBoundStore);
+        if ((!VoxyClient.disableSodiumChunkRender())&&!IrisUtil.irisShadowActive()) {
+            this.chunkBoundRenderer.render(viewport);
         } else {
             viewport.depthBoundingBuffer.clear(this.properties.inverseClearDepth());
         }
@@ -331,7 +274,7 @@ public class VoxyRenderSystem {
 
         GPUTiming.INSTANCE.marker();
         //The entire rendering pipeline (excluding the chunkbound thing)
-        this.pipeline.runPipeline(viewport, sourceDepthTexture, sourceColourTexture, scrWidth, scrHeight);
+        this.pipeline.runPipeline(viewport, boundFB, dims[2], dims[3]);
         GPUTiming.INSTANCE.marker();
 
 
@@ -343,7 +286,7 @@ public class VoxyRenderSystem {
         //As much dynamic runtime stuff here
         {
             //Tick upload stream (this is ok to do here as upload ticking is just memory management)
-            AbstractUploadStream.INSTANCE().tick();
+            UploadStream.INSTANCE.tick();
 
             while (this.renderDistanceTracker.setCenterAndProcess(viewport.cameraX, viewport.cameraZ) && VoxyClient.isFrexActive());//While FF is active, run until everything is processed
             TimingStatistics.H.start();
@@ -351,11 +294,6 @@ public class VoxyRenderSystem {
             do { this.modelService.tick(900_000); } while (VoxyClient.isFrexActive() && !this.modelService.areQueuesEmpty());
             TimingStatistics.H.stop();
         }
-
-
-
-
-
         GPUTiming.INSTANCE.marker();
         TimingStatistics.postDynamic.stop();
 
@@ -365,14 +303,11 @@ public class VoxyRenderSystem {
         glViewport(dims[0], dims[1], dims[2], dims[3]);
 
         {//Reset state manager stuffs
-            GlStateManager._glUseProgram(0);
             glUseProgram(0);
-            GlStateManager._enableDepthTest();
             glEnable(GL_DEPTH_TEST);
             glDisable(GL_STENCIL_TEST);
 
             GlStateManager._glBindVertexArray(0);//Clear binding
-            glBindVertexArray(0);
 
             GlStateManager._activeTexture(GlConst.GL_TEXTURE1);
             for (int i = 0; i < 12; i++) {
@@ -388,14 +323,6 @@ public class VoxyRenderSystem {
             for (int i = 0; i < oldBufferBindings.length; i++) {
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, i, oldBufferBindings[i]);
             }
-            GlStateManager._blendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-            glBlendEquation(GL_FUNC_ADD);
-            GlStateManager._blendFuncSeparate(0,0, 0, 0);
-            glBlendFunc(0, 0);
-            GlStateManager._disableBlend(0);
-            glDisable(GL_BLEND);
-            GlStateManager._depthFunc(GL_LESS);
-            glDepthFunc(GL_LESS);
 
             //((SodiumShader) Iris.getPipelineManager().getPipelineNullable().getSodiumPrograms().getProgram(DefaultTerrainRenderPasses.CUTOUT).getInterface()).setupState(DefaultTerrainRenderPasses.CUTOUT, fogParameters);
         }
@@ -451,7 +378,7 @@ public class VoxyRenderSystem {
         }
     }
 
-    public static float getVanillaRenderDistance() {
+    public static float getRenderDistance() {
         return Minecraft.getInstance().options.getEffectiveRenderDistance()*16;
     }
 
@@ -488,13 +415,19 @@ public class VoxyRenderSystem {
         ).mulLocal(makeProjectionMatrix(nearVoxy, 16*3000));
     }*/
 
-    public static Matrix4f computeProjectionMat(RenderProperties properties, Matrix4fc base) {
+    private static float getGameFoV() {
+        var client = Minecraft.getInstance();
+        var gameRenderer = client.gameRenderer;
+        return gameRenderer.getFov(gameRenderer.getMainCamera(), client.getDeltaTracker().getGameTimeDeltaPartialTick(true), true);
+    }
+
+    private static Matrix4f computeProjectionMat(RenderProperties properties, Matrix4fc base) {
 
         //this jank is to capture the extra crap they inject like viewbobbing
-        var rawMCProj = Minecraft.getInstance().gameRenderer.gameRenderState().levelRenderState.cameraRenderState.projectionMatrix;
+        var rawMCProj = Minecraft.getInstance().gameRenderer.getProjectionMatrix(getGameFoV());
         var extraProjection = rawMCProj.invert(new Matrix4f()).mul(base);
 
-        float near = getVanillaRenderDistance()<=32.0f?8f:16f;
+        float near = getRenderDistance()<=32.0f?8f:16f;
         near = VoxyClient.disableSodiumChunkRender()?0.1f:near;
 
         float far = 16*3000;
@@ -525,7 +458,7 @@ public class VoxyRenderSystem {
             return false;
         }
         //If frex is running we must tick everything to ensure correctness
-        AbstractUploadStream.INSTANCE().tick();
+        UploadStream.INSTANCE.tick();
         //Done here as is allows less gl state resetup
         this.modelService.tick(100_000_000);
         GL11.glFinish();
@@ -533,15 +466,10 @@ public class VoxyRenderSystem {
     }
 
     public void setRenderDistance(float renderDistance) {
-        if (this.vkCore != null) {
-            this.vkCore.setRenderDistance(renderDistance);
-            return;
-        }
         this.renderDistanceTracker.setRenderDistance((int) Math.ceil(renderDistance+1));//the +1 is to cover the outer ring of chunks when rendering a circle
     }
 
     public Viewport<?> getViewport() {
-        if (this.vkCore != null) return null;
         if (IrisUtil.irisShadowActive()) {
             return null;
         }
@@ -549,10 +477,6 @@ public class VoxyRenderSystem {
     }
 
     public void addDebugInfo(List<String> debug) {
-        if (this.vkCore != null) {
-            this.vkCore.addDebugInfo(debug);
-            return;
-        }
         debug.add("Buf/Tex [#/Mb]: [" + GlBuffer.getCount() + "/" + (GlBuffer.getTotalSize()/1_000_000) + "],[" + GlTexture.getCount() + "/" + (GlTexture.getEstimatedTotalSize()/1_000_000)+"]");
         {
             this.modelService.addDebugData(debug);
@@ -571,12 +495,8 @@ public class VoxyRenderSystem {
     }
 
     public void shutdown() {
-        if (this.vkCore != null) {
-            this.vkCore.shutdown();
-            return;
-        }
         Logger.info("Flushing download stream");
-        AbstractDownloadStream.INSTANCE().flushWaitClear();
+        DownloadStream.INSTANCE.flushWaitClear();
         Logger.info("Shutting down rendering");
         try {
             //Cleanup callbacks
@@ -595,14 +515,7 @@ public class VoxyRenderSystem {
                 RenderResourceReuse.giveBackGeometryBuffer(((BasicSectionGeometryData)this.geometryData).getGeometryBuffer());
             }
 
-            this.boundOutlineRenderer.free();
-            if (this.visbleSectionStream != null) {
-                this.visbleSectionStream.free();
-            }
-            if (this.columnStreamedBoundStore != null) {
-                this.columnStreamedBoundStore.free();
-                this.columnStreamedBoundStore = null;
-            }
+            this.chunkBoundRenderer.free();
 
             this.viewportSelector.free();
         } catch (Exception e) {Logger.error("Error shutting down renderer components", e);}
@@ -612,7 +525,7 @@ public class VoxyRenderSystem {
 
 
         Logger.info("Flushing download stream");
-        AbstractDownloadStream.INSTANCE().flushWaitClear();
+        DownloadStream.INSTANCE.flushWaitClear();
 
         //Release hold on the world
         this.worldIn.releaseRef();

@@ -2,10 +2,12 @@ package me.cortex.voxy.client.core.model;
 
 
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import me.cortex.voxy.client.VoxyClient;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.world.other.Mapper;
-
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -13,7 +15,7 @@ public class ModelBakerySubsystem {
     //Redo to just make it request the block faces with the async texture download stream which
     // basicly solves all the render stutter due to the baking
 
-    private final IModelStore storage;
+    private final ModelStore storage = new ModelStore();
     public final ModelFactory factory;
     private final Mapper mapper;
 
@@ -21,16 +23,11 @@ public class ModelBakerySubsystem {
     private volatile boolean isRunning = true;
     private volatile Throwable processingThreadException;
     public ModelBakerySubsystem(Mapper mapper) {
-        this(mapper, new ModelStore());
-    }
-
-    public ModelBakerySubsystem(Mapper mapper, IModelStore store) {
-        this.storage = store;
         this.mapper = mapper;
         this.factory = new ModelFactory(mapper, this.storage);
         this.processingThread = new Thread(()->{//TODO replace this with something good/integrate it into the async processor so that we just have less threads overall
             while (this.isRunning) {
-                while (this.factory.processAllThings());
+                this.factory.processAllThings();
                 LockSupport.park();
             }
         }, "Model factory processor");
@@ -94,7 +91,7 @@ public class ModelBakerySubsystem {
         debug.add(String.format("IF/MC: %03d, %04d", this.factory.getInflightCount(),  this.factory.getBakedCount()));//Model bake queue/in flight/model baked count
     }
 
-    public IModelStore getStore() {
+    public ModelStore getStore() {
         return this.storage;
     }
 

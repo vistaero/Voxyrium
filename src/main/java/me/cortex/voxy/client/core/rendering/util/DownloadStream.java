@@ -21,7 +21,11 @@ import static org.lwjgl.opengl.GL42.glMemoryBarrier;
 import static org.lwjgl.opengl.GL44.GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT;
 import static org.lwjgl.opengl.GL45.glCopyNamedBufferSubData;
 
-public class DownloadStream extends AbstractDownloadStream {
+public class DownloadStream {
+    public interface DownloadResultConsumer {
+        void consume(long ptr, long size);
+    }
+
     private final AllocationArena allocationArena = new AllocationArena();
     private final GlPersistentMappedBuffer downloadBuffer;
 
@@ -38,15 +42,29 @@ public class DownloadStream extends AbstractDownloadStream {
     private long caddr = -1;
     private long offset = 0;
 
-    @Override
-    public void download(IDeviceBuffer buffer, long downloadOffset, long size, DownloadResultConsumer resultConsumer) {
+    //Pulls the entire buffer from the gpu
+    public void download(GlBuffer buffer, DownloadResultConsumer resultConsumer) {
+        this.download(buffer, 0, buffer.size(), resultConsumer);
+    }
+
+    public void download(GlBuffer buffer, Consumer<MemoryBuffer> resultConsumer) {
+        this.download(buffer, 0, buffer.size(), resultConsumer);
+    }
+
+    public void download(GlBuffer buffer, long downloadOffset, long size, Consumer<MemoryBuffer> consumer) {
+        this.download(buffer, downloadOffset, size, (ptr,size2)-> {
+            consumer.accept(MemoryBuffer.createUntrackedUnfreeableRawFrom(ptr, size));
+        });
+    }
+
+    public void download(GlBuffer buffer, long downloadOffset, long size, DownloadResultConsumer resultConsumer) {
         if (size > Integer.MAX_VALUE) {
             throw new IllegalArgumentException();
         }
         if (size <= 0) {
             throw new IllegalArgumentException();
         }
-        if (downloadOffset+size > buffer.sizeBytes()) {
+        if (downloadOffset+size > buffer.size()) {
             throw new IllegalArgumentException();
         }
 
@@ -78,14 +96,13 @@ public class DownloadStream extends AbstractDownloadStream {
             throw new IllegalStateException();
         }
 
-        this.downloadList.add(new DownloadData((GlBuffer) buffer, addr, downloadOffset, size, resultConsumer));
+        this.downloadList.add(new DownloadData(buffer, addr, downloadOffset, size, resultConsumer));
 
         //TODO: maybe not auto-commit
         this.commit();
     }
 
 
-    @Override
     public void commit() {
         if (this.downloadList.isEmpty()) {
             return;
@@ -103,7 +120,6 @@ public class DownloadStream extends AbstractDownloadStream {
         this.offset = 0;
     }
 
-    @Override
     public void tick() {
         this.commit();
         if (!this.thisFrameAllocations.isEmpty()) {
@@ -133,7 +149,6 @@ public class DownloadStream extends AbstractDownloadStream {
     }
 
     //Synchonize force flushes everything
-    @Override
     public void waitDiscard() {
         glFinish();
         var fence = new GlFence();
@@ -149,7 +164,6 @@ public class DownloadStream extends AbstractDownloadStream {
         }
     }
 
-    @Override
     public void flushWaitClear() {
         glFinish();
         this.tick();
@@ -170,8 +184,6 @@ public class DownloadStream extends AbstractDownloadStream {
     private record DownloadData(GlBuffer target, long downloadStreamOffset, long targetOffset, long size, DownloadResultConsumer resultConsumer) {}
 
 
-    @Override
-    public void free() {
-        this.downloadBuffer.free();
-    }
+    // Global download stream
+    public static final DownloadStream INSTANCE = new DownloadStream(1<<25);//32 mb download buffer
 }

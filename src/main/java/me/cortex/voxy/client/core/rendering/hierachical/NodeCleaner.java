@@ -1,16 +1,18 @@
 package me.cortex.voxy.client.core.rendering.hierachical;
 
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import me.cortex.voxy.client.core.gl.Capabilities;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.shader.AutoBindingShader;
 import me.cortex.voxy.client.core.gl.shader.Shader;
 import me.cortex.voxy.client.core.gl.shader.ShaderType;
-import me.cortex.voxy.client.core.rendering.util.AbstractDownloadStream;
+import me.cortex.voxy.client.core.rendering.util.DownloadStream;
 import me.cortex.voxy.client.core.rendering.util.PrintfDebugUtil;
-import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
+import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import org.lwjgl.opengl.ARBDirectStateAccess;
 import org.lwjgl.system.MemoryUtil;
 
+import static me.cortex.voxy.client.core.rendering.util.UploadStream.alignUp;
 import static org.lwjgl.opengl.GL30C.glBindBufferRange;
 import static org.lwjgl.opengl.GL42C.glMemoryBarrier;
 import static org.lwjgl.opengl.GL43C.*;
@@ -23,7 +25,7 @@ import static org.lwjgl.opengl.GL43C.*;
 
 
 //TODO : USE THIS IN HierarchicalOcclusionTraverser instead of other shit
-public class NodeCleaner implements INodeCleaner {
+public class NodeCleaner {
     //TODO: use batch_visibility_set to clear visibility data when nodes are removed!! (TODO: nodeManager will need to forward info to this)
 
 
@@ -101,9 +103,7 @@ public class NodeCleaner implements INodeCleaner {
     }
 
 
-    @Override
-    public void tick(me.cortex.voxy.client.core.rendering.util.IDeviceBuffer nodeDataBufferIn) {
-        GlBuffer nodeDataBuffer = (GlBuffer) nodeDataBufferIn;
+    public void tick(GlBuffer nodeDataBuffer) {
         this.visibilityId++;
         if (this.shouldCleanGeometry()) {
             this.outputBuffer.fill(this.nodeManager.maxNodeCount - 2);//TODO: maybe dont set to zero??
@@ -128,7 +128,7 @@ public class NodeCleaner implements INodeCleaner {
             glDispatchCompute(1, 1, 1);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
-            AbstractDownloadStream.INSTANCE().download(this.outputBuffer, 4 * OUTPUT_COUNT, 8 * OUTPUT_COUNT,
+            DownloadStream.INSTANCE.download(this.outputBuffer, 4 * OUTPUT_COUNT, 8 * OUTPUT_COUNT,
                     buffer -> this.nodeManager.submitRemoveBatch(buffer.copy())//Copy into buffer and emit to node manager
             );
         }
@@ -145,21 +145,20 @@ public class NodeCleaner implements INodeCleaner {
         }
     }
 
-    @Override
     public void updateIds(IntOpenHashSet collection) {
         if (!collection.isEmpty()) {
             int count = collection.size();
-            long addr = AbstractUploadStream.INSTANCE().rawUploadAddress(count*4);//Internally does upsizing alignement
+            long addr = UploadStream.INSTANCE.rawUploadAddress(count*4);//Internally does upsizing alignement
 
-            long ptr = AbstractUploadStream.INSTANCE().getBaseAddress() + addr;
+            long ptr = UploadStream.INSTANCE.getBaseAddress() + addr;
             var iter = collection.iterator();
             while (iter.hasNext()) {
                 MemoryUtil.memPutInt(ptr, iter.nextInt()); ptr+=4;
             }
-            AbstractUploadStream.INSTANCE().commit();
+            UploadStream.INSTANCE.commit();
 
             this.batchClear.bind();
-            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 1, AbstractUploadStream.INSTANCE().getRawBufferId(), addr, AbstractUploadStream.INSTANCE().alignUpAlloc(count*4));
+            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 1, UploadStream.INSTANCE.getRawBufferId(), addr, UploadStream.alignUpAlloc(count*4));
             glUniform1ui(0, count);
             glUniform1ui(1, this.visibilityId);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
@@ -184,7 +183,6 @@ public class NodeCleaner implements INodeCleaner {
         int a = 0;
     }
 
-    @Override
     public void free() {
         this.sorter.free();
         this.visibilityBuffer.free();

@@ -1,6 +1,5 @@
 package me.cortex.voxy.client.core.gl;
 
-import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.util.TrackedObject;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.system.MemoryUtil;
@@ -10,13 +9,10 @@ import static org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE;
 import static org.lwjgl.opengl.GL15.glDeleteBuffers;
 import static org.lwjgl.opengl.GL45C.*;
 
-public class GlBuffer extends TrackedObject implements me.cortex.voxy.client.core.rendering.IRenderList, me.cortex.voxy.client.core.rendering.util.IDeviceBuffer {
+public class GlBuffer extends TrackedObject {
     public final int id;
     private final long size;
     private final int flags;
-
-    @Override public int glId() { return this.id; }
-    @Override public long sizeBytes() { return this.size; }
 
     private static int COUNT;
     private static long TOTAL_SIZE;
@@ -24,11 +20,6 @@ public class GlBuffer extends TrackedObject implements me.cortex.voxy.client.cor
     public GlBuffer(long size) {
         this(size, 0);
     }
-
-    public GlBuffer(MemoryBuffer buffer) {
-        this(buffer.size, 0, false, buffer.address);
-    }
-
     public GlBuffer(long size, boolean zero) {
         this(size, 0, zero);
     }
@@ -38,14 +29,10 @@ public class GlBuffer extends TrackedObject implements me.cortex.voxy.client.cor
     }
 
     public GlBuffer(long size, int flags, boolean zero) {
-        this(size, flags, zero, 0);
-    }
-
-    private GlBuffer(long size, int flags, boolean zero, long data) {
         this.flags = flags;
         this.id = glCreateBuffers();
         this.size = size;
-        nglNamedBufferStorage(this.id, size, data, flags);
+        glNamedBufferStorage(this.id, size, flags);
         if ((flags&GL_SPARSE_STORAGE_BIT_ARB)==0 && zero) {
             this.zero();
         }

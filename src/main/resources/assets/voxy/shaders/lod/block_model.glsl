@@ -42,7 +42,3 @@ bool modelIsTranslucent(BlockModel model) {
 bool modelIsShaded(BlockModel model) {
     return ((model.flagsA)&8u) != 0;
 }
-
-bool modelIsFluid(BlockModel model) {
-    return ((model.flagsA)&16u) != 0;
-}

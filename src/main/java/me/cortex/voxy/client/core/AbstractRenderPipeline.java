@@ -3,7 +3,6 @@ package me.cortex.voxy.client.core;
 import me.cortex.voxy.client.RenderStatistics;
 import me.cortex.voxy.client.TimingStatistics;
 import me.cortex.voxy.client.VoxyClient;
-import me.cortex.voxy.client.core.gl.GlFramebuffer;
 import me.cortex.voxy.client.core.model.ModelBakerySubsystem;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.client.core.rendering.hierachical.AsyncNodeManager;
@@ -12,7 +11,7 @@ import me.cortex.voxy.client.core.rendering.hierachical.NodeCleaner;
 import me.cortex.voxy.client.core.rendering.post.FullscreenBlit;
 import me.cortex.voxy.client.core.rendering.section.backend.AbstractSectionRenderer;
 import me.cortex.voxy.client.core.rendering.util.DepthFramebuffer;
-import me.cortex.voxy.client.core.rendering.util.AbstractDownloadStream;
+import me.cortex.voxy.client.core.rendering.util.DownloadStream;
 import me.cortex.voxy.client.core.util.GPUTiming;
 import me.cortex.voxy.common.util.TrackedObject;
 import org.joml.Matrix4f;
@@ -34,21 +33,15 @@ import static org.lwjgl.opengl.GL11C.glEnable;
 import static org.lwjgl.opengl.GL11C.glStencilFunc;
 import static org.lwjgl.opengl.GL11C.glStencilMask;
 import static org.lwjgl.opengl.GL11C.glStencilOp;
-import static org.lwjgl.opengl.GL30C.GL_COLOR_ATTACHMENT0;
 import static org.lwjgl.opengl.GL30C.GL_DEPTH24_STENCIL8;
 import static org.lwjgl.opengl.GL30C.GL_FRAMEBUFFER;
 import static org.lwjgl.opengl.GL30C.glBindFramebuffer;
-import static org.lwjgl.opengl.GL42.*;
-import static org.lwjgl.opengl.GL42.GL_DEPTH_ATTACHMENT;
-import static org.lwjgl.opengl.GL42.GL_DEPTH_STENCIL;
-import static org.lwjgl.opengl.GL42.GL_NEAREST;
-import static org.lwjgl.opengl.GL42.GL_TEXTURE_MAG_FILTER;
-import static org.lwjgl.opengl.GL42.GL_TEXTURE_MIN_FILTER;
+import static org.lwjgl.opengl.GL42.GL_LEQUAL;
+import static org.lwjgl.opengl.GL42.GL_NOTEQUAL;
 import static org.lwjgl.opengl.GL42.glDepthFunc;
-import static org.lwjgl.opengl.GL42.glDepthMask;
-import static org.lwjgl.opengl.GL42.glUniform2f;
-import static org.lwjgl.opengl.GL42.nglUniformMatrix4fv;
+import static org.lwjgl.opengl.GL42.*;
 import static org.lwjgl.opengl.GL45.glClearNamedFramebufferfi;
+import static org.lwjgl.opengl.GL45.glGetNamedFramebufferAttachmentParameteri;
 import static org.lwjgl.opengl.GL45C.glBindTextureUnit;
 
 public abstract class AbstractRenderPipeline extends TrackedObject {
@@ -64,8 +57,6 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
     private final FullscreenBlit depthStencilSetup;
 
     public final DepthFramebuffer fb = new DepthFramebuffer(GL_DEPTH24_STENCIL8);
-
-    private final GlFramebuffer scratchFramebuffer = new GlFramebuffer();
 
     protected final boolean deferTranslucency;
 
@@ -99,14 +90,15 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
     }
 
-    protected abstract int setup(Viewport<?> viewport, int sourceDepthTexture, int srcWidth, int srcHeight);
-    protected abstract void postOpaquePreTranslucent(Viewport<?> viewport, int sourceDepthTexture);
-    protected void finish(Viewport<?> viewport, int sourceDepthTexture, int outputFramebuffer, int srcWidth, int srcHeight) {
+    protected abstract int setup(Viewport<?> viewport, int sourceFramebuffer, int srcWidth, int srcHeight);
+    protected abstract void postOpaquePreTranslucent(Viewport<?> viewport, int sourceFrameBuffer);
+    protected void finish(Viewport<?> viewport, int sourceFrameBuffer, int srcWidth, int srcHeight) {
         glDisable(GL_STENCIL_TEST);
+        glBindFramebuffer(GL_FRAMEBUFFER, sourceFrameBuffer);
     }
 
-    public void runPipeline(Viewport<?> viewport, int sourceDepthTexture, int sourceColourTexture, int srcWidth, int srcHeight) {
-        int depthTexture = this.setup(viewport, sourceDepthTexture, srcWidth, srcHeight);
+    public void runPipeline(Viewport<?> viewport, int sourceFrameBuffer, int srcWidth, int srcHeight) {
+        int depthTexture = this.setup(viewport, sourceFrameBuffer, srcWidth, srcHeight);
 
         var rs = ((AbstractSectionRenderer)this.sectionRenderer);
         GPUTiming.INSTANCE.marker("RO");
@@ -129,7 +121,7 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
         rs.postOpaquePreperation(viewport);
 
-        this.postOpaquePreTranslucent(viewport, sourceDepthTexture);
+        this.postOpaquePreTranslucent(viewport, sourceFrameBuffer);
         GPUTiming.INSTANCE.marker("RT");
 
         if (!this.deferTranslucency) {
@@ -137,14 +129,11 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
         }
         GPUTiming.INSTANCE.marker();
 
-        //TODO:FIXME PERF, dont reattach every frame
-        this.scratchFramebuffer.bind(GL_DEPTH_ATTACHMENT, sourceDepthTexture)
-                .bind(GL_COLOR_ATTACHMENT0, sourceColourTexture);
-        this.finish(viewport, sourceDepthTexture, this.scratchFramebuffer.id, srcWidth, srcHeight);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        this.finish(viewport, sourceFrameBuffer, srcWidth, srcHeight);
+        glBindFramebuffer(GL_FRAMEBUFFER, sourceFrameBuffer);
     }
 
-    protected void initDepthStencil(int sourceDepthTexture, int targetFb, int srcWidth, int srcHeight, int width, int height) {
+    protected void initDepthStencil(int sourceFrameBuffer, int targetFb, int srcWidth, int srcHeight, int width, int height) {
         glClearNamedFramebufferfi(targetFb, GL_DEPTH_STENCIL, 0, this.properties.clearDepth(), 1);
         // using blit to copy depth from mismatched depth formats is not portable so instead a full screen pass is performed for a depth copy
         // the mismatched formats in this case is the d32 to d24s8
@@ -161,7 +150,8 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
 
         this.depthStencilSetup.bind();
-        glBindTextureUnit(0, sourceDepthTexture);
+        int depthTexture = glGetNamedFramebufferAttachmentParameteri(sourceFrameBuffer, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME);
+        glBindTextureUnit(0, depthTexture);
         glBindSampler(0, DEPTH_SAMPLER);
         glUniform2f(1,((float)width)/srcWidth, ((float)height)/srcHeight);
         glDepthMask(true);
@@ -208,7 +198,7 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
             TimingStatistics.D.start();
             //Tick download stream
-            AbstractDownloadStream.INSTANCE().tick();
+            DownloadStream.INSTANCE.tick();
             TimingStatistics.D.stop();
 
             this.nodeManager.tick(this.traversal.getNodeBuffer(), this.nodeCleaner);
@@ -229,7 +219,6 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
     @Override
     protected void free0() {
-        this.scratchFramebuffer.free();
         this.fb.free();
         this.sectionRenderer.free();
         this.depthStencilSetup.delete();

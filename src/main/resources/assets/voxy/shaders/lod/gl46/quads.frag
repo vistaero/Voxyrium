@@ -9,13 +9,8 @@
 #extension GL_NV_fragment_shader_barycentric: require
 #endif
 
-#ifdef VOXY_VULKAN
-layout(binding = 8) uniform sampler2D blockModelAtlas;
-layout(binding = 10) uniform sampler2D depthTex;
-#else
 layout(binding = 0) uniform sampler2D blockModelAtlas;
 layout(binding = 2) uniform sampler2D depthTex;
-#endif
 
 //#define DEBUG_RENDER
 
@@ -29,18 +24,6 @@ layout(location = 1) in vec2 uv;
 
 #ifdef DEBUG_RENDER
 layout(location = 7) in flat uint quadDebug;
-#endif
-
-//On non-Apple macOS GPUs, older MoltenVK/SPIRV-Cross builds can misclassify
-//covered fragments while guarding stores after OpKill.  The result is a depth
-//write without the matching colour write, which the SSAO pass deliberately
-//visualises as red.  A zero sample mask has the same framebuffer semantics as
-//discard for this single-sample pipeline without entering MoltenVK's broken
-//discard/helper-thread path.  Other backends retain the original OpKill path.
-#ifdef VOXY_VULKAN_SAMPLE_MASK_DISCARD
-#define VOXY_DISCARD_FRAGMENT() { gl_SampleMask[0] = 0; return; }
-#else
-#define VOXY_DISCARD_FRAGMENT() { discard; return; }
 #endif
 
 
@@ -131,16 +114,12 @@ vec4 computeColour(vec2 texturePos, vec4 colour) {
 
 
 void main() {
-    #ifdef VOXY_VULKAN_SAMPLE_MASK_DISCARD
-    gl_SampleMask[0] = 1;
-    #endif
-
     //vec2 uv = vec2(0);
     //Tile is the tile we are in
     vec2 tile;
     #ifdef USE_NV_BARRY
     #ifdef USE_SINGLE_TRI
-    if (gl_BaryCoordNV.x>=0.5||gl_BaryCoordNV.y>=0.5) VOXY_DISCARD_FRAGMENT();
+    if (gl_BaryCoordNV.x>=0.5||gl_BaryCoordNV.y>=0.5) discard;
     vec2 uv = gl_BaryCoordNV.yx*(vec2((interData.x>>8)&0xFu, (interData.x>>12)&0xFu)+1)*2;
     #else
     vec2 uv = mix(gl_BaryCoordNV.yx, 1-gl_BaryCoordNV.xz, gl_PrimitiveID&1)*(vec2((interData.x>>8)&0xFu, (interData.x>>12)&0xFu)+1);
@@ -165,7 +144,7 @@ void main() {
     // fragments, we do this here after derivative computation
     //Trying it with all shaders
     //#ifdef PATCHED_SHADER
-    #if !defined(PATCHED_SHADER_ALLOW_DERIVATIVES) && !defined(VOXY_VULKAN_SAMPLE_MASK_DISCARD)
+    #ifndef PATCHED_SHADER_ALLOW_DERIVATIVES
     if (gl_HelperInvocation) {
         return;
     }
@@ -173,12 +152,14 @@ void main() {
     //#endif
 
     if (any(notEqual(clamp(tile, vec2(0), vec2((interData.x>>8)&0xFu, (interData.x>>12)&0xFu)), tile))) {
-        VOXY_DISCARD_FRAGMENT();
+        discard;
+        return;
     }
 
     //Check the minimum bounding texture and ensure we are greater than it
     if (DEPTH_SCALAR_COMPARE(gl_FragCoord.z, texelFetch(depthTex, ivec2(gl_FragCoord.xy), 0).r)) {
-        VOXY_DISCARD_FRAGMENT();
+        discard;
+        return;
     }
 
 
@@ -193,11 +174,12 @@ void main() {
         //This is stupidly stupidly bad for divergence
         //TODO: FIXME, basicly what this do is sample the exact pixel (no lod) for discarding, this stops mipmapping fucking it over
         #ifndef DEBUG_RENDER
-        VOXY_DISCARD_FRAGMENT();
+        discard;
+        return;
         #endif
     }
 
-    #if !defined(PATCHED_SHADER_ALLOW_DERIVATIVES) && !defined(VOXY_VULKAN_SAMPLE_MASK_DISCARD)
+    #ifndef PATCHED_SHADER_ALLOW_DERIVATIVES
     if (gl_HelperInvocation) {
         return;
     }
@@ -267,3 +249,4 @@ colour = textureGrad(blockModelAtlas, texPos, dx, dy);
 
 //Undefine the depth stuff
 #import <voxy:util/depthutils.glsl>
+

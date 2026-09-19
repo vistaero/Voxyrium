@@ -13,13 +13,8 @@ public class MipGen {
     static {
         if (MODEL_TEXTURE_SIZE>16) throw new IllegalStateException("TODO: THIS MUST BE UPDATED, IT CURRENTLY ASSUMES 16 OR SMALLER SIZE");
     }
-    private record Cache(short[] SCRATCH, ByteArrayFIFOQueue QUEUE) {
-        private Cache() {
-            this(new short[MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE], new ByteArrayFIFOQueue(MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE));
-        }
-    }
-
-    private static final ThreadLocal<Cache> CACHE = ThreadLocal.withInitial(Cache::new);
+    private static final short[] SCRATCH = new short[MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE];
+    private static final ByteArrayFIFOQueue QUEUE = new ByteArrayFIFOQueue(MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE);
 
     private static long getOffset(int bx, int by, int i) {
         bx += i&(MODEL_TEXTURE_SIZE-1);
@@ -27,7 +22,7 @@ public class MipGen {
         return bx+by*MODEL_TEXTURE_SIZE*3;
     }
 
-    private static void solidify(long baseAddr, byte msk, short[] SCRATCH, ByteArrayFIFOQueue QUEUE) {
+    private static void solidify(long baseAddr, byte msk) {
         for (int idx = 0; idx < 6; idx++) {
             if (((msk>>idx)&1)==0) continue;
             int bx = (idx>>1)*MODEL_TEXTURE_SIZE;
@@ -97,8 +92,7 @@ public class MipGen {
         }
 
         if (!darkened) {
-            var cache = CACHE.get();
-            solidify(addr, solidMsk, cache.SCRATCH, cache.QUEUE);
+            solidify(addr, solidMsk);
         }
 
 

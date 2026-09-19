@@ -3,11 +3,12 @@ package me.cortex.voxy.client.mixin.minecraft;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.common.world.service.VoxelIngestService;
 import me.cortex.voxy.commonImpl.VoxyCommon;
+import me.cortex.voxy.commonImpl.VoxyInstance;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
 import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
-import net.minecraft.client.renderer.extract.LevelExtractor;
+import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.SectionPos;
@@ -17,6 +18,7 @@ import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.dimension.DimensionType;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -30,20 +32,22 @@ public abstract class MixinClientLevel {
     @Unique
     private int bottomSectionY;
 
+    @Shadow @Final public LevelRenderer levelRenderer;
+
     @Shadow public abstract ClientChunkCache getChunkSource();
 
     @Inject(method = "<init>", at = @At("TAIL"))
     private void voxy$getBottom(
-            final ClientPacketListener connection,
-            final ClientLevel.ClientLevelData levelData,
-            final ResourceKey<Level> dimension,
-            final Holder<DimensionType> dimensionType,
-            final int serverChunkRadius,
-            final int serverSimulationDistance,
-            final LevelExtractor levelExtractor,
-            final boolean isDebug,
-            final long biomeZoomSeed,
-            final int seaLevel,
+            ClientPacketListener networkHandler,
+            ClientLevel.ClientLevelData properties,
+            ResourceKey<Level> registryRef,
+            Holder<DimensionType> dimensionType,
+            int loadDistance,
+            int simulationDistance,
+            LevelRenderer worldRenderer,
+            boolean debugWorld,
+            long seed,
+            int seaLevel,
             CallbackInfo cir) {
         this.bottomSectionY = ((Level)(Object)this).getMinY()>>4;
     }

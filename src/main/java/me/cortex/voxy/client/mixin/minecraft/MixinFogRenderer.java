@@ -1,63 +1,42 @@
 package me.cortex.voxy.client.mixin.minecraft;
 
+import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
+import com.llamalad7.mixinextras.sugar.Local;
 import me.cortex.voxy.client.config.VoxyConfig;
-import me.cortex.voxy.client.core.backend.blaze3d.VoxyBlaze3DProbeRenderer;
-import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.fog.FogData;
 import net.minecraft.client.renderer.fog.FogRenderer;
+import org.joml.Vector4f;
+import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-// RETURN injectors execute in reverse application order at the same return site. Applying this
-// mixin after Sodium makes this callback run first, before Sodium snapshots the modified FogData.
-@Mixin(value = FogRenderer.class, priority = 900)
+@Mixin(value = FogRenderer.class,remap = true)
 public class MixinFogRenderer {
-    @Unique
-    private static final float voxy$disabledFogDistance = 999999999.0F;
+    @Inject(method = "setupFog", at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/systems/RenderSystem;getDevice()Lcom/mojang/blaze3d/systems/GpuDevice;", remap = false))
+    private void voxy$modifyFog(Camera camera, int rdInt, DeltaTracker tracker, float pTick, ClientLevel lvl, CallbackInfoReturnable<Vector4f> cir, @Local(type=FogData.class) FogData data) {
+        if (!VoxyConfig.CONFIG.isRenderingEnabled()) return;
 
-    @Unique
-    private static boolean voxy$loggedBlaze3dFogReplacement;
+        var vrs = IGetVoxyRenderSystem.getNullable();
+        if (vrs == null) return;
 
-    @Unique
-    private static boolean voxy$loggedMinecraftFogSuppression;
-
-    @Inject(method = "setupFog", at = @At("RETURN"))
-    private void voxy$modifyFog(Camera camera, int renderDistanceInChunks, DeltaTracker deltaTracker, float darkenWorldAmount, ClientLevel level, CallbackInfoReturnable<FogData> cir) {
-        boolean blaze3dProbeActive = VoxyConfig.CONFIG.isBlaze3dRenderingEnabled()
-                && VoxyBlaze3DProbeRenderer.canApplyGlobalFog();
-
-        var data = cir.getReturnValue();
-        if (blaze3dProbeActive) {
-            // Preserve Minecraft/Sodium's original values for diagnostics and dense-fog
-            // classification before replacing the short terrain ramp below.
-            VoxyBlaze3DProbeRenderer.captureVanillaRenderFogRange(
-                    data.renderDistanceStart, data.renderDistanceEnd);
-            if (!voxy$loggedBlaze3dFogReplacement) {
-                voxy$loggedBlaze3dFogReplacement = true;
-                Logger.info("Blaze3D renderer replacing per-geometry render fog with one depth-based world pass: environmental="
-                        + data.environmentalStart + ".." + data.environmentalEnd
-                        + ", render-distance=" + data.renderDistanceStart + ".." + data.renderDistanceEnd);
-            }
+        /*
+        if (!VoxyConfig.CONFIG.useRenderFog) {
+        }*/
+        boolean fogIsDamnClose = data.environmentalEnd<10;
+        if (!VoxyConfig.CONFIG.useEnvironmentalFog && !fogIsDamnClose) {
+            data.environmentalStart = 99999999;
+            data.environmentalEnd = 99999999;
         }
 
-        if (!voxy$loggedMinecraftFogSuppression) {
-            voxy$loggedMinecraftFogSuppression = true;
-            Logger.info("Minecraft/Sodium fog disabled globally; fog settings now affect only Voxy.");
-        }
-
-        // Minecraft and Sodium must never bake fog into their geometry. Voxy owns any optional
-        // fog pass independently, so changing Voxy's fog settings cannot re-enable vanilla fog.
-        data.environmentalStart = voxy$disabledFogDistance;
-        data.environmentalEnd = voxy$disabledFogDistance;
-        data.renderDistanceStart = voxy$disabledFogDistance;
-        data.renderDistanceEnd = voxy$disabledFogDistance;
-        data.skyEnd = voxy$disabledFogDistance;
-        data.cloudEnd = voxy$disabledFogDistance;
+        data.renderDistanceStart = 999999999;
+        data.renderDistanceEnd = 999999999;
     }
 }

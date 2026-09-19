@@ -7,8 +7,8 @@ import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
 import me.cortex.voxy.common.world.WorldEngine;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.dimension.DimensionType;
 import org.jetbrains.annotations.NotNull;
@@ -64,17 +64,13 @@ public class WorldIdentifier {
 
     //Quick access utility method to get or create a world object in the current instance
     public WorldEngine getOrCreateEngine() {
-        return getOrCreateEngine(false);
-    }
-
-    public WorldEngine getOrCreateEngine(boolean allowNull) {
         var instance = VoxyCommon.getInstance();
         if (instance == null) {
             this.cachedEngineObject = null;
             return null;
         }
         var engine = instance.getOrCreate(this);
-        if (allowNull&&engine==null) {
+        if (engine==null) {
             throw new IllegalStateException("Engine null on creation");
         }
         return engine;

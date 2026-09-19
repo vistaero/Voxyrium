@@ -1,7 +1,5 @@
 package me.cortex.voxy.client.core.util;
 
-import me.cortex.voxy.client.core.rendering.util.AbstractDownloadStream;
-
 import it.unimi.dsi.fastutil.ints.IntArrayFIFOQueue;
 import it.unimi.dsi.fastutil.objects.ObjectArrayFIFOQueue;
 import me.cortex.voxy.common.util.TrackedObject;
@@ -196,7 +194,7 @@ public class GPUTiming {
         public void download(TimingDataConsumer consumer) {
             var meta = Arrays.copyOf(this.metadata, this.index);
             this.index = 0;
-            //AbstractDownloadStream.INSTANCE().download(this.store, buffer->consumer.accept(meta, buffer));
+            //DownloadStream.INSTANCE.download(this.store, buffer->consumer.accept(meta, buffer));
         }
 
         @Override

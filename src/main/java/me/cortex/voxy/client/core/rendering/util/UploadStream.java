@@ -22,8 +22,7 @@ import static org.lwjgl.opengl.GL44.GL_CLIENT_STORAGE_BIT;
 import static org.lwjgl.opengl.GL44.GL_MAP_COHERENT_BIT;
 import static org.lwjgl.opengl.GL45C.glFlushMappedNamedBufferRange;
 
-public class UploadStream extends AbstractUploadStream {
-    //NOTE: referencing Capabilities does GL queries; this class must only be loaded on the GL backend.
+public class UploadStream {
     public static final int BASE_ALLOCATION_ALIGNEMENT = Math.max(Capabilities.INSTANCE.ssboBindingAlignment, 16);
 
     private final AllocationArena allocationArena = new AllocationArena();
@@ -42,22 +41,26 @@ public class UploadStream extends AbstractUploadStream {
 
     private long caddr = -1;
     private long offset = 0;
+    public void upload(GlBuffer buffer, long destOffset, MemoryBuffer data) {//Note: does not free data, nor does it commit
+        data.cpyTo(this.upload(buffer, destOffset, data.size));
+    }
 
-    @Override
-    public long upload(IDeviceBuffer buffer, long destOffset, long size) {
+    public long uploadTo(GlBuffer buffer) {
+        return this.upload(buffer, 0, buffer.size());
+    }
+
+    public long upload(GlBuffer buffer, long destOffset, long size) {
         long addr = this.rawUploadAddress((int) size);
 
-        this.uploadList.add(new UploadData((GlBuffer) buffer, addr, destOffset, size));
+        this.uploadList.add(new UploadData(buffer, addr, destOffset, size));
 
         return this.uploadBuffer.addr() + addr;
     }
 
-    @Override
     public long rawUpload(int size) {
         return this.uploadBuffer.addr() + this.rawUploadAddress(size);
     }
 
-    @Override
     public long rawUploadAddress(int size) {
         if (size < 0) {
             throw new IllegalStateException("Negative size");
@@ -108,7 +111,6 @@ public class UploadStream extends AbstractUploadStream {
         return addr;
     }
 
-    @Override
     public void commit() {
         if ((!USE_COHERENT)&&this.caddr != -1) {
             //Flush this allocation
@@ -132,7 +134,6 @@ public class UploadStream extends AbstractUploadStream {
         this.offset = 0;
     }
 
-    @Override
     public void tick() {
         this.tick(true);
     }
@@ -159,26 +160,28 @@ public class UploadStream extends AbstractUploadStream {
         }
     }
 
-    @Override
     public long getBaseAddress() {
         return this.uploadBuffer.addr();
     }
 
-    @Override
     public int getRawBufferId() {
         return this.uploadBuffer.id;
-    }
-
-    @Override
-    public void free() {
-        this.uploadBuffer.free();
     }
 
     private record UploadFrame(GlFence fence, LongArrayList allocations) {}
     private record UploadData(GlBuffer target, long uploadOffset, long targetOffset, long size) {}
 
-    @Override
-    public int baseAlignment() {
-        return BASE_ALLOCATION_ALIGNEMENT;
+    //A upload instance instead of passing one around by reference
+    // MUST ONLY BE USED ON THE RENDER THREAD
+    public static final UploadStream INSTANCE = new UploadStream(1<<26);//64 mb upload buffer
+
+    public static long alignUp(long val, long alignment) {
+        return ((val+alignment-1)/alignment)*alignment;
+    }
+    public static int alignUp(int val, int alignment) {
+        return ((val+alignment-1)/alignment)*alignment;
+    }
+    public static int alignUpAlloc(int val) {
+        return ((val+BASE_ALLOCATION_ALIGNEMENT-1)/BASE_ALLOCATION_ALIGNEMENT)*BASE_ALLOCATION_ALIGNEMENT;
     }
 }

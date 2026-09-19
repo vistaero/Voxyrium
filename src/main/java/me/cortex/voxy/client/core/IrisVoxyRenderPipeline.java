@@ -9,7 +9,7 @@ import me.cortex.voxy.client.core.rendering.hierachical.NodeCleaner;
 import me.cortex.voxy.client.core.rendering.post.FullscreenBlit;
 import me.cortex.voxy.client.core.rendering.section.backend.AbstractSectionRenderer;
 import me.cortex.voxy.client.core.rendering.util.DepthFramebuffer;
-import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
+import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import me.cortex.voxy.client.iris.IrisVoxyRenderPipelineData;
 import net.irisshaders.iris.shaderpack.materialmap.WorldRenderingSettings;
 import org.joml.Matrix4f;
@@ -24,10 +24,6 @@ import static org.lwjgl.opengl.GL31.GL_UNIFORM_BUFFER;
 import static org.lwjgl.opengl.GL45C.*;
 
 public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
-    private static final int UNIFORM_BINDING_POINT = 7;//TODO make ths binding point... not randomly 5
-    private static final int BASE_BUFFER_BINDING_INDEX = 10;//TODO make ths binding point... not randomly 10
-    private static final int BASE_SAMPLER_BINDING_INDEX = 6;//TODO make ths binding point... not randomly 6
-
     private final IrisVoxyRenderPipelineData data;
     private final FullscreenBlit depthBlit;
     public final DepthFramebuffer fbTranslucent = new DepthFramebuffer(this.fb.getFormat());
@@ -110,14 +106,14 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
         super.preSetup(viewport);
         if (this.shaderUniforms != null) {
             //Update the uniforms
-            long ptr = AbstractUploadStream.INSTANCE().uploadTo(this.shaderUniforms);
+            long ptr = UploadStream.INSTANCE.uploadTo(this.shaderUniforms);
             this.data.getUniforms().updater().accept(ptr);
-            AbstractUploadStream.INSTANCE().commit();
+            UploadStream.INSTANCE.commit();
         }
     }
 
     @Override
-    protected int setup(Viewport<?> viewport, int sourceDepthTexture, int srcWidth, int srcHeight) {
+    protected int setup(Viewport<?> viewport, int sourceFramebuffer, int srcWidth, int srcHeight) {
         this.fb.resize(viewport.width, viewport.height);
         this.fbTranslucent.resize(viewport.width, viewport.height);
 
@@ -132,12 +128,12 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
             srcWidth = viewport.width;
             srcHeight = viewport.height;
         }
-        this.initDepthStencil(sourceDepthTexture, this.fb.framebuffer.id, srcWidth, srcHeight, viewport.width, viewport.height);
+        this.initDepthStencil(sourceFramebuffer, this.fb.framebuffer.id, srcWidth, srcHeight, viewport.width, viewport.height);
         return this.fb.getDepthTex().id;
     }
 
     @Override
-    protected void postOpaquePreTranslucent(Viewport<?> viewport, int sourceDepthTexture) {
+    protected void postOpaquePreTranslucent(Viewport<?> viewport, int sourceFrameBuffer) {
         if (this.shaderDepthHackFixTransformBlit != null) {
             this.fb.bind();
             glEnable(GL_DEPTH_TEST);
@@ -166,21 +162,13 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
     }
 
     @Override
-    protected void finish(Viewport<?> viewport, int sourceDepthTexture, int outputFramebuffer, int srcWidth, int srcHeight) {
-        if (this.data.renderToVanillaDepth) {
-            //We can only depthblit out if destination size is the same, if they arnt, force them tobe
-            boolean mustFiddledViewport = srcWidth != viewport.width  || srcHeight != viewport.height;
-            if (this.data.useViewportDims||!mustFiddledViewport) {
-                glColorMask(false, false, false, false);
-                if (mustFiddledViewport)
-                    glViewport(0, 0, viewport.width, viewport.height);
-                AbstractRenderPipeline.transformBlitDepth(this.depthBlit,
-                        this.fbTranslucent.getDepthTex().id, outputFramebuffer,
-                        viewport, new Matrix4f(viewport.vanillaProjection).mul(viewport.modelView));
-                if (mustFiddledViewport)
-                    glViewport(0, 0, srcWidth, srcHeight);
-                glColorMask(true, true, true, true);
-            }
+    protected void finish(Viewport<?> viewport, int sourceFrameBuffer, int srcWidth, int srcHeight) {
+        if (this.data.renderToVanillaDepth && srcWidth == viewport.width  && srcHeight == viewport.height) {//We can only depthblit out if destination size is the same
+            glColorMask(false, false, false, false);
+            AbstractRenderPipeline.transformBlitDepth(this.depthBlit,
+                    this.fbTranslucent.getDepthTex().id, sourceFrameBuffer,
+                    viewport, new Matrix4f(viewport.vanillaProjection).mul(viewport.modelView));
+            glColorMask(true, true, true, true);
         } else {
             // normally disabled by AbstractRenderPipeline but since we are skipping it we do it here
             glDisable(GL_STENCIL_TEST);
@@ -204,13 +192,12 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
     private void doBindings() {
         this.bindUniforms();
         if (this.data.getSsboSet() != null) {
-            this.data.getSsboSet().bindingFunction().accept(BASE_BUFFER_BINDING_INDEX);
+            this.data.getSsboSet().bindingFunction().accept(10);
         }
         if (this.data.getImageSet() != null) {
-            this.data.getImageSet().bindingFunction().accept(BASE_SAMPLER_BINDING_INDEX);
+            this.data.getImageSet().bindingFunction().accept(6);
         }
     }
-
     @Override
     public void setupAndBindOpaque(Viewport<?> viewport) {
         this.fb.bind();
@@ -232,6 +219,8 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
         super.addDebug(debug);
     }
 
+    private static final int UNIFORM_BINDING_POINT = 7;//TODO make ths binding point... not randomly 5
+
     private StringBuilder buildGenericShaderHeader(AbstractSectionRenderer<?, ?> renderer, String input) {
         StringBuilder builder = new StringBuilder(input).append("\n\n\n");
 
@@ -242,12 +231,12 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
         }
 
         if (this.data.getSsboSet() != null) {
-            builder.append("#define BUFFER_BINDING_INDEX_BASE "+BASE_BUFFER_BINDING_INDEX+"\n");
+            builder.append("#define BUFFER_BINDING_INDEX_BASE 10\n");//TODO: DONT RANDOMLY MAKE THIS 10
             builder.append(this.data.getSsboSet().layout()).append("\n\n");
         }
 
         if (this.data.getImageSet() != null) {
-            builder.append("#define BASE_SAMPLER_BINDING_INDEX "+BASE_SAMPLER_BINDING_INDEX+"\n");
+            builder.append("#define BASE_SAMPLER_BINDING_INDEX 6\n");//TODO: DONT RANDOMLY MAKE THIS 6
             builder.append(this.data.getImageSet().layout()).append("\n\n");
         }
 

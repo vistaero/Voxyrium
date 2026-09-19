@@ -10,7 +10,7 @@ import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.rendering.ISectionWatcher;
 import me.cortex.voxy.client.core.rendering.building.BuiltSection;
 import me.cortex.voxy.client.core.rendering.section.geometry.IGeometryManager;
-import me.cortex.voxy.client.core.rendering.util.AbstractUploadStream;
+import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import me.cortex.voxy.client.core.util.ExpandingObjectAllocationList;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.MemoryBuffer;
@@ -1067,9 +1067,6 @@ public class NodeManager {
     }
 
     //==================================================================================================================
-
-    private int _nodeAlreadyInFlightDontSpam = 1;
-
     public void processRequest(long pos) {
         int nodeId = this.activeSectionMap.get(pos);
         if (nodeId == -1) {
@@ -1132,13 +1129,7 @@ public class NodeManager {
 
             //Check if the node is already in-flight, if it is, dont do any processing
             if (this.nodeData.isNodeRequestInFlight(nodeId)) {
-                if (this._nodeAlreadyInFlightDontSpam>=1 && this._nodeAlreadyInFlightDontSpam<100) {
-                    Logger.warn("Tried processing a node that already has a request in flight: " + nodeId + " pos: " + WorldEngine.pprintPos(pos) + " ignoring");
-                    this._nodeAlreadyInFlightDontSpam++;
-                } else if (this._nodeAlreadyInFlightDontSpam==100) {
-                    Logger.warn("Suppressing \"Tried processing node\" warning ;-; (probably gonna regret this)");
-                    this._nodeAlreadyInFlightDontSpam = 0;
-                }
+                Logger.warn("Tried processing a node that already has a request in flight: " + nodeId + " pos: " + WorldEngine.pprintPos(pos) + " ignoring");
                 return;
             }
 
@@ -1354,13 +1345,13 @@ public class NodeManager {
     }
 
     //==================================================================================================================
-    public boolean writeChanges(me.cortex.voxy.client.core.rendering.util.IDeviceBuffer nodeBuffer) {
+    public boolean writeChanges(GlBuffer nodeBuffer) {
         //TODO: use like compute based copy system or something
         // since microcopies are bad
         if (this.nodeUpdates.isEmpty()) {
             return false;
         }
-        this.nodeUpdates.forEach((int i) -> this.nodeData.writeNode(AbstractUploadStream.INSTANCE().upload(nodeBuffer, i*16L, 16L), i));
+        this.nodeUpdates.forEach((int i) -> this.nodeData.writeNode(UploadStream.INSTANCE.upload(nodeBuffer, i*16L, 16L), i));
         this.nodeUpdates.clear();
         return true;
     }

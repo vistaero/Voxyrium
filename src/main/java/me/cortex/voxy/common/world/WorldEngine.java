@@ -11,7 +11,7 @@ import java.lang.invoke.VarHandle;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public final class WorldEngine {
+public class WorldEngine {
     public static final int MAX_LOD_LAYER = 4;
 
     public static final int UPDATE_TYPE_BLOCK_BIT = 1;
@@ -27,22 +27,12 @@ public final class WorldEngine {
     public final SectionStorage storage;
     private final Mapper mapper;
     private final ActiveSectionTracker sectionTracker;
-    private volatile ISectionChangeCallback dirtyCallback;
-    private final java.util.concurrent.CopyOnWriteArrayList<ISectionChangeCallback> changeListeners =
-            new java.util.concurrent.CopyOnWriteArrayList<>();
+    private ISectionChangeCallback dirtyCallback;
     private ISectionSaveCallback saveCallback;
     volatile boolean isLive = true;
 
     public void setDirtyCallback(ISectionChangeCallback callback) {
         this.dirtyCallback = callback;
-    }
-
-    public void addChangeListener(ISectionChangeCallback listener) {
-        this.changeListeners.addIfAbsent(listener);
-    }
-
-    public void removeChangeListener(ISectionChangeCallback listener) {
-        this.changeListeners.remove(listener);
     }
 
     public void setSaveCallback(ISectionSaveCallback callback) {
@@ -131,12 +121,8 @@ public final class WorldEngine {
         if (section.tracker != this.sectionTracker) {
             throw new IllegalStateException("Section is not from here");
         }
-        ISectionChangeCallback callback = this.dirtyCallback;
-        if (callback != null) {
-            callback.accept(section, changeState, neighborMsk);
-        }
-        for (ISectionChangeCallback listener : this.changeListeners) {
-            listener.accept(section, changeState, neighborMsk);
+        if (this.dirtyCallback != null) {
+            this.dirtyCallback.accept(section, changeState, neighborMsk);
         }
         if ((changeState&UPDATE_TYPE_DONT_SAVE)==0) {
             section.markDirty();

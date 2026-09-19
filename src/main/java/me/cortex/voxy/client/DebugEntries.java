@@ -1,6 +1,7 @@
 package me.cortex.voxy.client;
 
-import me.cortex.voxy.client.core.IVoxyRenderSystemHolder;
+import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
+import me.cortex.voxy.client.core.VoxyRenderSystem;
 import me.cortex.voxy.client.core.util.GPUTiming;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import net.minecraft.ChatFormatting;
@@ -32,8 +33,12 @@ public class DebugEntries {
                     lines.addLine(ChatFormatting.YELLOW + "voxy-" + VoxyCommon.MOD_VERSION);//Voxy avalible, no instance active
                     return;
                 }
+                VoxyRenderSystem vrs = null;
+                var wr = Minecraft.getInstance().levelRenderer;
+                if (wr != null) vrs = ((IGetVoxyRenderSystem) wr).voxy$getRenderSystem();
+
                 //Voxy instance active
-                lines.addLine((IVoxyRenderSystemHolder.getNullable()==null?ChatFormatting.DARK_GREEN:ChatFormatting.GREEN)+"voxy-"+VoxyCommon.MOD_VERSION);
+                lines.addLine((vrs==null?ChatFormatting.DARK_GREEN:ChatFormatting.GREEN)+"voxy-"+VoxyCommon.MOD_VERSION);
             }
         });
 
@@ -55,7 +60,7 @@ public class DebugEntries {
 
             GPUTiming.INSTANCE.setEnabled(previousGpuDebugEnabled);
             RenderStatistics.enabled = previousGpuDebugEnabled;
-            var renderer = Minecraft.getInstance().levelExtractor;
+            var renderer = Minecraft.getInstance().levelRenderer;
             if (renderer!=null)renderer.allChanged();
         }
     }

@@ -1,5 +1,7 @@
 package me.cortex.voxy.client.config;
 
+import com.mojang.datafixers.types.Func;
+import me.cortex.voxy.common.util.Pair;
 import net.caffeinemc.mods.sodium.api.config.ConfigState;
 import net.caffeinemc.mods.sodium.api.config.StorageEventHandler;
 import net.caffeinemc.mods.sodium.api.config.option.*;

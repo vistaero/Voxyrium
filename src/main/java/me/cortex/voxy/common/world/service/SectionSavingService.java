@@ -28,11 +28,9 @@ public class SectionSavingService {
         section.assertNotFree();
         try {
             //Unmark it dirty here (if it wasnt or w/e) so that it doesnt pointlessly resave (in theory this should be safe to do)
+            section.setNotDirty();
             if (section.exchangeIsInSaveQueue(false)) {
-                section.setNotDirty();//do after the atomic exchange
                 task.engine.storage.saveSection(section);
-            } else {
-                section.setNotDirty();
             }
         } catch (Exception e) {
             Logger.error("Voxy saver had an exception while executing please check logs and report error", e);

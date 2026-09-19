@@ -80,6 +80,9 @@ if (project.minecraft_version == '1.21.10') {
     }
     sourceSets.main.java.setSrcDirs([compatibilitySources])
     tasks.named('compileJava') { dependsOn 'prepareCompatibilitySources' }
+    loom {
+        accessWidenerPath = file("${buildDir}/generated/compat-1.21.10/resources/voxy.accesswidener")
+    }
     processResources {
         exclude 'client.voxy.mixins.json', 'common.voxy.mixins.json', 'fabric.mod.json', 'voxy.accesswidener'
         from "${buildDir}/generated/compat-1.21.10/resources"

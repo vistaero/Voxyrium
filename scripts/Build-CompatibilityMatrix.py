@@ -66,7 +66,10 @@ def download(url, destination, headers=None, overwrite=False):
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".download")
     temporary.unlink(missing_ok=True)
-    request = urllib.request.Request(url, headers=headers or {})
+    # Some download mirrors, including Adoptium's API, reject urllib's
+    # anonymous default user agent.  Identify this tool for every download;
+    # callers can still supply additional or overriding headers.
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
     try:
         with urllib.request.urlopen(request) as response, temporary.open("wb") as target:
             shutil.copyfileobj(response, target)

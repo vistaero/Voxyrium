@@ -588,6 +588,7 @@ def build_matrix(args, matrix, output_directory):
                 entry, key, safe = item
                 branch = entry["branch"]
                 worktree = worktree_root / safe
+                log_path = None
                 try:
                     print(f"\n=== Building {branch} ({entry.get('build_version', entry['expected'])}) ===", flush=True)
                     with worktree_lock:
@@ -643,7 +644,17 @@ def build_matrix(args, matrix, output_directory):
                     shutil.copy2(jar, artifact)
                     return key, artifact, None
                 except Exception as error:
-                    return key, None, f"{branch}: {error}"
+                    if isinstance(error, subprocess.CalledProcessError) and log_path is not None:
+                        diagnostics = []
+                        with log_path.open(encoding="utf-8", errors="replace") as log:
+                            for line in log:
+                                if "error:" in line or line.startswith("> "):
+                                    diagnostics.append(line.strip())
+                                    if len(diagnostics) == 8:
+                                        break
+                        detail = "\n".join(diagnostics)
+                        return key, None, f"{key}: Gradle failed (exit {error.returncode}).\n{detail}\nFull log: {log_path}"
+                    return key, None, f"{key}: {error}"
                 finally:
                     if worktree.exists() and not args.keep_worktrees:
                         with worktree_lock:

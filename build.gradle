@@ -69,7 +69,7 @@ if (project.minecraft_version == '1.21.10') {
                 }
                 output.text = contents
             }
-            ['client.voxy.mixins.json', 'common.voxy.mixins.json', 'fabric.mod.json'].each { name ->
+            ['client.voxy.mixins.json', 'common.voxy.mixins.json', 'fabric.mod.json', 'voxy.accesswidener'].each { name ->
                 def output = new File(buildDir, "generated/compat-1.21.10/resources/${name}")
                 output.parentFile.mkdirs()
                 output.text = providers.exec {

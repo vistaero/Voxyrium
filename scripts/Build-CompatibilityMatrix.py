@@ -30,6 +30,7 @@ else:
 
 USER_AGENT = "vistaero-Voxyrium-compatibility-script/1.0"
 MATRIX = [
+    {"branch": "mc_26.3", "expected": "26.3", "versions": ["26.3"], "tasks": []},
     {"branch": "dev", "expected": "26.2", "versions": ["26.2"], "tasks": []},
     {"branch": "mc_26.1", "expected": "26.1.2", "versions": ["26.1.2"], "tasks": []},
     {"branch": "mc_26.1.1", "expected": "26.1.1", "versions": ["26.1.1"], "tasks": []},
@@ -48,10 +49,11 @@ def fail(message):
     raise RuntimeError(message)
 
 
-def run(arguments, cwd=None, env=None):
+def run(arguments, cwd=None, env=None, log=None):
     arguments = list(map(str, arguments))
     print("+", " ".join(arguments), flush=True)
-    subprocess.run(arguments, cwd=cwd, env=env, check=True)
+    subprocess.run(arguments, cwd=cwd, env=env, check=True, stdout=log,
+                   stderr=subprocess.STDOUT if log is not None else None)
 
 
 def output(arguments, cwd=None):
@@ -571,12 +573,16 @@ def build_matrix(args, matrix, output_directory):
                     if os.name != "nt":
                         gradle.chmod(gradle.stat().st_mode | 0o111)
                     arguments = [gradle, "--no-daemon", f"--max-workers={gradle_workers}"] + ([f"-Pminecraft_version={build_version}"] if "build_version" in entry else [])
-                    if entry["tasks"]:
-                        print(f"[{branch}] Preparing generated include JARs...", flush=True)
-                        run(arguments + entry["tasks"], cwd=worktree, env=environment)
-                        run(arguments + ["build"], cwd=worktree, env=environment)
-                    else:
-                        run(arguments + ["clean", "build"], cwd=worktree, env=environment)
+                    logs = output_directory / "build-logs"
+                    logs.mkdir(parents=True, exist_ok=True)
+                    log_path = logs / f"{safe}-{datetime.now():%Y%m%d-%H%M%S}.log"
+                    print(f"[{key}] Build log: {log_path}", flush=True)
+                    with log_path.open("w", encoding="utf-8") as log:
+                        if entry["tasks"]:
+                            run(arguments + entry["tasks"], cwd=worktree, env=environment, log=log)
+                            run(arguments + ["build"], cwd=worktree, env=environment, log=log)
+                        else:
+                            run(arguments + ["clean", "build"], cwd=worktree, env=environment, log=log)
                     jar = built_jar(worktree)
                     if jar_mod_id(jar) != "voxy":
                         fail(f"Built artifact '{jar.name}' contains mod id '{jar_mod_id(jar)}', not 'voxy'.")

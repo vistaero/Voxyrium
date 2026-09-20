@@ -91,7 +91,9 @@ if (compatibilitySource != null) {
             def files = providers.exec {
                 commandLine 'git', 'ls-tree', '-r', '--name-only', compatibilitySource.ref, 'src/main/java'
             }.standardOutput.asText.get().readLines()
-            files.each { path ->
+            files.findAll { path ->
+                !(project.minecraft_version == '1.21.1' && path.endsWith('/mixin/nvidium/MixinRenderPipeline.java'))
+            }.each { path ->
                 def output = new File(destination, path.substring('src/main/java/'.length()))
                 output.parentFile.mkdirs()
                 def contents = providers.exec {
@@ -114,6 +116,21 @@ if (compatibilitySource != null) {
                         commandLine 'git', 'show', "upstream/mc_1217:${path}"
                     }.standardOutput.asText.get()
                 }
+                if (project.minecraft_version == '1.21.1') {
+                    // Sodium 0.8 moved out of the legacy me.jellysquid
+                    // namespace. Keep this port's old Minecraft/Yarn source,
+                    // but adapt only its Sodium-facing compilation seams.
+                    contents = contents.replace('me.jellysquid.mods.sodium', 'net.caffeinemc.mods.sodium')
+                    if (path.endsWith('/ShaderLoader.java')) {
+                        contents = contents.replace('ShaderParser.parseShader("#import <" + id + ">", ShaderConstants.builder().build())',
+                                'ShaderParser.parseShader("#import <" + id + ">", ShaderConstants.builder().build()).src()')
+                    }
+                    if (path.endsWith('/MixinDefaultChunkRenderer.java')) {
+                        contents = contents.replace(
+                                'TerrainRenderPass renderPass, CameraTransform camera, CallbackInfo ci)',
+                                'TerrainRenderPass renderPass, CameraTransform camera, boolean indexedRenderingEnabled, CallbackInfo ci)')
+                    }
+                }
                 output.text = contents
             }
             def resourceNames = providers.exec {
@@ -132,6 +149,9 @@ if (compatibilitySource != null) {
                     if (compatibilitySource?.legacy || compatibilitySource?.historical) {
                         contents = contents.replace('"sodium": "*"', '"sodium": "=' + sodiumVersion.split('-')[1] + '"')
                     }
+                }
+                if (project.minecraft_version == '1.21.1' && name == 'voxy.mixins.json') {
+                    contents = contents.replace('    "nvidium.MixinRenderPipeline",\n', '')
                 }
                 output.text = contents
             }

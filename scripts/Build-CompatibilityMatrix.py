@@ -404,7 +404,8 @@ def matches_constraint(project_id, version_number, constraint):
         maximum = re.search(r"<=(\d+(?:\.\d+){0,2})", value)
         if value == "*" or wildcard and candidate[:2] == (int(wildcard.group(1)), int(wildcard.group(2))):
             return True
-        if exact and candidate == version_tuple(exact.group(1)):
+        is_prerelease = bool(re.search(r"-(?:alpha|beta|rc)(?:[.\-+\d]|$)", version_number, re.IGNORECASE))
+        if exact and candidate == version_tuple(exact.group(1)) and not is_prerelease:
             return True
         if (minimum or maximum) and (not minimum or candidate >= version_tuple(minimum.group(1))) and (not maximum or candidate <= version_tuple(maximum.group(1))):
             return True

@@ -29,6 +29,9 @@ else:
     import tty
 
 USER_AGENT = "vistaero-Voxyrium-compatibility-script/1.0"
+# mc_1.21-1.21.11 is the source baseline. Each Minecraft target below is a
+# separate Gradle invocation so build.gradle can select its conditional source
+# snapshot and dependencies through -Pminecraft_version.
 MATRIX = [
     {"branch": "mc_26.3", "expected": "26.3", "versions": ["26.3"], "tasks": []},
     {"branch": "dev", "expected": "26.2", "versions": ["26.2"], "tasks": []},
@@ -622,16 +625,16 @@ def build_matrix(args, matrix, output_directory):
                 worktree = worktree_root / safe
                 log_path = None
                 try:
-                    print(f"\n=== Building {branch} ({entry.get('build_version', entry['expected'])}) ===", flush=True)
+                    build_version = entry.get("build_version", entry["expected"])
+                    print(f"\n=== Building {branch} (Minecraft {build_version}; source baseline {entry['expected']}) ===", flush=True)
                     with worktree_lock:
                         run(["git", "-C", root, "-c", "core.longpaths=true", "worktree", "add", "--detach", worktree, branch])
                     source_version = property_value(worktree / "gradle.properties", "minecraft_version")
                     if source_version != entry["expected"]:
-                        fail(f"Branch {branch} targets Minecraft {source_version}, expected {entry['expected']}. Complete the port before distributing this build.")
+                        fail(f"Branch {branch} has source baseline Minecraft {source_version}, expected {entry['expected']}. Keep the branch baseline unchanged; the selected target is passed conditionally as -Pminecraft_version={build_version}.")
                     source_manifest = json.loads((worktree / "src/main/resources/fabric.mod.json").read_bytes().decode("utf-8-sig"))
                     if source_manifest.get("id") != "voxy":
                         fail(f"Branch {branch} contains mod id '{source_manifest.get('id')}', not 'voxy'. Complete the Voxy port before distributing this build.")
-                    build_version = entry.get("build_version", source_version)
                     required_java = entry.get("java") or target_java_version(worktree / "build.gradle", branch)
                     with java_homes_lock:
                         if required_java not in java_homes:

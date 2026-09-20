@@ -32,19 +32,25 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 }
 
 # Each entry is built once. The resulting JAR is copied to every TestVersion.
-# ExpectedSourceVersion prevents a placeholder branch from being presented as a
-# real port. Update the branch itself; do not weaken this check.
+# The 1.21 branch is the 1.21.11 source baseline; BuildVersion selects the
+# target through -Pminecraft_version so build.gradle can use conditional
+# source/dependency selection for every supported 1.21 release.
 $matrix = @(
     [pscustomobject]@{ Branch = "dev";                    ExpectedSourceVersion = "26.2";    TestVersions = @("26.2");                         PreBuildTasks = @() },
     [pscustomobject]@{ Branch = "mc_26.1";                ExpectedSourceVersion = "26.1.2";  TestVersions = @("26.1.2");                       PreBuildTasks = @() },
     [pscustomobject]@{ Branch = "mc_26.1.1";              ExpectedSourceVersion = "26.1.1";  TestVersions = @("26.1.1");                       PreBuildTasks = @() },
-    [pscustomobject]@{ Branch = "mc_1.21.11";             ExpectedSourceVersion = "1.21.11"; TestVersions = @("1.21.11");                      PreBuildTasks = @() },
-    [pscustomobject]@{ Branch = "mc_1.21.9-1.21.10";      ExpectedSourceVersion = "1.21.10"; TestVersions = @("1.21.9", "1.21.10");          PreBuildTasks = @() },
-    [pscustomobject]@{ Branch = "mc_1.21.6-1.21.8";       ExpectedSourceVersion = "1.21.8";  TestVersions = @("1.21.6", "1.21.7", "1.21.8"); PreBuildTasks = @() },
-    [pscustomobject]@{ Branch = "mc_1.21.5";              ExpectedSourceVersion = "1.21.5";  TestVersions = @("1.21.5");                       PreBuildTasks = @() },
-    [pscustomobject]@{ Branch = "mc_1.21.4";              ExpectedSourceVersion = "1.21.4";  TestVersions = @("1.21.4");                       PreBuildTasks = @() },
-    [pscustomobject]@{ Branch = "mc_1.21.3";              ExpectedSourceVersion = "1.21.3";  TestVersions = @("1.21.3");                       PreBuildTasks = @("clean", "processIncludeJars") },
-    [pscustomobject]@{ Branch = "mc_1.21-1.21.1";         ExpectedSourceVersion = "1.21";    TestVersions = @("1.21", "1.21.1");              PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.21-1.21.11";        ExpectedSourceVersion = "1.21.11"; BuildVersion = "1.21";    ArtifactKey = "mc_1.21-1.21.11__1.21";    TestVersions = @("1.21");    PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.21-1.21.11";        ExpectedSourceVersion = "1.21.11"; BuildVersion = "1.21.1";  ArtifactKey = "mc_1.21-1.21.11__1.21.1";  TestVersions = @("1.21.1");  PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.21-1.21.11";        ExpectedSourceVersion = "1.21.11"; BuildVersion = "1.21.2";  ArtifactKey = "mc_1.21-1.21.11__1.21.2";  TestVersions = @("1.21.2");  PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.21-1.21.11";        ExpectedSourceVersion = "1.21.11"; BuildVersion = "1.21.3";  ArtifactKey = "mc_1.21-1.21.11__1.21.3";  TestVersions = @("1.21.3");  PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.21-1.21.11";        ExpectedSourceVersion = "1.21.11"; BuildVersion = "1.21.4";  ArtifactKey = "mc_1.21-1.21.11__1.21.4";  TestVersions = @("1.21.4");  PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.21-1.21.11";        ExpectedSourceVersion = "1.21.11"; BuildVersion = "1.21.5";  ArtifactKey = "mc_1.21-1.21.11__1.21.5";  TestVersions = @("1.21.5");  PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.21-1.21.11";        ExpectedSourceVersion = "1.21.11"; BuildVersion = "1.21.6";  ArtifactKey = "mc_1.21-1.21.11__1.21.6";  TestVersions = @("1.21.6");  PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.21-1.21.11";        ExpectedSourceVersion = "1.21.11"; BuildVersion = "1.21.7";  ArtifactKey = "mc_1.21-1.21.11__1.21.7";  TestVersions = @("1.21.7");  PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.21-1.21.11";        ExpectedSourceVersion = "1.21.11"; BuildVersion = "1.21.8";  ArtifactKey = "mc_1.21-1.21.11__1.21.8";  TestVersions = @("1.21.8");  PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.21-1.21.11";        ExpectedSourceVersion = "1.21.11"; BuildVersion = "1.21.9";  ArtifactKey = "mc_1.21-1.21.11__1.21.9";  TestVersions = @("1.21.9");  PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.21-1.21.11";        ExpectedSourceVersion = "1.21.11"; BuildVersion = "1.21.10"; ArtifactKey = "mc_1.21-1.21.11__1.21.10"; TestVersions = @("1.21.10"); PreBuildTasks = @() },
+    [pscustomobject]@{ Branch = "mc_1.21-1.21.11";        ExpectedSourceVersion = "1.21.11"; BuildVersion = "1.21.11"; ArtifactKey = "mc_1.21-1.21.11__1.21.11"; TestVersions = @("1.21.11"); PreBuildTasks = @() },
     [pscustomobject]@{ Branch = "mc_1.20-1.20.6";         ExpectedSourceVersion = "1.20.2";  BuildVersion = "1.20.6"; JavaVersion = 21; ArtifactKey = "mc_1.20-1.20.6__1.20.6"; TestVersions = @("1.20.6"); PreBuildTasks = @() },
     [pscustomobject]@{ Branch = "mc_1.20-1.20.6";         ExpectedSourceVersion = "1.20.2";  BuildVersion = "1.20.4"; JavaVersion = 17; ArtifactKey = "mc_1.20-1.20.6__1.20.4"; TestVersions = @("1.20.4"); PreBuildTasks = @() },
     [pscustomobject]@{ Branch = "mc_1.20-1.20.6";         ExpectedSourceVersion = "1.20.2";  BuildVersion = "1.20.2"; JavaVersion = 17; ArtifactKey = "mc_1.20-1.20.6__1.20.2"; TestVersions = @("1.20.2"); PreBuildTasks = @() },
@@ -965,10 +971,10 @@ try {
 
         try {
             $sourceVersion = Get-PropertyValue -Path (Join-Path $worktree "gradle.properties") -Name "minecraft_version"
-            if ($sourceVersion -ne $entry.ExpectedSourceVersion) {
-                throw "Branch $($entry.Branch) targets Minecraft $sourceVersion, expected $($entry.ExpectedSourceVersion). Complete the port before distributing this build."
-            }
             $buildVersion = if ($entry.PSObject.Properties.Name -contains "BuildVersion") { $entry.BuildVersion } else { $sourceVersion }
+            if ($sourceVersion -ne $entry.ExpectedSourceVersion) {
+                throw "Branch $($entry.Branch) has source baseline Minecraft $sourceVersion, expected $($entry.ExpectedSourceVersion). Keep the branch baseline unchanged; the selected target is passed conditionally as -Pminecraft_version=$buildVersion."
+            }
             $sourceModId = (Get-Content -LiteralPath (Join-Path $worktree "src\main\resources\fabric.mod.json") -Raw | ConvertFrom-Json).id
             if ($sourceModId -ne "voxy") {
                 throw "Branch $($entry.Branch) contains mod id '$sourceModId', not 'voxy'. Complete the Voxy port before distributing this build."

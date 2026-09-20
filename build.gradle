@@ -91,6 +91,13 @@ if (compatibilitySource != null) {
                 if (path.endsWith('/ModelStore.java')) {
                     contents = contents.replaceAll('(?s)int mipLvl = \\(\\(TextureAtlas\\).*?\\.mipLevel;', 'int mipLvl = Integer.numberOfTrailingZeros(ModelFactory.MODEL_TEXTURE_SIZE);')
                 }
+                if (project.minecraft_version == '1.21.2' && path.endsWith('/LightMapHelper.java')) {
+                    contents = contents.replace(
+                            'var lmt = MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().texture.getImage();',
+                            'var lmt = MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().target;\n' +
+                                    '        org.lwjgl.opengl.GL45.glGetTextureImage(lmt.getColorTextureId(), 0, org.lwjgl.opengl.GL11.GL_RGBA, org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE, MemoryUtil.memByteBuffer(upload, 256 * 4));')
+                    contents = contents.replace('int sample = lmt.getColor(x,y);', 'int sample = MemoryUtil.memGetInt(upload + (((x << 4) | y) * 4));')
+                }
                 output.text = contents
             }
             def resourceNames = providers.exec {
@@ -109,6 +116,9 @@ if (compatibilitySource != null) {
                     if (compatibilitySource?.legacy || compatibilitySource?.historical) {
                         contents = contents.replace('"sodium": "*"', '"sodium": "=' + sodiumVersion.split('-')[1] + '"')
                     }
+                }
+                if (project.minecraft_version == '1.21.2' && name == 'voxy.accesswidener') {
+                    contents += '\naccessible field net/minecraft/client/renderer/LightTexture target Lcom/mojang/blaze3d/pipeline/TextureTarget;\n'
                 }
                 output.text = contents
             }

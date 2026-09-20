@@ -45,50 +45,57 @@ def lithiumVersions = [
     '1.21.11': 'mc1.21.11-0.21.0-fabric'
 ]
 
-// 1.21.10 predates the Identifier/RenderSystem and Sodium config API changes
-// used by the current development sources.  Keep that compatibility shim in
-// the build, so newer targets continue compiling against their native APIs.
-if (project.minecraft_version == '1.21.10') {
-    def compatibilitySources = file("${buildDir}/generated/compat-1.21.10/java")
+// Older releases are built from their matching historical source snapshots.
+// The current source tree remains the native implementation for 1.21.11.
+def compatibilitySource = [
+    '1.21':    [ref: '67edb4a44b2f446816c2d39f1e440c6f66c9026f', yarn: '1.21+build.2'],
+    '1.21.10': [ref: 'upstream/mc12110']
+][project.minecraft_version]
+if (compatibilitySource != null) {
+    def compatibilitySources = file("${buildDir}/generated/compat-${project.minecraft_version}/java")
     tasks.register('prepareCompatibilitySources') {
         outputs.dir(compatibilitySources)
         doLast {
             def destination = compatibilitySources
             delete destination
             def files = providers.exec {
-                commandLine 'git', 'ls-tree', '-r', '--name-only', 'upstream/mc12110', 'src/main/java'
+                commandLine 'git', 'ls-tree', '-r', '--name-only', compatibilitySource.ref, 'src/main/java'
             }.standardOutput.asText.get().readLines()
             files.each { path ->
                 def output = new File(destination, path.substring('src/main/java/'.length()))
                 output.parentFile.mkdirs()
                 def contents = providers.exec {
-                    commandLine 'git', 'show', "upstream/mc12110:${path}"
+                    commandLine 'git', 'show', "${compatibilitySource.ref}:${path}"
                 }.standardOutput.asText.get()
                 if (path.endsWith('/ModelStore.java')) {
                     contents = contents.replaceAll('(?s)int mipLvl = \\(\\(TextureAtlas\\).*?\\.mipLevel;', 'int mipLvl = Integer.numberOfTrailingZeros(ModelFactory.MODEL_TEXTURE_SIZE);')
                 }
                 output.text = contents
             }
-            ['client.voxy.mixins.json', 'common.voxy.mixins.json', 'fabric.mod.json', 'voxy.accesswidener'].each { name ->
-                def output = new File(buildDir, "generated/compat-1.21.10/resources/${name}")
+            def resourceNames = providers.exec {
+                commandLine 'git', 'ls-tree', '-r', '--name-only', compatibilitySource.ref, 'src/main/resources'
+            }.standardOutput.asText.get().readLines().findAll { path ->
+                path.endsWith('/fabric.mod.json') || path.endsWith('/voxy.accesswidener') || path.endsWith('.mixins.json')
+            }.collect { path -> path.substring('src/main/resources/'.length()) }
+            resourceNames.each { name ->
+                def output = new File(buildDir, "generated/compat-${project.minecraft_version}/resources/${name}")
                 output.parentFile.mkdirs()
                 output.text = providers.exec {
-                    commandLine 'git', 'show', "upstream/mc12110:src/main/resources/${name}"
+                    commandLine 'git', 'show', "${compatibilitySource.ref}:src/main/resources/${name}"
                 }.standardOutput.asText.get()
             }
             // Loom resolves the access widener during configuration, before
             // generated resources exist; mirror the selected file at the
             // conventional path for this isolated build worktree.
-            file('src/main/resources/voxy.accesswidener').text = new File(buildDir, 'generated/compat-1.21.10/resources/voxy.accesswidener').text
-            ['client.voxy.mixins.json', 'common.voxy.mixins.json', 'fabric.mod.json'].each { name ->
-                file("src/main/resources/${name}").text = new File(buildDir, "generated/compat-1.21.10/resources/${name}").text
+            resourceNames.each { name ->
+                file("src/main/resources/${name}").text = new File(buildDir, "generated/compat-${project.minecraft_version}/resources/${name}").text
             }
         }
     }
     sourceSets.main.java.setSrcDirs([compatibilitySources])
     tasks.named('compileJava') { dependsOn 'prepareCompatibilitySources' }
     loom {
-        accessWidenerPath = file("${buildDir}/generated/compat-1.21.10/resources/voxy.accesswidener")
+        accessWidenerPath = file("${buildDir}/generated/compat-${project.minecraft_version}/resources/voxy.accesswidener")
     }
     processResources {
         dependsOn 'prepareCompatibilitySources'
@@ -201,7 +208,11 @@ if (!isInGHA) {
 dependencies {
     // To change the versions see the gradle.properties file
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings loom.officialMojangMappings()
+    if (compatibilitySource?.yarn) {
+        mappings "net.fabricmc:yarn:${compatibilitySource.yarn}:v2"
+    } else {
+        mappings loom.officialMojangMappings()
+    }
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     // Optional at runtime, but WorldConversionFactory references its palette.
     modCompileOnly "maven.modrinth:lithium:${lithiumVersions[project.minecraft_version]}"

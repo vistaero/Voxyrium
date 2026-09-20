@@ -404,8 +404,7 @@ def matches_constraint(project_id, version_number, constraint):
         maximum = re.search(r"<(=)?(\d+(?:\.\d+){0,2})", value)
         if value == "*" or wildcard and candidate[:2] == (int(wildcard.group(1)), int(wildcard.group(2))):
             return True
-        is_prerelease = bool(re.search(r"-(?:alpha|beta|rc)(?:[.\-+\d]|$)", version_number, re.IGNORECASE))
-        if exact and candidate == version_tuple(exact.group(1)) and not is_prerelease:
+        if exact and candidate == version_tuple(exact.group(1)):
             return True
         minimum_ok = not minimum or (candidate >= version_tuple(minimum.group(2)) if minimum.group(1) else candidate > version_tuple(minimum.group(2)))
         maximum_ok = not maximum or (candidate <= version_tuple(maximum.group(2)) if maximum.group(1) else candidate < version_tuple(maximum.group(2)))
@@ -427,11 +426,11 @@ def modrinth_candidates(project_id, minecraft_version, loader="fabric", constrai
     listed = [item for item in versions if item.get("status") == "listed" and item.get("files") and (not required_id or item.get("id") == required_id) and (not number_pattern or re.search(number_pattern, item.get("version_number", ""))) and matches_constraint(project_id, item.get("version_number", ""), constraint)]
     if not listed:
         fail(f"Modrinth project {project_id} has no listed {loader} version for Minecraft {minecraft_version} matching constraint {constraint!r}.")
-    ordered = []
-    for channel in ("release", "beta", "alpha"):
-        candidates = sorted((item for item in listed if item.get("version_type") == channel), key=lambda item: item.get("date_published", ""), reverse=True)
-        ordered.extend(candidates)
-    ordered.extend(sorted((item for item in listed if item.get("version_type") not in ("release", "beta", "alpha")), key=lambda item: item.get("date_published", ""), reverse=True))
+    # Compatibility is the primary criterion. Once a pair is compatible, use
+    # the newest publication regardless of whether it is release, beta, or
+    # alpha. Voxy must follow the newest compatible pair, not prefer an older
+    # stable artifact over a newer compatible prerelease.
+    ordered = sorted(listed, key=lambda item: item.get("date_published", ""), reverse=True)
     result = []
     for selected in ordered:
         selected_file = next((item for item in selected["files"] if item.get("primary")), None)

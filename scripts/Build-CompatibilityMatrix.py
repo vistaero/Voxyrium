@@ -548,11 +548,6 @@ class RuntimeUpdater:
         constraints = {"fabric-api": "*", "sodium": "*", "modmenu": "*", "iris": "*"}
         if minecraft_version == "1.20.1":
             constraints["sodium"] = "=0.5.13"
-        if minecraft_version == "1.21.1":
-            # Sodium 0.8.13 rejects Iris versions older than 1.8.13.  The
-            # newest stable Iris is still 1.8.8, so leave beta candidates in
-            # the resolver rather than selecting that incompatible release.
-            constraints["iris"] = ">=1.8.13"
         if voxy_artifact:
             manifest = fabric_manifest(voxy_artifact)
             if not manifest:

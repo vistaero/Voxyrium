@@ -44,6 +44,7 @@ def lithiumVersions = [
     '1.21.10': 'mc1.21.10-0.20.1-fabric',
     '1.21.11': 'mc1.21.11-0.21.0-fabric'
 ]
+def selectedAccessWidener = file("src/main/resources/voxy.accesswidener")
 
 // Older releases are built from their matching historical source snapshots.
 // The current source tree remains the native implementation for 1.21.11.
@@ -65,6 +66,7 @@ if (compatibilitySource != null) {
     compatibilityAccessWidener.text = providers.exec {
         commandLine 'git', 'show', "${compatibilitySource.ref}:src/main/resources/voxy.accesswidener"
     }.standardOutput.asText.get()
+    selectedAccessWidener = compatibilityAccessWidener
     tasks.register('prepareCompatibilitySources') {
         outputs.dir(compatibilitySources)
         doLast {
@@ -106,9 +108,6 @@ if (compatibilitySource != null) {
     }
     sourceSets.main.java.setSrcDirs([compatibilitySources])
     tasks.named('compileJava') { dependsOn 'prepareCompatibilitySources' }
-    loom {
-        accessWidenerPath = compatibilityAccessWidener
-    }
     processResources {
         dependsOn 'prepareCompatibilitySources'
     }
@@ -205,7 +204,7 @@ processResources {
 }
 
 loom {
-    accessWidenerPath = file("src/main/resources/voxy.accesswidener")
+    accessWidenerPath = selectedAccessWidener
 }
 
 def modRuntimeOnlyMsk = {arg->}

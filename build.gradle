@@ -48,9 +48,15 @@ def lithiumVersions = [
 // Older releases are built from their matching historical source snapshots.
 // The current source tree remains the native implementation for 1.21.11.
 def compatibilitySource = [
-    '1.21':    [ref: '67edb4a44b2f446816c2d39f1e440c6f66c9026f', yarn: '1.21+build.2'],
+    '1.21':    [ref: '67edb4a44b2f446816c2d39f1e440c6f66c9026f', yarn: '1.21+build.2', legacy: true],
     '1.21.10': [ref: 'upstream/mc12110']
 ][project.minecraft_version]
+if (compatibilitySource?.legacy) {
+    project.ext.fabric_version = '0.100.1+1.21'
+    sodiumVersion = 'mc1.21-0.5.9'
+    irisVersion = '1.7.1+1.21'
+    modmenuVersion = '11.0.1'
+}
 if (compatibilitySource != null) {
     def compatibilitySources = file("${buildDir}/generated/compat-${project.minecraft_version}/java")
     tasks.register('prepareCompatibilitySources') {
@@ -257,6 +263,12 @@ dependencies {
     modCompileOnly("maven.modrinth:vivecraft:1.21.9-1.3.2-fabric")
 
     modCompileOnly("maven.modrinth:flashback:rNCr1Rbs")
+
+    if (compatibilitySource?.legacy) {
+        modImplementation "net.fabricmc.fabric-api:fabric-rendering-data-attachment-v1:0.3.38+73761d2e9a"
+        modImplementation "maven.modrinth:cloth-config:13.0.121+fabric"
+        modCompileOnly "maven.modrinth:nvidium:0.2.8-beta"
+    }
 }
 
 

@@ -166,7 +166,7 @@ def default_minecraft_directory():
 def parse_args():
     minecraft = default_minecraft_directory()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--action", choices=("profiles", "dependencies", "jdks", "compile"))
+    parser.add_argument("--action", choices=("profiles", "dependencies", "jdks", "compile", "compile-online"))
     parser.add_argument("--jdk-versions", type=int, nargs="+")
     parser.add_argument("--allow-build-downloads", action="store_true",
                         help="Allow dependency/toolchain downloads during command-line builds; compilation is offline by default.")
@@ -205,16 +205,17 @@ def select_action(args):
         return "compile"
     if not sys.stdin.isatty():
         fail("Use --action with --versions or --no-interactive-menu outside a terminal.")
-    choices = ("profiles", "dependencies", "jdks", "compile")
+    choices = ("profiles", "dependencies", "jdks", "compile", "compile-online")
     while True:
         print("\n1. Create/update profiles")
         print("2. Update profile dependencies")
         print("3. Install JDK versions")
         print("4. Compile versions (offline)")
-        choice = input("\nSelect an action (1-4, Q to quit): ").strip().lower()
+        print("5. Compile versions (online)")
+        choice = input("\nSelect an action (1-5, Q to quit): ").strip().lower()
         if choice == "q":
             raise SystemExit(0)
-        if choice in ("1", "2", "3", "4"):
+        if choice in ("1", "2", "3", "4", "5"):
             return choices[int(choice) - 1]
         print("Invalid selection.")
 
@@ -240,11 +241,42 @@ def select_matrix(args):
     return matrix
 
 
+def read_json_file(path, default=None):
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+        if not text.strip():
+            return default
+        value = json.loads(text)
+        return value if value is not None else default
+    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return default
+
+
+def write_json_file(path, value):
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def normalize_manifest_entries(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, str):
+        try:
+            return normalize_manifest_entries(json.loads(value))
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
 def fabric_manifest(jar):
     try:
         with zipfile.ZipFile(jar) as archive:
-            return json.loads(archive.read("fabric.mod.json"))
-    except (KeyError, OSError, zipfile.BadZipFile, json.JSONDecodeError):
+            raw = archive.read("fabric.mod.json")
+            return json.loads(raw.decode("utf-8-sig"))
+    except (KeyError, OSError, zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError):
         return None
 
 
@@ -327,7 +359,7 @@ def get_java_home(major, configured, toolchains, offline=False):
 
 def property_value(path, name):
     pattern = re.compile(rf"^\s*{re.escape(name)}\s*=(.*)$")
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         match = pattern.match(line)
         if match:
             return match.group(1).strip()
@@ -335,7 +367,7 @@ def property_value(path, name):
 
 
 def target_java_version(build_file, branch):
-    match = re.search(r"targetJavaVersion\s*=\s*(\d+)", build_file.read_text(encoding="utf-8"))
+    match = re.search(r"targetJavaVersion\s*=\s*(\d+)", build_file.read_text(encoding="utf-8-sig"))
     if not match:
         fail(f"Could not determine targetJavaVersion for {branch}.")
     return int(match.group(1))
@@ -434,7 +466,7 @@ class RuntimeUpdater:
     def sync_mods(self, minecraft_version, mods, voxy_artifact=None):
         mods.mkdir(parents=True, exist_ok=True)
         manifest_path = mods / ".voxy-managed-mods.json"
-        previous = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else []
+        previous = normalize_manifest_entries(read_json_file(manifest_path, []))
         projects = {"fabric-api": ("Fabric API", "P7dR8mSH"), "sodium": ("Sodium", "AANobbMI"), "cloth-config": ("Cloth Config", "9s6osm5g"), "modmenu": ("Mod Menu", "mOgUt4GM"), "iris": ("Iris Shaders", "YL57xq9U")}
         constraints = {"fabric-api": "*", "sodium": "*", "modmenu": "*", "iris": "*"}
         if minecraft_version == "1.20.1":
@@ -478,23 +510,23 @@ class RuntimeUpdater:
             self.log(f"[{minecraft_version}] {name}: {item['version_number']} ({item['file_name']}).")
         current = {item["file_name"] for item in entries}
         for old in previous:
-            if old.get("file_name") and old["file_name"] not in current:
+            if isinstance(old, dict) and old.get("file_name") and old["file_name"] not in current:
                 (mods / old["file_name"]).unlink(missing_ok=True)
-        manifest_path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
+        write_json_file(manifest_path, entries)
 
     def sync_shaders(self, minecraft_version, game_directory):
         shaders = game_directory / "shaderpacks"
         shaders.mkdir(parents=True, exist_ok=True)
         manifest_path = shaders / ".voxy-managed-shaders.json"
-        previous = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else []
+        previous = normalize_manifest_entries(read_json_file(manifest_path, []))
         item = modrinth_file("HVnmMxH1", minecraft_version, loader="iris")
         cached = self.cached(item)
         shutil.copy2(cached, shaders / item["file_name"])
         entry = {"project": "Complementary Shaders - Reimagined", **{key: item[key] for key in ("project_id", "version_id", "version_number", "version_type", "file_name", "sha512")}}
         for old in previous:
-            if old.get("file_name") and old["file_name"] != item["file_name"]:
+            if isinstance(old, dict) and old.get("file_name") and old["file_name"] != item["file_name"]:
                 (shaders / old["file_name"]).unlink(missing_ok=True)
-        manifest_path.write_text(json.dumps([entry], indent=2) + "\n", encoding="utf-8")
+        write_json_file(manifest_path, [entry])
         print(f"  {minecraft_version}: {entry['project']} {item['version_number']}")
         self.log(f"[{minecraft_version}] {entry['project']}: {item['version_number']} ({item['file_name']}).")
 
@@ -596,7 +628,7 @@ def build_matrix(args, matrix, output_directory):
                     source_version = property_value(worktree / "gradle.properties", "minecraft_version")
                     if source_version != entry["expected"]:
                         fail(f"Branch {branch} targets Minecraft {source_version}, expected {entry['expected']}. Complete the port before distributing this build.")
-                    source_manifest = json.loads((worktree / "src/main/resources/fabric.mod.json").read_text(encoding="utf-8"))
+                    source_manifest = json.loads((worktree / "src/main/resources/fabric.mod.json").read_bytes().decode("utf-8-sig"))
                     if source_manifest.get("id") != "voxy":
                         fail(f"Branch {branch} contains mod id '{source_manifest.get('id')}', not 'voxy'. Complete the Voxy port before distributing this build.")
                     build_version = entry.get("build_version", source_version)
@@ -720,7 +752,9 @@ def save_profiles(args, matrix, artifacts, version_ids, updater, failures):
         fail(f"Minecraft Launcher profile file was not found: {profiles_path}")
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     shutil.copy2(profiles_path, profiles_path.with_name(profiles_path.name + f".{timestamp}.bak"))
-    launcher = json.loads(profiles_path.read_text(encoding="utf-8"))
+    launcher = read_json_file(profiles_path, {})
+    if not isinstance(launcher, dict):
+        launcher = {}
     profiles = launcher.setdefault("profiles", {})
     for entry in matrix:
         key = entry.get("key", entry["branch"])
@@ -750,8 +784,8 @@ def save_profiles(args, matrix, artifacts, version_ids, updater, failures):
             profile.setdefault("name", f"Voxy Test {version}")
             profile.update({"gameDir": str(game), "lastVersionId": version_ids[version], "type": "custom"})
     temporary = profiles_path.with_name(profiles_path.name + ".codex-new")
-    temporary.write_text(json.dumps(launcher, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    json.loads(temporary.read_text(encoding="utf-8"))
+    write_json_file(temporary, launcher)
+    read_json_file(temporary)
     temporary.replace(profiles_path)
 
 
@@ -809,7 +843,9 @@ def main():
     elif action == "dependencies":
         updater.update_selected(matrix, args.profiles_directory)
         failures.extend(updater.failures)
-    elif action == "compile":
+    elif action in ("compile", "compile-online"):
+        if action == "compile-online":
+            args.allow_build_downloads = True
         artifacts, build_failures = build_matrix(args, matrix, output_directory)
         failures.extend(build_failures)
         install_compiled_artifacts(args, matrix, artifacts, failures)

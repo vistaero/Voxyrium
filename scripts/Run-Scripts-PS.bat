@@ -1,11 +1,11 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-title Voxy - Scripts
+title Voxy - PowerShell Scripts
 
 :menu
 cls
 echo ========================================
-echo          Compatibility Scripts
+echo        PowerShell Script Launcher
 echo ========================================
 echo.
 
@@ -24,14 +24,15 @@ if !count! EQU 0 (
 )
 
 echo.
-echo [Q] Quit
+echo [Q] Back to launcher
 echo.
 set "choice="
 set /p "choice=Select a script: "
 
 if /I "!choice!"=="Q" exit /b 0
-for /f "delims=0123456789" %%A in ("!choice!") do goto invalid
 if "!choice!"=="" goto invalid
+set /a "numeric_check=!choice!" 2>nul
+if errorlevel 1 goto invalid
 if !choice! LSS 1 goto invalid
 if !choice! GTR !count! goto invalid
 
@@ -39,10 +40,8 @@ for %%N in (!choice!) do set "selected=!script[%%N]!"
 echo.
 echo Running !selected!...
 echo.
-pushd "%~dp0.."
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0!selected!"
 set "result=!errorlevel!"
-popd
 echo.
 if not "!result!"=="0" echo The script ended with exit code !result!.
 pause

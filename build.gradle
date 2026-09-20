@@ -60,7 +60,7 @@ def compatibilitySource = [
     '1.21.4':  [ref: 'b8fda63e', yarn: '1.21.4+build.8', historical: '1214',
                 fabric: '0.114.2+1.21.4', sodium: 'mc1.21.4-0.6.6-fabric', iris: '1.8.5+1.21.4-fabric', modmenu: '13.0.0'],
     '1.21.5':  [ref: 'upstream/mc_1215', yarn: '1.21.5+build.1', historical: '1215',
-                fabric: '0.128.2+1.21.5', sodium: 'mc1.21.5-0.6.13-fabric', iris: '1.8.11+1.21.5-fabric', modmenu: '14.0.2'],
+                fabric: '0.128.2+1.21.5', sodium: 'mc1.21.5-0.6.13-fabric', iris: '1.8.11+1.21.5-fabric', modmenu: '14.0.2', lithium: 'mc1.21.5-0.16.0-fabric'],
     '1.21.10': [ref: 'upstream/mc12110']
 ][project.minecraft_version]
 if (compatibilitySource?.legacy || compatibilitySource?.historical) {
@@ -251,8 +251,8 @@ dependencies {
     }
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     // Optional at runtime, but WorldConversionFactory references its palette.
-    if (compatibilitySource?.historical == null) {
-        modCompileOnly "maven.modrinth:lithium:${lithiumVersions[project.minecraft_version]}"
+    if (compatibilitySource?.historical == null || compatibilitySource?.historical == '1215') {
+        modCompileOnly "maven.modrinth:lithium:${compatibilitySource?.lithium ?: lithiumVersions[project.minecraft_version]}"
     }
 
 

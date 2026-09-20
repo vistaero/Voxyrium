@@ -154,6 +154,7 @@ if (compatibilitySource != null) {
                     if (compatibilitySource?.legacy || compatibilitySource?.historical) {
                         def sodiumSeries = sodiumVersion.split('-')[1].replaceFirst(/\.[^.]+$/, '.x')
                         contents = contents.replace('"sodium": "*"', '"sodium": "' + sodiumSeries + '"')
+                        contents = contents.replace('"sodium": ["=${sodium}"]', '"sodium": ["' + sodiumSeries + '"]')
                     }
                 }
                 if (project.minecraft_version == '1.21.1' && name == 'voxy.mixins.json') {

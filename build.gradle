@@ -63,6 +63,9 @@ def compatibilitySource = [
                 fabric: '0.128.2+1.21.5', sodium: 'mc1.21.5-0.6.13-fabric', iris: '1.8.11+1.21.5-fabric', modmenu: '14.0.2', lithium: 'mc1.21.5-0.16.0-fabric'],
     '1.21.6':  [ref: '388764e9', yarn: '1.21.6+build.1', historical: '1216',
                 fabric: '0.127.0+1.21.6', sodium: 'mc1.21.6-0.6.13-fabric', iris: '1.9.0+1.21.6-fabric', modmenu: '15.0.0-beta.1', lithium: 'mc1.21.6-0.17.0-fabric'],
+    '1.21.7':  [ref: 'upstream/mc_1217'],
+    '1.21.8':  [ref: 'upstream/mc_1217'],
+    '1.21.9':  [ref: 'upstream/mc12110'],
     '1.21.10': [ref: 'upstream/mc12110']
 ][project.minecraft_version]
 if (compatibilitySource?.legacy || compatibilitySource?.historical) {
@@ -97,7 +100,7 @@ if (compatibilitySource != null) {
                 if (path.endsWith('/ModelStore.java')) {
                     contents = contents.replaceAll('(?s)int mipLvl = \\(\\(TextureAtlas\\).*?\\.mipLevel;', 'int mipLvl = Integer.numberOfTrailingZeros(ModelFactory.MODEL_TEXTURE_SIZE);')
                 }
-                if (project.minecraft_version == '1.21.2' && path.endsWith('/LightMapHelper.java')) {
+                if (project.minecraft_version in ['1.21.2', '1.21.3'] && path.endsWith('/LightMapHelper.java')) {
                     contents = contents.replace(
                             'var lmt = MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().texture.getImage();',
                             'var lmt = MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().lightmapFramebuffer;\n' +

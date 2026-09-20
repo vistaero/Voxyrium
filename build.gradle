@@ -131,6 +131,11 @@ if (compatibilitySource != null) {
                                 'TerrainRenderPass renderPass, CameraTransform camera, boolean indexedRenderingEnabled, CallbackInfo ci)')
                     }
                 }
+                if (project.minecraft_version in ['1.21', '1.21.1'] && path.endsWith('/MixinMinecraftClient.java')) {
+                    // RenderDoc is optional; the historical source must not
+                    // abort game initialization when its DLL is not installed.
+                    contents = contents.replace('System.load(', '// System.load(')
+                }
                 output.text = contents
             }
             def resourceNames = providers.exec {

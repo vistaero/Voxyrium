@@ -57,6 +57,8 @@ def compatibilitySource = [
                 fabric: '0.106.1+1.21.2', sodium: 'mc1.21.3-0.6.0-fabric', iris: '1.8.0+1.21.3-fabric', modmenu: '12.0.0-beta.1'],
     '1.21.3':  [ref: '5e5d0c8051f66e65558ded39b862c528e71b8b99', yarn: '1.21.3+build.2', historical: '1213',
                 fabric: '0.108.0+1.21.3', sodium: 'mc1.21.3-0.6.0-fabric', iris: '1.8.0+1.21.3-fabric', modmenu: '12.0.0-beta.1'],
+    '1.21.4':  [ref: 'b8fda63e', yarn: '1.21.4+build.8', historical: '1214',
+                fabric: '0.114.2+1.21.4', sodium: 'mc1.21.4-0.6.6-fabric', iris: '1.8.5+1.21.4-fabric', modmenu: '13.0.0'],
     '1.21.10': [ref: 'upstream/mc12110']
 ][project.minecraft_version]
 if (compatibilitySource?.legacy || compatibilitySource?.historical) {
@@ -247,7 +249,7 @@ dependencies {
     }
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     // Optional at runtime, but WorldConversionFactory references its palette.
-    if (compatibilitySource?.historical != '1213') {
+    if (compatibilitySource?.historical == null) {
         modCompileOnly "maven.modrinth:lithium:${lithiumVersions[project.minecraft_version]}"
     }
 
@@ -302,6 +304,9 @@ dependencies {
         modImplementation "maven.modrinth:cloth-config:16.0.141+fabric"
         modCompileOnly "maven.modrinth:nvidium:0.2.8-beta"
         modImplementation 'io.github.douira:glsl-transformer:2.0.1'
+    } else if (compatibilitySource?.historical == '1214') {
+        modImplementation "maven.modrinth:cloth-config:17.0.144+fabric"
+        modCompileOnly "maven.modrinth:nvidium:0.2.8-beta"
     }
 }
 

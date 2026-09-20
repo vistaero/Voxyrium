@@ -49,14 +49,17 @@ def selectedAccessWidener = file("src/main/resources/voxy.accesswidener")
 // Older releases are built from their matching historical source snapshots.
 // The current source tree remains the native implementation for 1.21.11.
 def compatibilitySource = [
-    '1.21':    [ref: '67edb4a44b2f446816c2d39f1e440c6f66c9026f', yarn: '1.21+build.2', legacy: true],
+    '1.21':    [ref: '67edb4a44b2f446816c2d39f1e440c6f66c9026f', yarn: '1.21+build.2', legacy: true,
+                fabric: '0.100.1+1.21', sodium: 'mc1.21-0.5.9', iris: '1.7.3+1.21', modmenu: '11.0.1'],
+    '1.21.1':  [ref: '67edb4a44b2f446816c2d39f1e440c6f66c9026f', yarn: '1.21.1+build.3', legacy: true,
+                fabric: '0.116.17+1.21.1', sodium: 'mc1.21.1-0.5.11-fabric', iris: '1.7.3+1.21.1', modmenu: '11.0.4'],
     '1.21.10': [ref: 'upstream/mc12110']
 ][project.minecraft_version]
 if (compatibilitySource?.legacy) {
-    project.ext.fabric_version = '0.100.1+1.21'
-    sodiumVersion = 'mc1.21-0.5.9'
-    irisVersion = '1.7.3+1.21'
-    modmenuVersion = '11.0.1'
+    project.ext.fabric_version = compatibilitySource.fabric
+    sodiumVersion = compatibilitySource.sodium
+    irisVersion = compatibilitySource.iris
+    modmenuVersion = compatibilitySource.modmenu
 }
 if (compatibilitySource != null) {
     def compatibilitySources = file("${buildDir}/generated/compat-${project.minecraft_version}/java")
@@ -98,7 +101,7 @@ if (compatibilitySource != null) {
                     commandLine 'git', 'show', "${compatibilitySource.ref}:src/main/resources/${name}"
                 }.standardOutput.asText.get()
                 if (compatibilitySource?.legacy && name == 'fabric.mod.json') {
-                    contents = contents.replace('"sodium": "*"', '"sodium": "=0.5.9"')
+                    contents = contents.replace('"sodium": "*"', '"sodium": "=' + sodiumVersion.split('-')[1] + '"')
                 }
                 output.text = contents
             }

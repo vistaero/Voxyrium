@@ -755,6 +755,29 @@ def save_profiles(args, matrix, artifacts, version_ids, updater, failures):
     temporary.replace(profiles_path)
 
 
+def install_compiled_artifacts(args, matrix, artifacts, failures):
+    """Install each successfully built Voxy JAR into its test profile."""
+    installed = []
+    for entry in matrix:
+        artifact = artifacts.get(entry.get("key", entry["branch"]))
+        if artifact is None:
+            continue
+        for version in entry["versions"]:
+            mods = profile_game_directory(args.profiles_directory, version) / "mods"
+            try:
+                mods.mkdir(parents=True, exist_ok=True)
+                for existing in mods.glob("*.jar"):
+                    if jar_mod_id(existing) == "voxy":
+                        existing.unlink()
+                destination = mods / artifact.name
+                shutil.copy2(artifact, destination)
+                installed.append(destination)
+            except Exception as error:
+                failures.append(f"Install Voxy for Minecraft {version}: {error}")
+    for destination in installed:
+        print(f"Installed Voxy: {destination}")
+
+
 def main():
     args = parse_args()
     action = select_action(args)
@@ -789,6 +812,7 @@ def main():
     elif action == "compile":
         artifacts, build_failures = build_matrix(args, matrix, output_directory)
         failures.extend(build_failures)
+        install_compiled_artifacts(args, matrix, artifacts, failures)
     elif action == "profiles":
         # Profile preparation neither builds nor updates mods/shaders.
         args.skip_runtime_mods = True

@@ -53,9 +53,13 @@ def compatibilitySource = [
                 fabric: '0.100.1+1.21', sodium: 'mc1.21-0.5.9', iris: '1.7.3+1.21', modmenu: '11.0.1'],
     '1.21.1':  [ref: '67edb4a44b2f446816c2d39f1e440c6f66c9026f', yarn: '1.21.1+build.3', legacy: true,
                 fabric: '0.116.17+1.21.1', sodium: 'mc1.21-0.5.11', iris: '1.7.3+1.21', modmenu: '11.0.4'],
+    '1.21.2':  [ref: '5e5d0c8051f66e65558ded39b862c528e71b8b99', yarn: '1.21.2+build.1', historical: '1213',
+                fabric: '0.106.1+1.21.2', sodium: 'mc1.21.3-0.6.0-fabric', iris: '1.8.0+1.21.3-fabric', modmenu: '12.0.0-beta.1'],
+    '1.21.3':  [ref: '5e5d0c8051f66e65558ded39b862c528e71b8b99', yarn: '1.21.3+build.2', historical: '1213',
+                fabric: '0.108.0+1.21.3', sodium: 'mc1.21.3-0.6.0-fabric', iris: '1.8.0+1.21.3-fabric', modmenu: '12.0.0-beta.1'],
     '1.21.10': [ref: 'upstream/mc12110']
 ][project.minecraft_version]
-if (compatibilitySource?.legacy) {
+if (compatibilitySource?.legacy || compatibilitySource?.historical) {
     project.ext.fabric_version = compatibilitySource.fabric
     sodiumVersion = compatibilitySource.sodium
     irisVersion = compatibilitySource.iris
@@ -100,8 +104,11 @@ if (compatibilitySource != null) {
                 def contents = providers.exec {
                     commandLine 'git', 'show', "${compatibilitySource.ref}:src/main/resources/${name}"
                 }.standardOutput.asText.get()
-                if (compatibilitySource?.legacy && name == 'fabric.mod.json') {
-                    contents = contents.replace('"sodium": "*"', '"sodium": "=' + sodiumVersion.split('-')[1] + '"')
+                if (compatibilitySource != null && name == 'fabric.mod.json') {
+                    contents = contents.replaceFirst('"minecraft": "[^"]+"', '"minecraft": "' + project.minecraft_version + '"')
+                    if (compatibilitySource?.legacy || compatibilitySource?.historical) {
+                        contents = contents.replace('"sodium": "*"', '"sodium": "=' + sodiumVersion.split('-')[1] + '"')
+                    }
                 }
                 output.text = contents
             }
@@ -233,7 +240,9 @@ dependencies {
     }
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     // Optional at runtime, but WorldConversionFactory references its palette.
-    modCompileOnly "maven.modrinth:lithium:${lithiumVersions[project.minecraft_version]}"
+    if (compatibilitySource?.historical != '1213') {
+        modCompileOnly "maven.modrinth:lithium:${lithiumVersions[project.minecraft_version]}"
+    }
 
 
     modRuntimeOnlyMsk(fabricApi.module("fabric-api-base", project.fabric_version))
@@ -251,7 +260,7 @@ dependencies {
 
 
     //modRuntimeOnlyMsk "drouarb:nvidium:0.4.1-beta4:1.21.6@jar"
-    if (!compatibilitySource?.legacy) {
+    if (!compatibilitySource?.legacy && !compatibilitySource?.historical) {
         modCompileOnly "drouarb:nvidium:0.4.1-beta4:1.21.6@jar"
     }
 
@@ -282,6 +291,10 @@ dependencies {
         modImplementation "net.fabricmc.fabric-api:fabric-rendering-data-attachment-v1:0.3.38+73761d2e9a"
         modImplementation "maven.modrinth:cloth-config:13.0.121+fabric"
         modCompileOnly "maven.modrinth:nvidium:0.2.8-beta"
+    } else if (compatibilitySource?.historical == '1213') {
+        modImplementation "maven.modrinth:cloth-config:16.0.141+fabric"
+        modCompileOnly "maven.modrinth:nvidium:0.2.8-beta"
+        modImplementation 'io.github.douira:glsl-transformer:2.0.1'
     }
 }
 

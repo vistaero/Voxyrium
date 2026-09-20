@@ -244,7 +244,9 @@ dependencies {
 
 
     //modRuntimeOnlyMsk "drouarb:nvidium:0.4.1-beta4:1.21.6@jar"
-    modCompileOnly "drouarb:nvidium:0.4.1-beta4:1.21.6@jar"
+    if (!compatibilitySource?.legacy) {
+        modCompileOnly "drouarb:nvidium:0.4.1-beta4:1.21.6@jar"
+    }
 
     modCompileOnly("maven.modrinth:modmenu:${modmenuVersion}")
     modRuntimeOnlyMsk("maven.modrinth:modmenu:${modmenuVersion}")

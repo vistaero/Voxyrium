@@ -398,21 +398,23 @@ def matches_constraint(project_id, version_number, constraint):
     if candidate is None:
         return False
     for value in map(str, alternatives):
-        wildcard = re.fullmatch(r"=(\d+)\.(\d+)\.\*", value)
+        wildcard = re.fullmatch(r"=?((?:\d+))\.(\d+)\.(?:\*|x)", value, re.IGNORECASE)
         exact = re.fullmatch(r"=?(\d+(?:\.\d+){0,2})", value)
-        minimum = re.search(r">=(\d+(?:\.\d+){0,2})", value)
-        maximum = re.search(r"<=(\d+(?:\.\d+){0,2})", value)
+        minimum = re.search(r">(=)?(\d+(?:\.\d+){0,2})", value)
+        maximum = re.search(r"<(=)?(\d+(?:\.\d+){0,2})", value)
         if value == "*" or wildcard and candidate[:2] == (int(wildcard.group(1)), int(wildcard.group(2))):
             return True
         is_prerelease = bool(re.search(r"-(?:alpha|beta|rc)(?:[.\-+\d]|$)", version_number, re.IGNORECASE))
         if exact and candidate == version_tuple(exact.group(1)) and not is_prerelease:
             return True
-        if (minimum or maximum) and (not minimum or candidate >= version_tuple(minimum.group(1))) and (not maximum or candidate <= version_tuple(maximum.group(1))):
+        minimum_ok = not minimum or (candidate >= version_tuple(minimum.group(2)) if minimum.group(1) else candidate > version_tuple(minimum.group(2)))
+        maximum_ok = not maximum or (candidate <= version_tuple(maximum.group(2)) if maximum.group(1) else candidate < version_tuple(maximum.group(2)))
+        if (minimum or maximum) and minimum_ok and maximum_ok:
             return True
     return False
 
 
-def modrinth_file(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None):
+def modrinth_candidates(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None):
     headers = {"User-Agent": USER_AGENT}
     if required_id:
         versions = [json_url(f"https://api.modrinth.com/v2/version/{required_id}", headers)]
@@ -425,18 +427,25 @@ def modrinth_file(project_id, minecraft_version, loader="fabric", constraint="*"
     listed = [item for item in versions if item.get("status") == "listed" and item.get("files") and (not required_id or item.get("id") == required_id) and (not number_pattern or re.search(number_pattern, item.get("version_number", ""))) and matches_constraint(project_id, item.get("version_number", ""), constraint)]
     if not listed:
         fail(f"Modrinth project {project_id} has no listed {loader} version for Minecraft {minecraft_version} matching constraint {constraint!r}.")
-    selected = None
+    ordered = []
     for channel in ("release", "beta", "alpha"):
         candidates = sorted((item for item in listed if item.get("version_type") == channel), key=lambda item: item.get("date_published", ""), reverse=True)
-        if candidates:
-            selected = candidates[0]
-            break
-    selected = selected or sorted(listed, key=lambda item: item.get("date_published", ""), reverse=True)[0]
-    selected_file = next((item for item in selected["files"] if item.get("primary")), None)
-    selected_file = selected_file or next((item for item in selected["files"] if item.get("file_type") not in ("sources-jar", "dev-jar", "javadoc-jar", "signature")), None)
-    if not selected_file:
-        fail(f"Modrinth version {selected['id']} has no distributable primary file.")
-    return {"project_id": project_id, "version_id": selected["id"], "version_number": selected["version_number"], "version_type": selected["version_type"], "file_name": selected_file["filename"], "url": selected_file["url"], "sha512": selected_file.get("hashes", {}).get("sha512"), "dependencies": selected.get("dependencies", [])}
+        ordered.extend(candidates)
+    ordered.extend(sorted((item for item in listed if item.get("version_type") not in ("release", "beta", "alpha")), key=lambda item: item.get("date_published", ""), reverse=True))
+    result = []
+    for selected in ordered:
+        selected_file = next((item for item in selected["files"] if item.get("primary")), None)
+        selected_file = selected_file or next((item for item in selected["files"] if item.get("file_type") not in ("sources-jar", "dev-jar", "javadoc-jar", "signature")), None)
+        if not selected_file:
+            continue
+        result.append({"project_id": project_id, "version_id": selected["id"], "version_number": selected["version_number"], "version_type": selected["version_type"], "file_name": selected_file["filename"], "url": selected_file["url"], "sha512": selected_file.get("hashes", {}).get("sha512"), "dependencies": selected.get("dependencies", [])})
+    if not result:
+        fail(f"Modrinth project {project_id} has no distributable version for Minecraft {minecraft_version} matching constraint {constraint!r}.")
+    return result
+
+
+def modrinth_file(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None):
+    return modrinth_candidates(project_id, minecraft_version, loader, constraint, required_id, number_pattern)[0]
 
 
 class RuntimeUpdater:
@@ -467,6 +476,70 @@ class RuntimeUpdater:
             self.log(f"[{item['project_id']}] Downloaded and verified {item['file_name']}.")
         return cache
 
+    def cached_manifest(self, item):
+        manifest = fabric_manifest(self.cached(item))
+        if not manifest:
+            fail(f"Could not read fabric.mod.json from {item['file_name']}.")
+        return manifest
+
+    @staticmethod
+    def manifest_requirement(manifest, dependency):
+        return manifest.get("depends", {}).get(dependency)
+
+    @staticmethod
+    def manifest_breaks(manifest, dependency):
+        return manifest.get("breaks", {}).get(dependency)
+
+    @staticmethod
+    def modrinth_requirement(item, project_id):
+        return next((dependency for dependency in item.get("dependencies", [])
+                     if dependency.get("project_id") == project_id
+                     and dependency.get("dependency_type") == "required"), None)
+
+    def compatible_pair(self, minecraft_version, constraints, projects):
+        iris_id = projects["iris"][1]
+        sodium_id = projects["sodium"][1]
+        iris_candidates = modrinth_candidates(
+            iris_id, minecraft_version, constraint=constraints["iris"],
+            number_pattern=r"\+" + re.escape(minecraft_version) + r"(?:$|[-+])")
+        sodium_candidates = modrinth_candidates(
+            sodium_id, minecraft_version, constraint=constraints["sodium"])
+
+        sodium_manifests = {}
+        for iris in iris_candidates:
+            iris_recommendation = self.modrinth_requirement(iris, sodium_id)
+            for sodium in sodium_candidates:
+                # Modrinth's version_id is a recommendation. version_req is
+                # the actual range that must be satisfied by the other mod.
+                if (iris_recommendation and iris_recommendation.get("version_req")
+                        and not matches_constraint(sodium_id, sodium["version_number"], iris_recommendation["version_req"])):
+                    continue
+                sodium_recommendation = self.modrinth_requirement(sodium, iris_id)
+                if (sodium_recommendation and sodium_recommendation.get("version_req")
+                        and not matches_constraint(iris_id, iris["version_number"], sodium_recommendation["version_req"])):
+                    continue
+
+                iris_manifest = self.cached_manifest(iris)
+                sodium_key = sodium["version_id"]
+                if sodium_key not in sodium_manifests:
+                    sodium_manifests[sodium_key] = self.cached_manifest(sodium)
+                sodium_manifest = sodium_manifests[sodium_key]
+                if (self.manifest_requirement(iris_manifest, "sodium")
+                        and not matches_constraint(sodium_id, sodium["version_number"], self.manifest_requirement(iris_manifest, "sodium"))):
+                    continue
+                if (self.manifest_requirement(sodium_manifest, "iris")
+                        and not matches_constraint(iris_id, iris["version_number"], self.manifest_requirement(sodium_manifest, "iris"))):
+                    continue
+                if (self.manifest_breaks(iris_manifest, "sodium")
+                        and matches_constraint(sodium_id, sodium["version_number"], self.manifest_breaks(iris_manifest, "sodium"))):
+                    continue
+                if (self.manifest_breaks(sodium_manifest, "iris")
+                        and matches_constraint(iris_id, iris["version_number"], self.manifest_breaks(sodium_manifest, "iris"))):
+                    continue
+                self.log(f"[{minecraft_version}] Compatible pair: Iris {iris['version_number']} + Sodium {sodium['version_number']}.")
+                return iris, sodium
+        fail(f"No compatible Iris/Sodium pair exists for Minecraft {minecraft_version} with constraints Iris={constraints['iris']!r}, Sodium={constraints['sodium']!r}.")
+
     def sync_mods(self, minecraft_version, mods, voxy_artifact=None):
         mods.mkdir(parents=True, exist_ok=True)
         manifest_path = mods / ".voxy-managed-mods.json"
@@ -491,22 +564,9 @@ class RuntimeUpdater:
                     fail(f"Required mod '{dependency}' has no Modrinth project mapping in the compatibility script.")
                 constraints[dependency] = constraint
         resolved, entries = {}, []
-        order = sorted(key for key in constraints if key not in ("sodium", "iris")) + ["iris", "sodium"]
-        for dependency in order:
+
+        def install(dependency, item):
             name, project_id = projects[dependency]
-            required_id = None
-            if dependency == "sodium" and "iris" in resolved:
-                requirement = next((item for item in resolved["iris"]["dependencies"] if item.get("project_id") == projects["sodium"][1] and item.get("dependency_type") == "required"), None)
-                if requirement and requirement.get("version_id"):
-                    iris_sodium = modrinth_file(project_id, minecraft_version, constraint="*", required_id=requirement["version_id"])
-                    if matches_constraint(project_id, iris_sodium["version_number"], constraints["sodium"]):
-                        required_id = requirement["version_id"]
-                    else:
-                        self.log(f"[{minecraft_version}] Ignored Iris Sodium recommendation {iris_sodium['version_number']}; required constraint is {constraints['sodium']}.")
-                elif requirement and requirement.get("version_req"):
-                    constraints["sodium"] = requirement["version_req"]
-            number_pattern = r"\+" + re.escape(minecraft_version) + r"(?:$|[-+])" if dependency == "iris" else None
-            item = modrinth_file(project_id, minecraft_version, constraint=constraints[dependency], required_id=required_id, number_pattern=number_pattern)
             resolved[dependency] = item
             cached = self.cached(item)
             for existing in mods.glob("*.jar"):
@@ -517,6 +577,14 @@ class RuntimeUpdater:
             entries.append({"project": name, **{key: item[key] for key in ("project_id", "version_id", "version_number", "version_type", "file_name", "sha512")}})
             print(f"  {minecraft_version}: {name} {item['version_number']}")
             self.log(f"[{minecraft_version}] {name}: {item['version_number']} ({item['file_name']}).")
+
+        for dependency in sorted(key for key in constraints if key not in ("sodium", "iris")):
+            item = modrinth_file(projects[dependency][1], minecraft_version, constraint=constraints[dependency])
+            install(dependency, item)
+
+        iris, sodium = self.compatible_pair(minecraft_version, constraints, projects)
+        install("iris", iris)
+        install("sodium", sodium)
         current = {item["file_name"] for item in entries}
         for old in previous:
             if isinstance(old, dict) and old.get("file_name") and old["file_name"] not in current:

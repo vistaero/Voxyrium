@@ -59,6 +59,12 @@ if (compatibilitySource?.legacy) {
 }
 if (compatibilitySource != null) {
     def compatibilitySources = file("${buildDir}/generated/compat-${project.minecraft_version}/java")
+    def compatibilityResources = file("${buildDir}/generated/compat-${project.minecraft_version}/resources")
+    def compatibilityAccessWidener = new File(compatibilityResources, 'voxy.accesswidener')
+    compatibilityAccessWidener.parentFile.mkdirs()
+    compatibilityAccessWidener.text = providers.exec {
+        commandLine 'git', 'show', "${compatibilitySource.ref}:src/main/resources/voxy.accesswidener"
+    }.standardOutput.asText.get()
     tasks.register('prepareCompatibilitySources') {
         outputs.dir(compatibilitySources)
         doLast {
@@ -84,7 +90,7 @@ if (compatibilitySource != null) {
                 path.endsWith('/fabric.mod.json') || path.endsWith('/voxy.accesswidener') || path.endsWith('.mixins.json')
             }.collect { path -> path.substring('src/main/resources/'.length()) }
             resourceNames.each { name ->
-                def output = new File(buildDir, "generated/compat-${project.minecraft_version}/resources/${name}")
+                def output = new File(compatibilityResources, name)
                 output.parentFile.mkdirs()
                 output.text = providers.exec {
                     commandLine 'git', 'show', "${compatibilitySource.ref}:src/main/resources/${name}"
@@ -101,7 +107,7 @@ if (compatibilitySource != null) {
     sourceSets.main.java.setSrcDirs([compatibilitySources])
     tasks.named('compileJava') { dependsOn 'prepareCompatibilitySources' }
     loom {
-        accessWidenerPath = file("${buildDir}/generated/compat-${project.minecraft_version}/resources/voxy.accesswidener")
+        accessWidenerPath = compatibilityAccessWidener
     }
     processResources {
         dependsOn 'prepareCompatibilitySources'

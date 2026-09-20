@@ -107,6 +107,13 @@ if (compatibilitySource != null) {
                                     '        org.lwjgl.opengl.GL45.glGetTextureImage(lmt.getColorAttachment(), 0, org.lwjgl.opengl.GL11.GL_RGBA, org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE, MemoryUtil.memByteBuffer(upload, 256 * 4));')
                     contents = contents.replace('int sample = lmt.getColor(x,y);', 'int sample = MemoryUtil.memGetInt(upload + (((x << 4) | y) * 4));')
                 }
+                if (project.minecraft_version == '1.21.7' && path.endsWith('/ShaderLoader.java')) {
+                    // Sodium 0.7 returns ParsedShader; reuse its compatible
+                    // loader bridge while keeping the 1.21.7 source snapshot.
+                    contents = providers.exec {
+                        commandLine 'git', 'show', "upstream/mc_1217:${path}"
+                    }.standardOutput.asText.get()
+                }
                 output.text = contents
             }
             def resourceNames = providers.exec {

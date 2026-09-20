@@ -94,7 +94,9 @@ if (compatibilitySource != null) {
                 if (project.minecraft_version == '1.21.2' && path.endsWith('/LightMapHelper.java')) {
                     contents = contents.replace(
                             'var lmt = MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().texture.getImage();',
-                            'var lmt = MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().lightmapFramebuffer.getImage();')
+                            'var lmt = MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().lightmapFramebuffer;\n' +
+                                    '        org.lwjgl.opengl.GL45.glGetTextureImage(lmt.getColorAttachment(), 0, org.lwjgl.opengl.GL11.GL_RGBA, org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE, MemoryUtil.memByteBuffer(upload, 256 * 4));')
+                    contents = contents.replace('int sample = lmt.getColor(x,y);', 'int sample = MemoryUtil.memGetInt(upload + (((x << 4) | y) * 4));')
                 }
                 output.text = contents
             }

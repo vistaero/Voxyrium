@@ -94,9 +94,13 @@ if (compatibilitySource != null) {
             resourceNames.each { name ->
                 def output = new File(compatibilityResources, name)
                 output.parentFile.mkdirs()
-                output.text = providers.exec {
+                def contents = providers.exec {
                     commandLine 'git', 'show', "${compatibilitySource.ref}:src/main/resources/${name}"
                 }.standardOutput.asText.get()
+                if (compatibilitySource?.legacy && name == 'fabric.mod.json') {
+                    contents = contents.replace('"sodium": "*"', '"sodium": "=0.5.9"')
+                }
+                output.text = contents
             }
             // Loom resolves the access widener during configuration, before
             // generated resources exist; mirror the selected file at the

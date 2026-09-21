@@ -47,6 +47,25 @@ MATRIX = [
     {"branch": "mc_1.20-1.20.6", "expected": "1.20.2", "build_version": "1.20", "java": 17, "key": "mc_1.20-1.20.6__1.20", "versions": ["1.20"], "tasks": []},
 ]
 
+# Voxy's Fabric metadata deliberately keeps Iris optional, so it cannot convey
+# the Iris ABI the selected source snapshot was compiled against.  Do not let
+# the runtime updater silently replace that ABI with a newer release merely
+# because Modrinth marks it as covering a neighbouring Minecraft version.
+VOXY_RUNTIME_CONSTRAINTS = {
+    "1.21": {"iris": "=1.8.8+1.21.1-fabric", "sodium": "=mc1.21.1-0.6.13-fabric"},
+    "1.21.1": {"iris": "=1.8.14-beta.1+1.21.1-fabric", "sodium": "=mc1.21.1-0.8.13-fabric"},
+    "1.21.2": {"iris": "=1.8.0+1.21.3-fabric", "sodium": "=mc1.21.3-0.6.1-fabric"},
+    "1.21.3": {"iris": "=1.8.1+1.21.3-fabric", "sodium": "=mc1.21.3-0.6.8-fabric"},
+    "1.21.4": {"iris": "=1.8.8+1.21.4-fabric", "sodium": "=mc1.21.4-0.6.13-fabric"},
+    "1.21.5": {"iris": "=1.8.11+1.21.5-fabric", "sodium": "=mc1.21.5-0.6.13-fabric"},
+    "1.21.6": {"iris": "=1.9.6+1.21.8-fabric", "sodium": "=mc1.21.8-0.7.3-fabric"},
+    "1.21.7": {"iris": "=1.9.6+1.21.8-fabric", "sodium": "=mc1.21.8-0.7.3-fabric"},
+    "1.21.8": {"iris": "=1.9.6+1.21.8-fabric", "sodium": "=mc1.21.8-0.7.3-fabric"},
+    "1.21.9": {"iris": "=1.9.7+1.21.10-fabric", "sodium": "=mc1.21.10-0.7.3-fabric"},
+    "1.21.10": {"iris": "=1.9.7+1.21.10-fabric", "sodium": "=mc1.21.10-0.7.3-fabric"},
+    "1.21.11": {"iris": "=1.10.7+1.21.11-fabric", "sodium": "=mc1.21.11-0.8.13-beta.2-fabric"},
+}
+
 
 def fail(message):
     raise RuntimeError(message)
@@ -395,6 +414,9 @@ def artifact_version_pattern(project_id, minecraft_version):
     if project_id != "AANobbMI":
         return None
     aliases = {
+        "1.21": ("1.21", "1.21.1"),
+        "1.21.2": ("1.21.2", "1.21.3"),
+        "1.21.6": ("1.21.6", "1.21.8"),
         "1.21.7": ("1.21.7", "1.21.8"),
         "1.21.9": ("1.21.9", "1.21.10"),
     }.get(minecraft_version, (minecraft_version,))
@@ -410,6 +432,11 @@ def matches_constraint(project_id, version_number, constraint):
     if candidate is None:
         return False
     for value in map(str, alternatives):
+        # Keep a source snapshot on its exact published Iris/Sodium artifact.
+        # The numeric fallback below intentionally ignores prerelease and
+        # Minecraft suffixes, which is too broad for compatibility profiles.
+        if value.startswith("=") and value[1:] == version_number:
+            return True
         wildcard = re.fullmatch(r"=?((?:\d+))\.(\d+)\.(?:\*|x)", value, re.IGNORECASE)
         exact = re.fullmatch(r"=?(\d+(?:\.\d+){0,2})", value)
         minimum = re.search(r">(=)?(\d+(?:\.\d+){0,2})", value)
@@ -570,6 +597,9 @@ class RuntimeUpdater:
                 if dependency not in projects:
                     fail(f"Required mod '{dependency}' has no Modrinth project mapping in the compatibility script.")
                 constraints[dependency] = constraint
+        # The source snapshot's pair takes precedence over intentionally broad
+        # Fabric metadata such as Sodium's 0.6.x/0.8.x compatibility range.
+        constraints.update(VOXY_RUNTIME_CONSTRAINTS.get(minecraft_version, {}))
         resolved, entries = {}, []
 
         def install(dependency, item):

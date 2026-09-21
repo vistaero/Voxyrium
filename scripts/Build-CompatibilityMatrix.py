@@ -390,6 +390,18 @@ def mod_version(project_id, version_number):
     return version_tuple(match.group(1)) if match else None
 
 
+def artifact_version_pattern(project_id, minecraft_version):
+    """Allow known artifact-name aliases after Modrinth filters game_versions."""
+    if project_id != "AANobbMI":
+        return None
+    aliases = {
+        "1.21.7": ("1.21.7", "1.21.8"),
+        "1.21.9": ("1.21.9", "1.21.10"),
+    }.get(minecraft_version, (minecraft_version,))
+    values = "|".join(re.escape(value) for value in aliases)
+    return r"^mc(?:" + values + r")(?:$|[-+])"
+
+
 def matches_constraint(project_id, version_number, constraint):
     alternatives = constraint if isinstance(constraint, list) else [constraint]
     if not alternatives or "*" in alternatives:
@@ -499,11 +511,11 @@ class RuntimeUpdater:
         iris_id = projects["iris"][1]
         sodium_id = projects["sodium"][1]
         iris_candidates = modrinth_candidates(
-            iris_id, minecraft_version, constraint=constraints["iris"],
-            number_pattern=r"\+" + re.escape(minecraft_version) + r"(?:$|[-+])")
+        iris_id, minecraft_version, constraint=constraints["iris"],
+            number_pattern=None)
         sodium_candidates = modrinth_candidates(
             sodium_id, minecraft_version, constraint=constraints["sodium"],
-            number_pattern=r"^mc" + re.escape(minecraft_version) + r"(?:$|[-+])")
+            number_pattern=artifact_version_pattern(sodium_id, minecraft_version))
 
         sodium_manifests = {}
         for iris in iris_candidates:

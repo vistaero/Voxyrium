@@ -502,7 +502,8 @@ class RuntimeUpdater:
             iris_id, minecraft_version, constraint=constraints["iris"],
             number_pattern=r"\+" + re.escape(minecraft_version) + r"(?:$|[-+])")
         sodium_candidates = modrinth_candidates(
-            sodium_id, minecraft_version, constraint=constraints["sodium"])
+            sodium_id, minecraft_version, constraint=constraints["sodium"],
+            number_pattern=r"^mc" + re.escape(minecraft_version) + r"(?:$|[-+])")
 
         sodium_manifests = {}
         for iris in iris_candidates:

@@ -169,6 +169,7 @@ if (compatibilitySource != null) {
     sourceSets.main.java.setSrcDirs([compatibilitySources])
     sourceSets.main.resources.setSrcDirs([compatibilityResources])
     tasks.named('compileJava') { dependsOn 'prepareCompatibilitySources' }
+    tasks.named('validateAccessWidener') { dependsOn 'prepareCompatibilitySources' }
     processResources {
         dependsOn 'prepareCompatibilitySources'
     }

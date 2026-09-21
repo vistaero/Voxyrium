@@ -188,7 +188,16 @@ function Start-OfflineProfile {
         if ($data.PSObject.Properties.Name -contains 'assetIndex') { $assetIndex = $data.assetIndex; $assetName = [string]$data.assetIndex.id }
         if ($data.PSObject.Properties.Name -contains 'assets') { $assetName = [string]$data.assets }
         if ($data.PSObject.Properties.Name -contains 'javaVersion') { $javaMajor = [int]$data.javaVersion.majorVersion; $javaComponent = [string]$data.javaVersion.component }
-        foreach ($library in @($data.libraries)) { $libraries[[string]$library.name] = $library }
+        foreach ($library in @($data.libraries)) {
+            # Child version metadata replaces an inherited library by Maven
+            # artifact, even when its version changes (e.g. Fabric's ASM).
+            $coordinates = ([string]$library.name) -split ':'
+            $libraryKey = if ($coordinates.Count -ge 2) {
+                $classifier = if ($coordinates.Count -ge 4) { ":$($coordinates[3])" } else { '' }
+                "$($coordinates[0]):$($coordinates[1])$classifier"
+            } else { [string]$library.name }
+            $libraries[$libraryKey] = $library
+        }
         if ($data.PSObject.Properties.Name -contains 'arguments') {
             if ($data.arguments.PSObject.Properties.Name -contains 'jvm') { foreach ($arg in (Get-ArgumentValues @($data.arguments.jvm))) { $jvmArguments.Add($arg) } }
             if ($data.arguments.PSObject.Properties.Name -contains 'game') { foreach ($arg in (Get-ArgumentValues @($data.arguments.game))) { $gameArguments.Add($arg) } }

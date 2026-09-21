@@ -265,7 +265,8 @@ processResources {
             "minecraft": project.minecraft_version, "sodium": sodiumVersion)
     filesMatching("fabric.mod.json") {
         expand "version": version, "commit": hash, "buildtime": time,
-                "minecraft": project.minecraft_version, "sodium": sodiumVersion.split('-')[1]
+                "minecraft": project.minecraft_version,
+                "sodium": sodiumVersion.replaceFirst(/^mc[^-]+-/, '').replaceFirst(/-fabric$/, '')
     }
 }
 

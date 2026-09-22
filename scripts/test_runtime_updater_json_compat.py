@@ -2,7 +2,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 spec = importlib.util.spec_from_file_location("compat_matrix", Path(__file__).with_name("Build-CompatibilityMatrix.py"))
 Build_CompatibilityMatrix = importlib.util.module_from_spec(spec)
@@ -53,6 +53,29 @@ class JsonCompatibilityTests(unittest.TestCase):
             module.profile_game_directory(Path("profiles"), "1.21.1"),
             Path("profiles") / "voxy-test-1.21.1",
         )
+
+    def test_parallel_build_uses_new_console_for_each_worker(self):
+        with patch.object(Build_CompatibilityMatrix.subprocess, "Popen") as popen:
+            Build_CompatibilityMatrix.launch_single_build_in_terminal({"key": "demo", "result_path": "out.json"}, cwd=".")
+            self.assertTrue(popen.called)
+            kwargs = popen.call_args.kwargs
+            if Build_CompatibilityMatrix.os.name == "nt":
+                self.assertTrue(kwargs.get("creationflags") & getattr(Build_CompatibilityMatrix.subprocess, "CREATE_NEW_CONSOLE", 0))
+            else:
+                self.assertTrue(kwargs.get("start_new_session"))
+
+    def test_run_streams_output_live_to_console_and_log(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "gradle.log"
+            process = MagicMock()
+            process.stdout = iter(["build started\n", "progress\n"])
+            process.wait.return_value = 0
+            with patch.object(Build_CompatibilityMatrix.subprocess, "Popen", return_value=process):
+                with patch("builtins.print") as print_mock:
+                    Build_CompatibilityMatrix.run(["gradle", "build"], log=log_path, live_console=True)
+            self.assertTrue(process.wait.called)
+            self.assertTrue(any("build started" in str(call.args[0]) for call in print_mock.call_args_list))
+            self.assertTrue(log_path.exists())
 
     def test_dependency_and_jdk_scripts_are_available(self):
         for name in ("UpdateProfileDependencies.py", "InstallJdkVersions.py"):

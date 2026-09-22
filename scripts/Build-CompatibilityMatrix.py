@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.parse
 import urllib.request
 import uuid
@@ -72,9 +73,34 @@ def fail(message):
     raise RuntimeError(message)
 
 
-def run(arguments, cwd=None, env=None, log=None):
+def run(arguments, cwd=None, env=None, log=None, live_console=False):
     arguments = list(map(str, arguments))
     print("+", " ".join(arguments), flush=True)
+    if live_console:
+        target = log
+        should_close = False
+        if target is not None and not hasattr(target, "write"):
+            target = open(target, "w", encoding="utf-8")
+            should_close = True
+        try:
+            if target is None:
+                result = subprocess.run(arguments, cwd=cwd, env=env, check=True)
+                return result
+            process = subprocess.Popen(arguments, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, text=True)
+            assert process.stdout is not None
+            for line in process.stdout:
+                target.write(line)
+                target.flush()
+                print(line, end="", flush=True)
+            returncode = process.wait()
+            if returncode:
+                raise subprocess.CalledProcessError(returncode, arguments)
+            return None
+        finally:
+            if should_close:
+                target.close()
+        
     subprocess.run(arguments, cwd=cwd, env=env, check=True, stdout=log,
                    stderr=subprocess.STDOUT if log is not None else None)
 
@@ -685,6 +711,120 @@ def remove_worktree(root, worktree, allowed_root):
         shutil.rmtree(resolved)
 
 
+def build_single_build_worker(payload):
+    entry = payload["entry"]
+    key = payload["key"]
+    safe = payload["safe"]
+    root = Path(payload["root"])
+    output_directory = Path(payload["output_directory"])
+    worktree_root = Path(payload["worktree_root"])
+    toolchains = Path(payload["toolchains"])
+    args = argparse.Namespace(
+        allow_build_downloads=payload.get("allow_build_downloads", False),
+        continue_on_build_failure=payload.get("continue_on_build_failure", False),
+        keep_worktrees=payload.get("keep_worktrees", False),
+        java17_home=payload.get("java17_home"),
+        java21_home=payload.get("java21_home"),
+        java25_home=payload.get("java25_home"),
+        gradle_workers=payload.get("gradle_workers"),
+    )
+    branch = entry["branch"]
+    worktree = worktree_root / safe
+    log_path = None
+    try:
+        build_version = entry.get("build_version", entry["expected"])
+        print(f"\n=== Building {branch} (Minecraft {build_version}; source baseline {entry['expected']}) ===", flush=True)
+        run(["git", "-C", str(root), "-c", "core.longpaths=true", "worktree", "add", "--detach", str(worktree), branch])
+        source_version = property_value(worktree / "gradle.properties", "minecraft_version")
+        if source_version != entry["expected"]:
+            fail(f"Branch {branch} has source baseline Minecraft {source_version}, expected {entry['expected']}. Keep the branch baseline unchanged; the selected target is passed conditionally as -Pminecraft_version={build_version}.")
+        source_manifest = json.loads((worktree / "src/main/resources/fabric.mod.json").read_bytes().decode("utf-8-sig"))
+        if source_manifest.get("id") != "voxy":
+            fail(f"Branch {branch} contains mod id '{source_manifest.get('id')}', not 'voxy'. Complete the Voxy port before distributing this build.")
+        required_java = entry.get("java") or target_java_version(worktree / "build.gradle", branch)
+        java_home = get_java_home(required_java, getattr(args, f"java{required_java}_home", None), toolchains, offline=not args.allow_build_downloads)
+        environment = dict(os.environ)
+        environment.update({"JAVA_HOME": str(java_home), "PATH": str(java_home / "bin") + os.pathsep + environment.get("PATH", "")})
+        print(f"[{branch}] Using JDK {required_java} from {java_home}", flush=True)
+        gradle = worktree / ("gradlew.bat" if os.name == "nt" else "gradlew")
+        if not args.allow_build_downloads:
+            properties = worktree / "gradle/wrapper/gradle-wrapper.properties"
+            url = property_value(properties, "distributionUrl")
+            distribution = url.rsplit("/", 1)[-1].removesuffix(".zip")
+            gradle_home = Path(environment.get("GRADLE_USER_HOME", Path.home() / ".gradle"))
+            binaries = sorted((gradle_home / "wrapper/dists" / distribution).glob(
+                "*/gradle-*/bin/" + ("gradle.bat" if os.name == "nt" else "gradle")))
+            if not binaries:
+                fail(f"Gradle distribution {distribution} is not cached. Prepare it online before compiling offline.")
+            gradle = binaries[0]
+        if os.name != "nt" and args.allow_build_downloads:
+            gradle.chmod(gradle.stat().st_mode | 0o111)
+        gradle_workers = args.gradle_workers or 1
+        arguments = [gradle, "--no-daemon", f"--max-workers={gradle_workers}"] + ([f"-Pminecraft_version={build_version}"] if "build_version" in entry else [])
+        if not args.allow_build_downloads:
+            arguments += ["--offline", "-Porg.gradle.java.installations.auto-download=false"]
+        logs = output_directory / "build-logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        log_path = logs / f"{safe}-{datetime.now():%Y%m%d-%H%M%S}.log"
+        print(f"[{key}] Build log: {log_path}", flush=True)
+        if entry["tasks"]:
+            run(arguments + entry["tasks"], cwd=worktree, env=environment, log=log_path, live_console=True)
+            run(arguments + ["build"], cwd=worktree, env=environment, log=log_path, live_console=True)
+        else:
+            run(arguments + ["clean", "build"], cwd=worktree, env=environment, log=log_path, live_console=True)
+        jar = built_jar(worktree)
+        if jar_mod_id(jar) != "voxy":
+            fail(f"Built artifact '{jar.name}' contains mod id '{jar_mod_id(jar)}', not 'voxy'.")
+        commit = output(["git", "-C", str(worktree), "rev-parse", "--short=8", "HEAD"])
+        artifact = output_directory / f"voxy-compat-{safe}-mc{build_version}-{commit}.jar"
+        shutil.copy2(jar, artifact)
+        return {"key": key, "artifact": str(artifact), "error": None}
+    except Exception as error:
+        if isinstance(error, subprocess.CalledProcessError) and log_path is not None:
+            diagnostics = []
+            with log_path.open(encoding="utf-8", errors="replace") as log:
+                for line in log:
+                    if "error:" in line or line.startswith("> "):
+                        diagnostics.append(line.strip())
+                        if len(diagnostics) == 8:
+                            break
+            detail = "\n".join(diagnostics)
+            return {"key": key, "artifact": None, "error": f"{key}: Gradle failed (exit {error.returncode}).\n{detail}\nFull log: {log_path}"}
+        return {"key": key, "artifact": None, "error": f"{key}: {error}"}
+    finally:
+        if worktree.exists() and not args.keep_worktrees:
+            remove_worktree(root, worktree, worktree_root)
+
+
+def launch_single_build_in_terminal(payload, cwd=None):
+    payload = dict(payload)
+    script = Path(__file__).resolve()
+    snippet = """
+import json
+import sys
+from pathlib import Path
+import importlib.util
+
+payload = json.loads(sys.argv[1])
+script_path = Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location('voxy_parallel_build_worker', script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+result = module.build_single_build_worker(payload)
+result_path = Path(payload['result_path'])
+result_path.parent.mkdir(parents=True, exist_ok=True)
+result_path.write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
+"""
+    command = [sys.executable, "-c", snippet, json.dumps(payload), str(script)]
+    kwargs = {"cwd": str(cwd) if cwd is not None else None}
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        kwargs["close_fds"] = False
+    else:
+        kwargs["start_new_session"] = True
+    return subprocess.Popen(command, **kwargs)
+
+
 def build_matrix(args, matrix, output_directory):
     root = args.repository_root
     toolchains = output_directory / ".toolchains"
@@ -695,9 +835,7 @@ def build_matrix(args, matrix, output_directory):
         fail("--build-workers must be at least 1.")
     if args.gradle_workers is not None and args.gradle_workers < 1:
         fail("--gradle-workers must be at least 1.")
-    artifacts, java_homes, failures = {}, {}, []
-    java_homes_lock = threading.Lock()
-    worktree_lock = threading.Lock()
+    artifacts, failures = {}, []
     try:
         builds = []
         for entry in matrix:
@@ -728,94 +866,58 @@ def build_matrix(args, matrix, output_directory):
             print(f"\n=== Building {len(builds)} configuration(s) with up to {concurrent_builds} concurrent build(s); "
                   f"up to {gradle_workers} Gradle worker(s) per build ===", flush=True)
 
-            def build_entry(item):
-                entry, key, safe = item
-                branch = entry["branch"]
-                worktree = worktree_root / safe
-                log_path = None
-                try:
-                    build_version = entry.get("build_version", entry["expected"])
-                    print(f"\n=== Building {branch} (Minecraft {build_version}; source baseline {entry['expected']}) ===", flush=True)
-                    with worktree_lock:
-                        run(["git", "-C", root, "-c", "core.longpaths=true", "worktree", "add", "--detach", worktree, branch])
-                    source_version = property_value(worktree / "gradle.properties", "minecraft_version")
-                    if source_version != entry["expected"]:
-                        fail(f"Branch {branch} has source baseline Minecraft {source_version}, expected {entry['expected']}. Keep the branch baseline unchanged; the selected target is passed conditionally as -Pminecraft_version={build_version}.")
-                    source_manifest = json.loads((worktree / "src/main/resources/fabric.mod.json").read_bytes().decode("utf-8-sig"))
-                    if source_manifest.get("id") != "voxy":
-                        fail(f"Branch {branch} contains mod id '{source_manifest.get('id')}', not 'voxy'. Complete the Voxy port before distributing this build.")
-                    required_java = entry.get("java") or target_java_version(worktree / "build.gradle", branch)
-                    with java_homes_lock:
-                        if required_java not in java_homes:
-                            java_homes[required_java] = get_java_home(required_java, getattr(args, f"java{required_java}_home", None), toolchains, offline=not args.allow_build_downloads)
-                        java_home = java_homes[required_java]
-                    environment = dict(os.environ)
-                    environment.update({"JAVA_HOME": str(java_home), "PATH": str(java_home / "bin") + os.pathsep + environment.get("PATH", "")})
-                    print(f"[{branch}] Using JDK {required_java} from {java_home}", flush=True)
-                    gradle = worktree / ("gradlew.bat" if os.name == "nt" else "gradlew")
-                    if not args.allow_build_downloads:
-                        # Invoke an already installed distribution directly: the
-                        # wrapper can download Gradle even when passed --offline.
-                        properties = worktree / "gradle/wrapper/gradle-wrapper.properties"
-                        url = property_value(properties, "distributionUrl")
-                        distribution = url.rsplit("/", 1)[-1].removesuffix(".zip")
-                        gradle_home = Path(environment.get("GRADLE_USER_HOME", Path.home() / ".gradle"))
-                        binaries = sorted((gradle_home / "wrapper/dists" / distribution).glob(
-                            "*/gradle-*/bin/" + ("gradle.bat" if os.name == "nt" else "gradle")))
-                        if not binaries:
-                            fail(f"Gradle distribution {distribution} is not cached. Prepare it online before compiling offline.")
-                        gradle = binaries[0]
-                    if os.name != "nt" and args.allow_build_downloads:
-                        gradle.chmod(gradle.stat().st_mode | 0o111)
-                    arguments = [gradle, "--no-daemon", f"--max-workers={gradle_workers}"] + ([f"-Pminecraft_version={build_version}"] if "build_version" in entry else [])
-                    if not args.allow_build_downloads:
-                        arguments += ["--offline", "-Porg.gradle.java.installations.auto-download=false"]
-                    logs = output_directory / "build-logs"
-                    logs.mkdir(parents=True, exist_ok=True)
-                    log_path = logs / f"{safe}-{datetime.now():%Y%m%d-%H%M%S}.log"
-                    print(f"[{key}] Build log: {log_path}", flush=True)
-                    with log_path.open("w", encoding="utf-8") as log:
-                        if entry["tasks"]:
-                            run(arguments + entry["tasks"], cwd=worktree, env=environment, log=log)
-                            run(arguments + ["build"], cwd=worktree, env=environment, log=log)
-                        else:
-                            run(arguments + ["clean", "build"], cwd=worktree, env=environment, log=log)
-                    jar = built_jar(worktree)
-                    if jar_mod_id(jar) != "voxy":
-                        fail(f"Built artifact '{jar.name}' contains mod id '{jar_mod_id(jar)}', not 'voxy'.")
-                    commit = output(["git", "-C", worktree, "rev-parse", "--short=8", "HEAD"])
-                    artifact = output_directory / f"voxy-compat-{safe}-mc{build_version}-{commit}.jar"
-                    shutil.copy2(jar, artifact)
-                    return key, artifact, None
-                except Exception as error:
-                    if isinstance(error, subprocess.CalledProcessError) and log_path is not None:
-                        diagnostics = []
-                        with log_path.open(encoding="utf-8", errors="replace") as log:
-                            for line in log:
-                                if "error:" in line or line.startswith("> "):
-                                    diagnostics.append(line.strip())
-                                    if len(diagnostics) == 8:
-                                        break
-                        detail = "\n".join(diagnostics)
-                        return key, None, f"{key}: Gradle failed (exit {error.returncode}).\n{detail}\nFull log: {log_path}"
-                    return key, None, f"{key}: {error}"
-                finally:
-                    if worktree.exists() and not args.keep_worktrees:
-                        with worktree_lock:
-                            remove_worktree(root, worktree, worktree_root)
+            processes = []
+            for entry, key, safe in builds:
+                result_path = output_directory / "build-logs" / f"result-{safe}-{uuid.uuid4().hex}.json"
+                payload = {
+                    "entry": entry,
+                    "key": key,
+                    "safe": safe,
+                    "root": str(root),
+                    "output_directory": str(output_directory),
+                    "worktree_root": str(worktree_root),
+                    "toolchains": str(toolchains),
+                    "allow_build_downloads": args.allow_build_downloads,
+                    "continue_on_build_failure": args.continue_on_build_failure,
+                    "keep_worktrees": args.keep_worktrees,
+                    "java17_home": getattr(args, "java17_home", None),
+                    "java21_home": getattr(args, "java21_home", None),
+                    "java25_home": getattr(args, "java25_home", None),
+                    "gradle_workers": gradle_workers,
+                    "result_path": str(result_path),
+                }
+                processes.append((key, result_path, launch_single_build_in_terminal(payload, cwd=str(root))))
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=concurrent_builds, thread_name_prefix="voxy-build") as executor:
-                futures = [executor.submit(build_entry, item) for item in builds]
-                for future in concurrent.futures.as_completed(futures):
-                    key, artifact, error = future.result()
-                    if artifact:
-                        artifacts[key] = artifact
-                    if error:
-                        failures.append(error)
+            while processes:
+                remaining = []
+                for key, result_path, process in processes:
+                    code = process.poll()
+                    if code is None:
+                        remaining.append((key, result_path, process))
+                        continue
+                    if result_path.exists():
+                        result = json.loads(result_path.read_text(encoding="utf-8"))
+                        artifact = result.get("artifact")
+                        if artifact:
+                            artifacts[key] = Path(artifact)
+                        error = result.get("error")
+                        if error:
+                            failures.append(error)
+                            if not args.continue_on_build_failure:
+                                for _, _, live in remaining:
+                                    if live.poll() is None:
+                                        live.terminate()
+                                fail(error)
+                    elif code != 0:
+                        failures.append(f"{key}: terminal build exited with code {code}.")
                         if not args.continue_on_build_failure:
-                            for pending in futures:
-                                pending.cancel()
-                            break
+                            for _, _, live in remaining:
+                                if live.poll() is None:
+                                    live.terminate()
+                            fail(failures[-1])
+                processes = remaining
+                if processes:
+                    time.sleep(0.5)
             if failures and not args.continue_on_build_failure:
                 fail(failures[0])
     finally:

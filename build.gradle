@@ -86,6 +86,7 @@ if (compatibilitySource != null) {
     tasks.register('prepareCompatibilitySources') {
         outputs.dir(compatibilitySources)
         outputs.dir(compatibilityResources)
+        inputs.dir(file('src/compatibility/java'))
         doLast {
             def destination = compatibilitySources
             delete destination
@@ -166,7 +167,27 @@ if (compatibilitySource != null) {
                 if (project.minecraft_version in ['1.21', '1.21.1'] && name == 'voxy.mixins.json') {
                     contents = contents.replace('    "nvidium.MixinRenderPipeline",\n', '')
                 }
+                if (name == 'client.voxy.mixins.json' && compatibilitySource?.legacy ||
+                        name == 'client.voxy.mixins.json' && compatibilitySource?.historical in ['1213', '1214']) {
+                    contents = contents.replace('"sodium.MixinRenderSectionManager"',
+                            '"sodium.MixinRenderSectionManager",\n    "sodium.MixinSodiumOptionsGUI"')
+                }
+                if (name == 'fabric.mod.json' && compatibilitySource?.legacy ||
+                        name == 'fabric.mod.json' && compatibilitySource?.historical in ['1213', '1214']) {
+                    contents = contents.replaceAll('\\s*"cloth-config": "[^"]+",', '')
+                    contents = contents.replace('me.cortex.voxy.client.config.VoxyConfigScreenFactory',
+                            'me.cortex.voxy.client.config.ModMenuIntegration')
+                }
                 output.text = contents
+            }
+            if (compatibilitySource?.legacy || compatibilitySource?.historical in ['1213', '1214']) {
+                def compatibilityExtras = file('src/compatibility/java')
+                copy {
+                    from compatibilityExtras
+                    into compatibilitySources
+                }
+                delete new File(compatibilitySources, 'me/cortex/voxy/client/config/VoxyConfigScreenFactory.java')
+                delete new File(compatibilitySources, 'me/cortex/voxy/client/config/screens')
             }
         }
     }
@@ -342,14 +363,11 @@ dependencies {
 
     if (compatibilitySource?.legacy) {
         modImplementation "net.fabricmc.fabric-api:fabric-rendering-data-attachment-v1:0.3.38+73761d2e9a"
-        modImplementation "maven.modrinth:cloth-config:13.0.121+fabric"
         modCompileOnly "maven.modrinth:nvidium:0.2.8-beta"
     } else if (compatibilitySource?.historical == '1213') {
-        modImplementation "maven.modrinth:cloth-config:16.0.141+fabric"
         modCompileOnly "maven.modrinth:nvidium:0.2.8-beta"
         modImplementation 'io.github.douira:glsl-transformer:2.0.1'
     } else if (compatibilitySource?.historical == '1214') {
-        modImplementation "maven.modrinth:cloth-config:17.0.144+fabric"
         modCompileOnly "maven.modrinth:nvidium:0.2.8-beta"
     }
 }

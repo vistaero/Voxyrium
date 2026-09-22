@@ -57,7 +57,7 @@ MATRIX = [
 VOXY_RUNTIME_CONSTRAINTS = {
     "1.21": {"iris": "=1.8.8+1.21.1-fabric", "sodium": "=mc1.21.1-0.6.13-fabric"},
     "1.21.1": {"iris": "=1.8.14-beta.1+1.21.1-fabric", "sodium": "=mc1.21.1-0.8.13-fabric"},
-    "1.21.2": {"iris": "=1.8.0+1.21.3-fabric", "sodium": "=mc1.21.3-0.6.1-fabric"},
+    "1.21.2": {"iris": "=1.8.0-beta.6+1.21.2-fabric", "sodium": "=mc1.21.2-0.6.0-beta.3-fabric"},
     "1.21.3": {"iris": "=1.8.1+1.21.3-fabric", "sodium": "=mc1.21.3-0.6.8-fabric"},
     "1.21.4": {"iris": "=1.8.8+1.21.4-fabric", "sodium": "=mc1.21.4-0.6.13-fabric"},
     "1.21.5": {"iris": "=1.8.11+1.21.5-fabric", "sodium": "=mc1.21.5-0.6.13-fabric"},
@@ -1113,9 +1113,14 @@ def main():
     elif action in ("compile", "compile-online"):
         if action == "compile-online":
             args.allow_build_downloads = True
+            load_jdks_script().run_jdks(args, failures)
+            run([sys.executable, str(Path(__file__).resolve().with_name("Find-Latest-Iris-Sodium.py"))],
+                cwd=args.repository_root, live_console=True)
         artifacts, build_failures = build_matrix(args, matrix, output_directory)
         failures.extend(build_failures)
         install_compiled_artifacts(args, matrix, artifacts, failures)
+        if action == "compile-online":
+            load_dependencies_script().run_dependencies(args, matrix, output_directory, updater, failures)
     elif action == "profiles":
         load_profile_script().run_profiles(args, matrix, output_directory, updater, failures)
     if failures:

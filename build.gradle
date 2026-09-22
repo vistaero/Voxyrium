@@ -87,6 +87,7 @@ if (compatibilitySource != null) {
         outputs.dir(compatibilitySources)
         outputs.dir(compatibilityResources)
         inputs.dir(file('src/compatibility/java'))
+        inputs.dir(file('src/compatibility/java-modern'))
         doLast {
             def destination = compatibilitySources
             delete destination
@@ -167,7 +168,7 @@ if (compatibilitySource != null) {
                 if (project.minecraft_version in ['1.21', '1.21.1'] && name == 'voxy.mixins.json') {
                     contents = contents.replace('    "nvidium.MixinRenderPipeline",\n', '')
                 }
-                if (name == 'client.voxy.mixins.json' && compatibilitySource?.legacy ||
+                if (name == 'client.voxy.mixins.json' && compatibilitySource?.legacy && project.minecraft_version != '1.21.1' ||
                         name == 'client.voxy.mixins.json' && compatibilitySource?.historical in ['1213', '1214']) {
                     contents = contents.replace('"sodium.MixinRenderSectionManager"',
                             '"sodium.MixinRenderSectionManager",\n    "sodium.MixinSodiumOptionsGUI"')
@@ -177,11 +178,23 @@ if (compatibilitySource != null) {
                     contents = contents.replaceAll('\\s*"cloth-config": "[^"]+",', '')
                     contents = contents.replace('me.cortex.voxy.client.config.VoxyConfigScreenFactory',
                             'me.cortex.voxy.client.config.ModMenuIntegration')
+                    if (project.minecraft_version == '1.21.1') {
+                        contents = contents.replace('    "modmenu": [\n' +
+                                '      "me.cortex.voxy.client.config.ModMenuIntegration"\n' +
+                                '    ]',
+                                '    "modmenu": [\n' +
+                                '      "me.cortex.voxy.client.config.ModMenuIntegration"\n' +
+                                '    ],\n' +
+                                '    "sodium:config_api_user": [\n' +
+                                '      "me.cortex.voxy.client.config.ModernSodiumConfigMenu"\n' +
+                                '    ]')
+                    }
                 }
                 output.text = contents
             }
             if (compatibilitySource?.legacy || compatibilitySource?.historical in ['1213', '1214']) {
-                def compatibilityExtras = file('src/compatibility/java')
+                def compatibilityExtras = file(project.minecraft_version == '1.21.1'
+                        ? 'src/compatibility/java-modern' : 'src/compatibility/java')
                 copy {
                     from compatibilityExtras
                     into compatibilitySources

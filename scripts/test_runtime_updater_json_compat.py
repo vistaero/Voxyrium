@@ -41,6 +41,29 @@ class JsonCompatibilityTests(unittest.TestCase):
 
             self.assertTrue((shaders / "ComplementaryReimagined_r5.9.3.zip").exists())
 
+    def test_create_update_profiles_script_exposes_profile_directory_helper(self):
+        script_path = Path(__file__).with_name("CreateUpdateProfiles.py")
+        spec = importlib.util.spec_from_file_location("create_update_profiles", script_path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        self.assertEqual(
+            module.profile_game_directory(Path("profiles"), "1.21.1"),
+            Path("profiles") / "voxy-test-1.21.1",
+        )
+
+    def test_dependency_and_jdk_scripts_are_available(self):
+        for name in ("UpdateProfileDependencies.py", "InstallJdkVersions.py"):
+            script_path = Path(__file__).with_name(name)
+            spec = importlib.util.spec_from_file_location(name[:-3], script_path)
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.assertTrue(hasattr(module, "main") or hasattr(module, "run_dependencies") or hasattr(module, "run_jdks"))
+
 
 if __name__ == "__main__":
     unittest.main()

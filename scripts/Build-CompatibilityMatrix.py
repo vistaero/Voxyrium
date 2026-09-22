@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import hashlib
+import importlib.util
 import json
 import os
 import platform
@@ -227,17 +228,14 @@ def select_action(args):
         return "compile"
     if not sys.stdin.isatty():
         fail("Use --action with --versions or --no-interactive-menu outside a terminal.")
-    choices = ("profiles", "dependencies", "jdks", "compile", "compile-online")
+    choices = ("compile", "compile-online")
     while True:
-        print("\n1. Create/update profiles")
-        print("2. Update profile dependencies")
-        print("3. Install JDK versions")
-        print("4. Compile versions (offline)")
-        print("5. Compile versions (online)")
-        choice = input("\nSelect an action (1-5, Q to quit): ").strip().lower()
+        print("\n1. Compile versions (offline)")
+        print("2. Compile versions (online)")
+        choice = input("\nSelect an action (1-2, Q to quit): ").strip().lower()
         if choice == "q":
             raise SystemExit(0)
-        if choice in ("1", "2", "3", "4", "5"):
+        if choice in ("1", "2"):
             return choices[int(choice) - 1]
         print("Invalid selection.")
 
@@ -926,6 +924,36 @@ def install_compiled_artifacts(args, matrix, artifacts, failures):
         print(f"Installed Voxy: {destination}")
 
 
+def load_profile_script():
+    script_path = Path(__file__).resolve().with_name("CreateUpdateProfiles.py")
+    spec = importlib.util.spec_from_file_location("voxy_create_update_profiles", script_path)
+    if spec is None or spec.loader is None:
+        fail(f"Could not load profile script from {script_path}.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_dependencies_script():
+    script_path = Path(__file__).resolve().with_name("UpdateProfileDependencies.py")
+    spec = importlib.util.spec_from_file_location("voxy_update_profile_dependencies", script_path)
+    if spec is None or spec.loader is None:
+        fail(f"Could not load dependency update script from {script_path}.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_jdks_script():
+    script_path = Path(__file__).resolve().with_name("InstallJdkVersions.py")
+    spec = importlib.util.spec_from_file_location("voxy_install_jdk_versions", script_path)
+    if spec is None or spec.loader is None:
+        fail(f"Could not load JDK install script from {script_path}.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def main():
     args = parse_args()
     action = select_action(args)
@@ -942,21 +970,9 @@ def main():
     updater = RuntimeUpdater(output_directory)
     failures = []
     if action == "jdks":
-        majors = args.jdk_versions
-        if not majors and not args.no_interactive_menu and sys.stdin.isatty():
-            value = input("JDK versions to install [8 17 21 25] (space separated; additional versions accepted): ").strip()
-            if value and (not all(part.isdigit() for part in value.split()) or any(int(part) < 1 for part in value.split())):
-                fail("Enter positive JDK major versions, for example: 8 17 21 25 26.")
-            majors = list(map(int, value.split())) if value else None
-        for major in dict.fromkeys(majors or [8, 17, 21, 25]):
-            try:
-                home = get_java_home(major, getattr(args, f"java{major}_home", None), output_directory / ".toolchains")
-                print(f"JDK {major}: {home}")
-            except Exception as error:
-                failures.append(f"JDK {major}: {error}")
+        load_jdks_script().run_jdks(args, failures)
     elif action == "dependencies":
-        updater.update_selected(matrix, args.profiles_directory)
-        failures.extend(updater.failures)
+        load_dependencies_script().run_dependencies(args, matrix, output_directory, updater, failures)
     elif action in ("compile", "compile-online"):
         if action == "compile-online":
             args.allow_build_downloads = True
@@ -964,21 +980,7 @@ def main():
         failures.extend(build_failures)
         install_compiled_artifacts(args, matrix, artifacts, failures)
     elif action == "profiles":
-        # Profile preparation neither builds nor updates mods/shaders.
-        args.skip_runtime_mods = True
-        if launcher_is_running():
-            fail("Close Minecraft Launcher before updating profiles.")
-        installer = output_directory / f"fabric-installer-{args.fabric_installer_version}.jar"
-        if not args.skip_fabric_install:
-            download(f"https://maven.fabricmc.net/net/fabricmc/fabric-installer/{args.fabric_installer_version}/{installer.name}", installer)
-        version_ids = {}
-        for version in sorted(unique_versions(matrix), key=version_tuple):
-            loader = fabric_loader_version(version)
-            version_ids[version] = f"fabric-loader-{loader}-{version}" if args.skip_fabric_install else install_fabric(args.minecraft_directory, version, loader, installer)
-        save_profiles(args, matrix, {}, version_ids, updater, failures)
-    print(f"\nArtifacts: {output_directory}")
-    print(f"Test profiles: {args.profiles_directory}")
-    print(f"Update log: {updater.log_path}")
+        load_profile_script().run_profiles(args, matrix, output_directory, updater, failures)
     if failures:
         print("Incomplete operations:\n - " + "\n - ".join(failures), file=sys.stderr)
         return 1

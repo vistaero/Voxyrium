@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -23,7 +24,7 @@ from typing import Any, Iterable
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 REPOSITORY_ROOT = SCRIPT_DIRECTORY.parent
 MOJANG_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
-PLATFORM_MAP = {"win32": "windows", "darwin": "macosx", "linux": "linux"}
+PLATFORM_MAP = {"win32": "windows", "darwin": "osx", "linux": "linux"}
 CURRENT_OS = PLATFORM_MAP.get(sys.platform, "linux")
 
 
@@ -39,6 +40,23 @@ def default_minecraft_directory() -> Path:
 
 def property_value(value: Any, name: str, default: Any = None) -> Any:
     return value.get(name, default) if isinstance(value, dict) else default
+
+
+def is_arm64() -> bool:
+    return platform.machine().lower() in {"arm64", "aarch64"}
+
+
+def is_current_native_classifier(classifier: str) -> bool:
+    """Return whether a modern Mojang ``natives-*`` classifier is for this host."""
+    if not classifier.startswith("natives-"):
+        return False
+    if sys.platform == "darwin":
+        return classifier == ("natives-macos-arm64" if is_arm64() else "natives-macos") or (
+            classifier == "natives-macos-patch" and not is_arm64()
+        )
+    if sys.platform == "win32":
+        return classifier == ("natives-windows-arm64" if is_arm64() else "natives-windows")
+    return classifier == ("natives-linux-arm64" if is_arm64() else "natives-linux")
 
 
 def allowed_by_rules(rules: Iterable[Any]) -> bool:
@@ -160,7 +178,10 @@ class OfflineLauncher:
             if os.name == "nt":
                 candidates.append(self.minecraft_directory / "runtime" / component / "windows-x64" / component / "bin" / "java.exe")
             elif sys.platform == "darwin":
-                candidates.append(self.minecraft_directory / "runtime" / component / "macosx" / component / "bin" / "java")
+                candidates.extend((
+                    self.minecraft_directory / "runtime" / component / "mac-os" / component / "jre.bundle" / "Contents" / "Home" / "bin" / "java",
+                    self.minecraft_directory / "runtime" / component / "macosx" / component / "bin" / "java",
+                ))
             else:
                 candidates.append(self.minecraft_directory / "runtime" / component / "linux-x86_64" / component / "bin" / "java")
         toolchains = REPOSITORY_ROOT / "compatibility-builds" / ".toolchains"
@@ -182,29 +203,6 @@ class OfflineLauncher:
             if match and int(match.group(1)) == major:
                 return candidate
         raise RuntimeError(f"Java {major} was not found. Run the compatibility build once so its toolchain is installed.")
-
-    @staticmethod
-    def apple_script_string(value: str) -> str:
-        """Return a value safely quoted as an AppleScript string literal."""
-        return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
-
-    def launch_in_macos_terminal(self, command: list[str], game_directory: Path, log_file: Path) -> None:
-        shell_command = (
-            f"cd -- {shlex.quote(str(game_directory))} && "
-            f"{shlex.join(command)} 2>&1 | tee {shlex.quote(str(log_file))}; "
-            "printf '\\nMinecraft has exited. Press any key to close this window...'; "
-            "read -k 1 -s"
-        )
-        apple_script = (
-            "tell application \"Terminal\" to activate\n"
-            f"tell application \"Terminal\" to do script {self.apple_script_string(shell_command)}"
-        )
-        try:
-            subprocess.run(["osascript", "-e", apple_script], check=True)
-        except OSError as error:
-            raise RuntimeError(f"Could not open macOS Terminal: {error}") from error
-        except subprocess.CalledProcessError as error:
-            raise RuntimeError(f"Could not open macOS Terminal (osascript exited with code {error.returncode}).") from error
 
     def start_profile(self, profile_id: str, profile: dict[str, Any]) -> None:
         # A malformed historical profile may contain installer output before the ID.
@@ -254,14 +252,22 @@ class OfflineLauncher:
         for library in libraries.values():
             if not allowed_by_rules(library.get("rules", [])):
                 continue
+            coordinates = str(library.get("name", "")).split(":")
+            classifier_name = coordinates[3] if len(coordinates) >= 4 else ""
+            is_native_classifier = classifier_name.startswith("natives-")
+            if is_native_classifier and not is_current_native_classifier(classifier_name):
+                continue
             downloads = library.get("downloads", {})
             artifact = downloads.get("artifact") if isinstance(downloads, dict) else None
             if artifact:
                 path = self.minecraft_directory / "libraries" / Path(str(artifact["path"]))
                 self.download(str(artifact["url"]), path)
-                class_path.append(str(path))
-            elif len(str(library.get("name", "")).split(":")) == 3:
-                group, name, version = str(library["name"]).split(":")
+                if is_native_classifier:
+                    native_jars.append(path)
+                else:
+                    class_path.append(str(path))
+            elif len(coordinates) == 3:
+                group, name, version = coordinates
                 relative = Path(group.replace(".", "/")) / name / version / f"{name}-{version}.jar"
                 path = self.minecraft_directory / "libraries" / relative
                 base_url = str(library.get("url", "https://libraries.minecraft.net/")).rstrip("/")
@@ -325,14 +331,21 @@ class OfflineLauncher:
             return
         launch_log_base = game_directory / ".voxy-launch"
         if sys.platform == "darwin":
-            self.launch_in_macos_terminal(command, game_directory, launch_log_base.with_suffix(".log"))
-            return
-        with (launch_log_base.with_suffix(".out.log")).open("w", encoding="utf-8") as stdout, (launch_log_base.with_suffix(".err.log")).open("w", encoding="utf-8") as stderr:
-            process = subprocess.Popen(command, cwd=game_directory, stdout=stdout, stderr=stderr)
+            output_path = launch_log_base.with_suffix(".log")
+            error_path = output_path
+        else:
+            output_path = launch_log_base.with_suffix(".out.log")
+            error_path = launch_log_base.with_suffix(".err.log")
+        with output_path.open("w", encoding="utf-8") as stdout:
+            if output_path == error_path:
+                process = subprocess.Popen(command, cwd=game_directory, stdout=stdout, stderr=subprocess.STDOUT)
+            else:
+                with error_path.open("w", encoding="utf-8") as stderr:
+                    process = subprocess.Popen(command, cwd=game_directory, stdout=stdout, stderr=stderr)
             if self.args.wait:
                 exit_code = process.wait()
                 if exit_code:
-                    error_log = launch_log_base.with_suffix(".err.log").read_text(encoding="utf-8", errors="replace") or "No error output was produced."
+                    error_log = error_path.read_text(encoding="utf-8", errors="replace") or "No error output was produced."
                     raise RuntimeError(f"Minecraft exited with code {exit_code}:\n{error_log}")
 
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
+import importlib.util
 import json
 import os
 import platform
@@ -12,6 +14,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import urllib.parse
 import urllib.request
 import uuid
@@ -27,17 +31,17 @@ else:
     import tty
 
 USER_AGENT = "vistaero-Voxyrium-compatibility-script/1.0"
+# mc_1.21-1.21.11 is the source baseline. Each Minecraft target below is a
+# separate Gradle invocation so build.gradle can select its conditional source
+# snapshot and dependencies through -Pminecraft_version.
 MATRIX = [
+    {"branch": "mc_26.3", "expected": "26.3", "versions": ["26.3"], "tasks": []},
     {"branch": "dev", "expected": "26.2", "versions": ["26.2"], "tasks": []},
     {"branch": "mc_26.1", "expected": "26.1.2", "versions": ["26.1.2"], "tasks": []},
     {"branch": "mc_26.1.1", "expected": "26.1.1", "versions": ["26.1.1"], "tasks": []},
-    {"branch": "mc_1.21.11", "expected": "1.21.11", "versions": ["1.21.11"], "tasks": []},
-    {"branch": "mc_1.21.9-1.21.10", "expected": "1.21.10", "versions": ["1.21.9", "1.21.10"], "tasks": []},
-    {"branch": "mc_1.21.6-1.21.8", "expected": "1.21.8", "versions": ["1.21.6", "1.21.7", "1.21.8"], "tasks": []},
-    {"branch": "mc_1.21.5", "expected": "1.21.5", "versions": ["1.21.5"], "tasks": []},
-    {"branch": "mc_1.21.4", "expected": "1.21.4", "versions": ["1.21.4"], "tasks": []},
-    {"branch": "mc_1.21.3", "expected": "1.21.3", "versions": ["1.21.3"], "tasks": ["clean", "processIncludeJars"]},
-    {"branch": "mc_1.21-1.21.1", "expected": "1.21", "versions": ["1.21", "1.21.1"], "tasks": []},
+    *[{"branch": "mc_1.21-1.21.11", "expected": "1.21.11", "build_version": version,
+       "java": 21, "key": f"mc_1.21-1.21.11__{version}", "versions": [version], "tasks": []}
+      for version in ["1.21"] + [f"1.21.{patch}" for patch in range(1, 12)]],
     {"branch": "mc_1.20-1.20.6", "expected": "1.20.2", "build_version": "1.20.6", "java": 21, "key": "mc_1.20-1.20.6__1.20.6", "versions": ["1.20.6"], "tasks": []},
     {"branch": "mc_1.20-1.20.6", "expected": "1.20.2", "build_version": "1.20.4", "java": 17, "key": "mc_1.20-1.20.6__1.20.4", "versions": ["1.20.4"], "tasks": []},
     {"branch": "mc_1.20-1.20.6", "expected": "1.20.2", "build_version": "1.20.2", "java": 17, "key": "mc_1.20-1.20.6__1.20.2", "versions": ["1.20.2"], "tasks": []},
@@ -45,15 +49,60 @@ MATRIX = [
     {"branch": "mc_1.20-1.20.6", "expected": "1.20.2", "build_version": "1.20", "java": 17, "key": "mc_1.20-1.20.6__1.20", "versions": ["1.20"], "tasks": []},
 ]
 
+# Voxy's Fabric metadata deliberately keeps Iris optional, so it cannot convey
+# the Iris ABI the selected source snapshot was compiled against.  Do not let
+# the runtime updater silently replace that ABI with a newer release merely
+# because Modrinth marks it as covering a neighbouring Minecraft version.
+VOXY_RUNTIME_CONSTRAINTS = {
+    "1.21": {"iris": "=1.8.8+1.21.1-fabric", "sodium": "=mc1.21.1-0.6.13-fabric"},
+    "1.21.1": {"iris": "=1.8.14-beta.1+1.21.1-fabric", "sodium": "=mc1.21.1-0.8.13-fabric"},
+    "1.21.2": {"iris": "=1.8.0+1.21.3-fabric", "sodium": "=mc1.21.3-0.6.1-fabric"},
+    "1.21.3": {"iris": "=1.8.1+1.21.3-fabric", "sodium": "=mc1.21.3-0.6.8-fabric"},
+    "1.21.4": {"iris": "=1.8.8+1.21.4-fabric", "sodium": "=mc1.21.4-0.6.13-fabric"},
+    "1.21.5": {"iris": "=1.8.11+1.21.5-fabric", "sodium": "=mc1.21.5-0.6.13-fabric"},
+    "1.21.6": {"iris": "=1.9.6+1.21.8-fabric", "sodium": "=mc1.21.8-0.7.3-fabric"},
+    "1.21.7": {"iris": "=1.9.6+1.21.8-fabric", "sodium": "=mc1.21.8-0.7.3-fabric"},
+    "1.21.8": {"iris": "=1.9.6+1.21.8-fabric", "sodium": "=mc1.21.8-0.7.3-fabric"},
+    "1.21.9": {"iris": "=1.9.7+1.21.10-fabric", "sodium": "=mc1.21.10-0.7.3-fabric"},
+    "1.21.10": {"iris": "=1.9.7+1.21.10-fabric", "sodium": "=mc1.21.10-0.7.3-fabric"},
+    "1.21.11": {"iris": "=1.10.7+1.21.11-fabric", "sodium": "=mc1.21.11-0.8.13-beta.2-fabric"},
+}
+
 
 def fail(message):
     raise RuntimeError(message)
 
 
-def run(arguments, cwd=None, env=None):
+def run(arguments, cwd=None, env=None, log=None, live_console=False):
     arguments = list(map(str, arguments))
     print("+", " ".join(arguments), flush=True)
-    subprocess.run(arguments, cwd=cwd, env=env, check=True)
+    if live_console:
+        target = log
+        should_close = False
+        if target is not None and not hasattr(target, "write"):
+            target = open(target, "w", encoding="utf-8")
+            should_close = True
+        try:
+            if target is None:
+                result = subprocess.run(arguments, cwd=cwd, env=env, check=True)
+                return result
+            process = subprocess.Popen(arguments, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, text=True)
+            assert process.stdout is not None
+            for line in process.stdout:
+                target.write(line)
+                target.flush()
+                print(line, end="", flush=True)
+            returncode = process.wait()
+            if returncode:
+                raise subprocess.CalledProcessError(returncode, arguments)
+            return None
+        finally:
+            if should_close:
+                target.close()
+        
+    subprocess.run(arguments, cwd=cwd, env=env, check=True, stdout=log,
+                   stderr=subprocess.STDOUT if log is not None else None)
 
 
 def output(arguments, cwd=None):
@@ -66,7 +115,10 @@ def download(url, destination, headers=None, overwrite=False):
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".download")
     temporary.unlink(missing_ok=True)
-    request = urllib.request.Request(url, headers=headers or {})
+    # Some download mirrors, including Adoptium's API, reject urllib's
+    # anonymous default user agent.  Identify this tool for every download;
+    # callers can still supply additional or overriding headers.
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
     try:
         with urllib.request.urlopen(request) as response, temporary.open("wb") as target:
             shutil.copyfileobj(response, target)
@@ -163,6 +215,11 @@ def default_minecraft_directory():
 def parse_args():
     minecraft = default_minecraft_directory()
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--action", choices=("profiles", "dependencies", "jdks", "compile", "compile-online"))
+    parser.add_argument("--jdk-versions", type=int, nargs="+")
+    parser.add_argument("--allow-build-downloads", action="store_true",
+                        help="Allow dependency/toolchain downloads during command-line builds; compilation is offline by default.")
+    parser.add_argument("--java8-home")
     parser.add_argument("--repository-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--output-directory", type=Path)
     parser.add_argument("--minecraft-directory", type=Path, default=minecraft)
@@ -173,16 +230,46 @@ def parse_args():
     parser.add_argument("--java17-home")
     parser.add_argument("--java21-home")
     parser.add_argument("--java25-home")
+    parser.add_argument("--build-workers", type=int, default=os.cpu_count() or 1,
+                        help="Maximum compatibility builds to run concurrently (default: one per logical CPU).")
+    parser.add_argument("--gradle-workers", type=int,
+                        help="Maximum Gradle workers per build (default: share logical CPUs among concurrent builds).")
     parser.add_argument("--fabric-installer-version", default="1.1.0")
     for name in ("skip-fabric-install", "skip-runtime-mods", "skip-profile-creation", "profiles-only", "reuse-existing-artifacts", "no-interactive-menu", "keep-worktrees", "continue-on-build-failure"):
         parser.add_argument("--" + name, action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.build_workers < 1 or (args.gradle_workers is not None and args.gradle_workers < 1):
+        parser.error("Worker counts must be positive.")
+    if args.jdk_versions and any(major < 1 for major in args.jdk_versions):
+        parser.error("JDK versions must be positive.")
+    return args
+
+
+def select_action(args):
+    if args.action:
+        return args.action
+    if args.profiles_only:
+        return "profiles"
+    if args.no_interactive_menu or args.versions or args.branches:
+        return "compile"
+    if not sys.stdin.isatty():
+        fail("Use --action with --versions or --no-interactive-menu outside a terminal.")
+    choices = ("compile", "compile-online")
+    while True:
+        print("\n1. Compile versions (offline)")
+        print("2. Compile versions (online)")
+        choice = input("\nSelect an action (1-2, Q to quit): ").strip().lower()
+        if choice == "q":
+            raise SystemExit(0)
+        if choice in ("1", "2"):
+            return choices[int(choice) - 1]
+        print("Invalid selection.")
 
 
 def select_matrix(args):
     if args.branches and args.versions:
         fail("--branches and --versions cannot be used together.")
-    if not args.no_interactive_menu and not args.branches and not args.versions and not args.profiles_only:
+    if not args.no_interactive_menu and not args.branches and not args.versions:
         args.versions = interactive_version_selection(MATRIX)
     matrix = [dict(entry, versions=list(entry["versions"])) for entry in MATRIX]
     if args.branches:
@@ -200,11 +287,42 @@ def select_matrix(args):
     return matrix
 
 
+def read_json_file(path, default=None):
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+        if not text.strip():
+            return default
+        value = json.loads(text)
+        return value if value is not None else default
+    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return default
+
+
+def write_json_file(path, value):
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def normalize_manifest_entries(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, str):
+        try:
+            return normalize_manifest_entries(json.loads(value))
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
 def fabric_manifest(jar):
     try:
         with zipfile.ZipFile(jar) as archive:
-            return json.loads(archive.read("fabric.mod.json"))
-    except (KeyError, OSError, zipfile.BadZipFile, json.JSONDecodeError):
+            raw = archive.read("fabric.mod.json")
+            return json.loads(raw.decode("utf-8-sig"))
+    except (KeyError, OSError, zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError):
         return None
 
 
@@ -250,7 +368,7 @@ def find_java_home(major):
     return None
 
 
-def get_java_home(major, configured, toolchains):
+def get_java_home(major, configured, toolchains, offline=False):
     if configured:
         configured = Path(configured).expanduser().resolve()
         if java_major(java_executable(configured)) != major:
@@ -264,6 +382,8 @@ def get_java_home(major, configured, toolchains):
     for java in target.glob(f"**/bin/{java_name}"):
         if java_major(java) == major:
             return java.parent.parent
+    if offline:
+        fail(f"JDK {major} is not installed. Run 'Install JDK versions' first.")
     architecture = "aarch64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
     operating_system = "windows" if os.name == "nt" else ("mac" if sys.platform == "darwin" else "linux")
     extension = ".zip" if os.name == "nt" else ".tar.gz"
@@ -285,7 +405,7 @@ def get_java_home(major, configured, toolchains):
 
 def property_value(path, name):
     pattern = re.compile(rf"^\s*{re.escape(name)}\s*=(.*)$")
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         match = pattern.match(line)
         if match:
             return match.group(1).strip()
@@ -293,7 +413,7 @@ def property_value(path, name):
 
 
 def target_java_version(build_file, branch):
-    match = re.search(r"targetJavaVersion\s*=\s*(\d+)", build_file.read_text(encoding="utf-8"))
+    match = re.search(r"targetJavaVersion\s*=\s*(\d+)", build_file.read_text(encoding="utf-8-sig"))
     if not match:
         fail(f"Could not determine targetJavaVersion for {branch}.")
     return int(match.group(1))
@@ -313,6 +433,21 @@ def mod_version(project_id, version_number):
     return version_tuple(match.group(1)) if match else None
 
 
+def artifact_version_pattern(project_id, minecraft_version):
+    """Allow known artifact-name aliases after Modrinth filters game_versions."""
+    if project_id != "AANobbMI":
+        return None
+    aliases = {
+        "1.21": ("1.21", "1.21.1"),
+        "1.21.2": ("1.21.2", "1.21.3"),
+        "1.21.6": ("1.21.6", "1.21.8"),
+        "1.21.7": ("1.21.7", "1.21.8"),
+        "1.21.9": ("1.21.9", "1.21.10"),
+    }.get(minecraft_version, (minecraft_version,))
+    values = "|".join(re.escape(value) for value in aliases)
+    return r"^mc(?:" + values + r")(?:$|[-+])"
+
+
 def matches_constraint(project_id, version_number, constraint):
     alternatives = constraint if isinstance(constraint, list) else [constraint]
     if not alternatives or "*" in alternatives:
@@ -321,20 +456,27 @@ def matches_constraint(project_id, version_number, constraint):
     if candidate is None:
         return False
     for value in map(str, alternatives):
-        wildcard = re.fullmatch(r"=(\d+)\.(\d+)\.\*", value)
+        # Keep a source snapshot on its exact published Iris/Sodium artifact.
+        # The numeric fallback below intentionally ignores prerelease and
+        # Minecraft suffixes, which is too broad for compatibility profiles.
+        if value.startswith("=") and value[1:] == version_number:
+            return True
+        wildcard = re.fullmatch(r"=?((?:\d+))\.(\d+)\.(?:\*|x)", value, re.IGNORECASE)
         exact = re.fullmatch(r"=?(\d+(?:\.\d+){0,2})", value)
-        minimum = re.search(r">=(\d+(?:\.\d+){0,2})", value)
-        maximum = re.search(r"<=(\d+(?:\.\d+){0,2})", value)
+        minimum = re.search(r">(=)?(\d+(?:\.\d+){0,2})", value)
+        maximum = re.search(r"<(=)?(\d+(?:\.\d+){0,2})", value)
         if value == "*" or wildcard and candidate[:2] == (int(wildcard.group(1)), int(wildcard.group(2))):
             return True
         if exact and candidate == version_tuple(exact.group(1)):
             return True
-        if (minimum or maximum) and (not minimum or candidate >= version_tuple(minimum.group(1))) and (not maximum or candidate <= version_tuple(maximum.group(1))):
+        minimum_ok = not minimum or (candidate >= version_tuple(minimum.group(2)) if minimum.group(1) else candidate > version_tuple(minimum.group(2)))
+        maximum_ok = not maximum or (candidate <= version_tuple(maximum.group(2)) if maximum.group(1) else candidate < version_tuple(maximum.group(2)))
+        if (minimum or maximum) and minimum_ok and maximum_ok:
             return True
     return False
 
 
-def modrinth_file(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None):
+def modrinth_candidates(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None):
     headers = {"User-Agent": USER_AGENT}
     if required_id:
         versions = [json_url(f"https://api.modrinth.com/v2/version/{required_id}", headers)]
@@ -347,18 +489,25 @@ def modrinth_file(project_id, minecraft_version, loader="fabric", constraint="*"
     listed = [item for item in versions if item.get("status") == "listed" and item.get("files") and (not required_id or item.get("id") == required_id) and (not number_pattern or re.search(number_pattern, item.get("version_number", ""))) and matches_constraint(project_id, item.get("version_number", ""), constraint)]
     if not listed:
         fail(f"Modrinth project {project_id} has no listed {loader} version for Minecraft {minecraft_version} matching constraint {constraint!r}.")
-    selected = None
-    for channel in ("release", "beta", "alpha"):
-        candidates = sorted((item for item in listed if item.get("version_type") == channel), key=lambda item: item.get("date_published", ""), reverse=True)
-        if candidates:
-            selected = candidates[0]
-            break
-    selected = selected or sorted(listed, key=lambda item: item.get("date_published", ""), reverse=True)[0]
-    selected_file = next((item for item in selected["files"] if item.get("primary")), None)
-    selected_file = selected_file or next((item for item in selected["files"] if item.get("file_type") not in ("sources-jar", "dev-jar", "javadoc-jar", "signature")), None)
-    if not selected_file:
-        fail(f"Modrinth version {selected['id']} has no distributable primary file.")
-    return {"project_id": project_id, "version_id": selected["id"], "version_number": selected["version_number"], "version_type": selected["version_type"], "file_name": selected_file["filename"], "url": selected_file["url"], "sha512": selected_file.get("hashes", {}).get("sha512"), "dependencies": selected.get("dependencies", [])}
+    # Compatibility is the primary criterion. Once a pair is compatible, use
+    # the newest publication regardless of whether it is release, beta, or
+    # alpha. Voxy must follow the newest compatible pair, not prefer an older
+    # stable artifact over a newer compatible prerelease.
+    ordered = sorted(listed, key=lambda item: item.get("date_published", ""), reverse=True)
+    result = []
+    for selected in ordered:
+        selected_file = next((item for item in selected["files"] if item.get("primary")), None)
+        selected_file = selected_file or next((item for item in selected["files"] if item.get("file_type") not in ("sources-jar", "dev-jar", "javadoc-jar", "signature")), None)
+        if not selected_file:
+            continue
+        result.append({"project_id": project_id, "version_id": selected["id"], "version_number": selected["version_number"], "version_type": selected["version_type"], "file_name": selected_file["filename"], "url": selected_file["url"], "sha512": selected_file.get("hashes", {}).get("sha512"), "dependencies": selected.get("dependencies", [])})
+    if not result:
+        fail(f"Modrinth project {project_id} has no distributable version for Minecraft {minecraft_version} matching constraint {constraint!r}.")
+    return result
+
+
+def modrinth_file(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None):
+    return modrinth_candidates(project_id, minecraft_version, loader, constraint, required_id, number_pattern)[0]
 
 
 class RuntimeUpdater:
@@ -389,10 +538,75 @@ class RuntimeUpdater:
             self.log(f"[{item['project_id']}] Downloaded and verified {item['file_name']}.")
         return cache
 
+    def cached_manifest(self, item):
+        manifest = fabric_manifest(self.cached(item))
+        if not manifest:
+            fail(f"Could not read fabric.mod.json from {item['file_name']}.")
+        return manifest
+
+    @staticmethod
+    def manifest_requirement(manifest, dependency):
+        return manifest.get("depends", {}).get(dependency)
+
+    @staticmethod
+    def manifest_breaks(manifest, dependency):
+        return manifest.get("breaks", {}).get(dependency)
+
+    @staticmethod
+    def modrinth_requirement(item, project_id):
+        return next((dependency for dependency in item.get("dependencies", [])
+                     if dependency.get("project_id") == project_id
+                     and dependency.get("dependency_type") == "required"), None)
+
+    def compatible_pair(self, minecraft_version, constraints, projects):
+        iris_id = projects["iris"][1]
+        sodium_id = projects["sodium"][1]
+        iris_candidates = modrinth_candidates(
+        iris_id, minecraft_version, constraint=constraints["iris"],
+            number_pattern=None)
+        sodium_candidates = modrinth_candidates(
+            sodium_id, minecraft_version, constraint=constraints["sodium"],
+            number_pattern=artifact_version_pattern(sodium_id, minecraft_version))
+
+        sodium_manifests = {}
+        for iris in iris_candidates:
+            iris_recommendation = self.modrinth_requirement(iris, sodium_id)
+            for sodium in sodium_candidates:
+                # Modrinth's version_id is a recommendation. version_req is
+                # the actual range that must be satisfied by the other mod.
+                if (iris_recommendation and iris_recommendation.get("version_req")
+                        and not matches_constraint(sodium_id, sodium["version_number"], iris_recommendation["version_req"])):
+                    continue
+                sodium_recommendation = self.modrinth_requirement(sodium, iris_id)
+                if (sodium_recommendation and sodium_recommendation.get("version_req")
+                        and not matches_constraint(iris_id, iris["version_number"], sodium_recommendation["version_req"])):
+                    continue
+
+                iris_manifest = self.cached_manifest(iris)
+                sodium_key = sodium["version_id"]
+                if sodium_key not in sodium_manifests:
+                    sodium_manifests[sodium_key] = self.cached_manifest(sodium)
+                sodium_manifest = sodium_manifests[sodium_key]
+                if (self.manifest_requirement(iris_manifest, "sodium")
+                        and not matches_constraint(sodium_id, sodium["version_number"], self.manifest_requirement(iris_manifest, "sodium"))):
+                    continue
+                if (self.manifest_requirement(sodium_manifest, "iris")
+                        and not matches_constraint(iris_id, iris["version_number"], self.manifest_requirement(sodium_manifest, "iris"))):
+                    continue
+                if (self.manifest_breaks(iris_manifest, "sodium")
+                        and matches_constraint(sodium_id, sodium["version_number"], self.manifest_breaks(iris_manifest, "sodium"))):
+                    continue
+                if (self.manifest_breaks(sodium_manifest, "iris")
+                        and matches_constraint(iris_id, iris["version_number"], self.manifest_breaks(sodium_manifest, "iris"))):
+                    continue
+                self.log(f"[{minecraft_version}] Compatible pair: Iris {iris['version_number']} + Sodium {sodium['version_number']}.")
+                return iris, sodium
+        fail(f"No compatible Iris/Sodium pair exists for Minecraft {minecraft_version} with constraints Iris={constraints['iris']!r}, Sodium={constraints['sodium']!r}.")
+
     def sync_mods(self, minecraft_version, mods, voxy_artifact=None):
         mods.mkdir(parents=True, exist_ok=True)
         manifest_path = mods / ".voxy-managed-mods.json"
-        previous = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else []
+        previous = normalize_manifest_entries(read_json_file(manifest_path, []))
         projects = {"fabric-api": ("Fabric API", "P7dR8mSH"), "sodium": ("Sodium", "AANobbMI"), "cloth-config": ("Cloth Config", "9s6osm5g"), "modmenu": ("Mod Menu", "mOgUt4GM"), "iris": ("Iris Shaders", "YL57xq9U")}
         constraints = {"fabric-api": "*", "sodium": "*", "modmenu": "*", "iris": "*"}
         if minecraft_version == "1.20.1":
@@ -407,23 +621,13 @@ class RuntimeUpdater:
                 if dependency not in projects:
                     fail(f"Required mod '{dependency}' has no Modrinth project mapping in the compatibility script.")
                 constraints[dependency] = constraint
+        # The source snapshot's pair takes precedence over intentionally broad
+        # Fabric metadata such as Sodium's 0.6.x/0.8.x compatibility range.
+        constraints.update(VOXY_RUNTIME_CONSTRAINTS.get(minecraft_version, {}))
         resolved, entries = {}, []
-        order = sorted(key for key in constraints if key not in ("sodium", "iris")) + ["iris", "sodium"]
-        for dependency in order:
+
+        def install(dependency, item):
             name, project_id = projects[dependency]
-            required_id = None
-            if dependency == "sodium" and "iris" in resolved:
-                requirement = next((item for item in resolved["iris"]["dependencies"] if item.get("project_id") == projects["sodium"][1] and item.get("dependency_type") == "required"), None)
-                if requirement and requirement.get("version_id"):
-                    iris_sodium = modrinth_file(project_id, minecraft_version, constraint="*", required_id=requirement["version_id"])
-                    if matches_constraint(project_id, iris_sodium["version_number"], constraints["sodium"]):
-                        required_id = requirement["version_id"]
-                    else:
-                        self.log(f"[{minecraft_version}] Ignored Iris Sodium recommendation {iris_sodium['version_number']}; required constraint is {constraints['sodium']}.")
-                elif requirement and requirement.get("version_req"):
-                    constraints["sodium"] = requirement["version_req"]
-            number_pattern = r"\+" + re.escape(minecraft_version) + r"(?:$|[-+])" if dependency == "iris" else None
-            item = modrinth_file(project_id, minecraft_version, constraint=constraints[dependency], required_id=required_id, number_pattern=number_pattern)
             resolved[dependency] = item
             cached = self.cached(item)
             for existing in mods.glob("*.jar"):
@@ -434,25 +638,33 @@ class RuntimeUpdater:
             entries.append({"project": name, **{key: item[key] for key in ("project_id", "version_id", "version_number", "version_type", "file_name", "sha512")}})
             print(f"  {minecraft_version}: {name} {item['version_number']}")
             self.log(f"[{minecraft_version}] {name}: {item['version_number']} ({item['file_name']}).")
+
+        for dependency in sorted(key for key in constraints if key not in ("sodium", "iris")):
+            item = modrinth_file(projects[dependency][1], minecraft_version, constraint=constraints[dependency])
+            install(dependency, item)
+
+        iris, sodium = self.compatible_pair(minecraft_version, constraints, projects)
+        install("iris", iris)
+        install("sodium", sodium)
         current = {item["file_name"] for item in entries}
         for old in previous:
-            if old.get("file_name") and old["file_name"] not in current:
+            if isinstance(old, dict) and old.get("file_name") and old["file_name"] not in current:
                 (mods / old["file_name"]).unlink(missing_ok=True)
-        manifest_path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
+        write_json_file(manifest_path, entries)
 
     def sync_shaders(self, minecraft_version, game_directory):
         shaders = game_directory / "shaderpacks"
         shaders.mkdir(parents=True, exist_ok=True)
         manifest_path = shaders / ".voxy-managed-shaders.json"
-        previous = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else []
+        previous = normalize_manifest_entries(read_json_file(manifest_path, []))
         item = modrinth_file("HVnmMxH1", minecraft_version, loader="iris")
         cached = self.cached(item)
         shutil.copy2(cached, shaders / item["file_name"])
         entry = {"project": "Complementary Shaders - Reimagined", **{key: item[key] for key in ("project_id", "version_id", "version_number", "version_type", "file_name", "sha512")}}
         for old in previous:
-            if old.get("file_name") and old["file_name"] != item["file_name"]:
+            if isinstance(old, dict) and old.get("file_name") and old["file_name"] != item["file_name"]:
                 (shaders / old["file_name"]).unlink(missing_ok=True)
-        manifest_path.write_text(json.dumps([entry], indent=2) + "\n", encoding="utf-8")
+        write_json_file(manifest_path, [entry])
         print(f"  {minecraft_version}: {entry['project']} {item['version_number']}")
         self.log(f"[{minecraft_version}] {entry['project']}: {item['version_number']} ({item['file_name']}).")
 
@@ -464,7 +676,10 @@ class RuntimeUpdater:
             self.log(f"[{version}] Target directory: {game}")
             try:
                 self.log(f"[{version}] Updating runtime mods, including Iris.")
-                self.sync_mods(version, game / "mods")
+                voxy_jars = [jar for jar in (game / "mods").glob("*.jar") if jar_mod_id(jar) == "voxy"]
+                if len(voxy_jars) > 1:
+                    fail(f"Multiple Voxy JARs found in {game / 'mods'}; keep only the version being tested.")
+                self.sync_mods(version, game / "mods", voxy_jars[0] if voxy_jars else None)
             except Exception as error:
                 self.log(f"[{version}] Runtime mod update failed: {error}", "ERROR")
                 self.failures.append(f"Runtime mod update for Minecraft {version}: {error}")
@@ -496,19 +711,137 @@ def remove_worktree(root, worktree, allowed_root):
         shutil.rmtree(resolved)
 
 
+def build_single_build_worker(payload):
+    entry = payload["entry"]
+    key = payload["key"]
+    safe = payload["safe"]
+    root = Path(payload["root"])
+    output_directory = Path(payload["output_directory"])
+    worktree_root = Path(payload["worktree_root"])
+    toolchains = Path(payload["toolchains"])
+    args = argparse.Namespace(
+        allow_build_downloads=payload.get("allow_build_downloads", False),
+        continue_on_build_failure=payload.get("continue_on_build_failure", False),
+        keep_worktrees=payload.get("keep_worktrees", False),
+        java17_home=payload.get("java17_home"),
+        java21_home=payload.get("java21_home"),
+        java25_home=payload.get("java25_home"),
+        gradle_workers=payload.get("gradle_workers"),
+    )
+    branch = entry["branch"]
+    worktree = worktree_root / safe
+    log_path = None
+    try:
+        build_version = entry.get("build_version", entry["expected"])
+        print(f"\n=== Building {branch} (Minecraft {build_version}; source baseline {entry['expected']}) ===", flush=True)
+        run(["git", "-C", str(root), "-c", "core.longpaths=true", "worktree", "add", "--detach", str(worktree), branch])
+        source_version = property_value(worktree / "gradle.properties", "minecraft_version")
+        if source_version != entry["expected"]:
+            fail(f"Branch {branch} has source baseline Minecraft {source_version}, expected {entry['expected']}. Keep the branch baseline unchanged; the selected target is passed conditionally as -Pminecraft_version={build_version}.")
+        source_manifest = json.loads((worktree / "src/main/resources/fabric.mod.json").read_bytes().decode("utf-8-sig"))
+        if source_manifest.get("id") != "voxy":
+            fail(f"Branch {branch} contains mod id '{source_manifest.get('id')}', not 'voxy'. Complete the Voxy port before distributing this build.")
+        required_java = entry.get("java") or target_java_version(worktree / "build.gradle", branch)
+        java_home = get_java_home(required_java, getattr(args, f"java{required_java}_home", None), toolchains, offline=not args.allow_build_downloads)
+        environment = dict(os.environ)
+        environment.update({"JAVA_HOME": str(java_home), "PATH": str(java_home / "bin") + os.pathsep + environment.get("PATH", "")})
+        print(f"[{branch}] Using JDK {required_java} from {java_home}", flush=True)
+        gradle = worktree / ("gradlew.bat" if os.name == "nt" else "gradlew")
+        if not args.allow_build_downloads:
+            properties = worktree / "gradle/wrapper/gradle-wrapper.properties"
+            url = property_value(properties, "distributionUrl")
+            distribution = url.rsplit("/", 1)[-1].removesuffix(".zip")
+            gradle_home = Path(environment.get("GRADLE_USER_HOME", Path.home() / ".gradle"))
+            binaries = sorted((gradle_home / "wrapper/dists" / distribution).glob(
+                "*/gradle-*/bin/" + ("gradle.bat" if os.name == "nt" else "gradle")))
+            if not binaries:
+                fail(f"Gradle distribution {distribution} is not cached. Prepare it online before compiling offline.")
+            gradle = binaries[0]
+        if os.name != "nt" and args.allow_build_downloads:
+            gradle.chmod(gradle.stat().st_mode | 0o111)
+        gradle_workers = args.gradle_workers or 1
+        arguments = [gradle, "--no-daemon", f"--max-workers={gradle_workers}"] + ([f"-Pminecraft_version={build_version}"] if "build_version" in entry else [])
+        if not args.allow_build_downloads:
+            arguments += ["--offline", "-Porg.gradle.java.installations.auto-download=false"]
+        logs = output_directory / "build-logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        log_path = logs / f"{safe}-{datetime.now():%Y%m%d-%H%M%S}.log"
+        print(f"[{key}] Build log: {log_path}", flush=True)
+        if entry["tasks"]:
+            run(arguments + entry["tasks"], cwd=worktree, env=environment, log=log_path, live_console=True)
+            run(arguments + ["build"], cwd=worktree, env=environment, log=log_path, live_console=True)
+        else:
+            run(arguments + ["clean", "build"], cwd=worktree, env=environment, log=log_path, live_console=True)
+        jar = built_jar(worktree)
+        if jar_mod_id(jar) != "voxy":
+            fail(f"Built artifact '{jar.name}' contains mod id '{jar_mod_id(jar)}', not 'voxy'.")
+        commit = output(["git", "-C", str(worktree), "rev-parse", "--short=8", "HEAD"])
+        artifact = output_directory / f"voxy-compat-{safe}-mc{build_version}-{commit}.jar"
+        shutil.copy2(jar, artifact)
+        return {"key": key, "artifact": str(artifact), "error": None}
+    except Exception as error:
+        if isinstance(error, subprocess.CalledProcessError) and log_path is not None:
+            diagnostics = []
+            with log_path.open(encoding="utf-8", errors="replace") as log:
+                for line in log:
+                    if "error:" in line or line.startswith("> "):
+                        diagnostics.append(line.strip())
+                        if len(diagnostics) == 8:
+                            break
+            detail = "\n".join(diagnostics)
+            return {"key": key, "artifact": None, "error": f"{key}: Gradle failed (exit {error.returncode}).\n{detail}\nFull log: {log_path}"}
+        return {"key": key, "artifact": None, "error": f"{key}: {error}"}
+    finally:
+        if worktree.exists() and not args.keep_worktrees:
+            remove_worktree(root, worktree, worktree_root)
+
+
+def launch_single_build_in_terminal(payload, cwd=None):
+    payload = dict(payload)
+    script = Path(__file__).resolve()
+    snippet = """
+import json
+import sys
+from pathlib import Path
+import importlib.util
+
+payload = json.loads(sys.argv[1])
+script_path = Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location('voxy_parallel_build_worker', script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+result = module.build_single_build_worker(payload)
+result_path = Path(payload['result_path'])
+result_path.parent.mkdir(parents=True, exist_ok=True)
+result_path.write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
+"""
+    command = [sys.executable, "-c", snippet, json.dumps(payload), str(script)]
+    kwargs = {"cwd": str(cwd) if cwd is not None else None}
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        kwargs["close_fds"] = False
+    else:
+        kwargs["start_new_session"] = True
+    return subprocess.Popen(command, **kwargs)
+
+
 def build_matrix(args, matrix, output_directory):
     root = args.repository_root
     toolchains = output_directory / ".toolchains"
     toolchains.mkdir(parents=True, exist_ok=True)
     worktree_root = args.worktree_base_directory.expanduser() / uuid.uuid4().hex[:8]
     worktree_root.mkdir(parents=True)
-    artifacts, java_homes, failures = {}, {}, []
+    if args.build_workers < 1:
+        fail("--build-workers must be at least 1.")
+    if args.gradle_workers is not None and args.gradle_workers < 1:
+        fail("--gradle-workers must be at least 1.")
+    artifacts, failures = {}, []
     try:
+        builds = []
         for entry in matrix:
             branch = entry["branch"]
             key = entry.get("key", branch)
             safe = re.sub(r"[^A-Za-z0-9._-]", "_", key)
-            print(f"\n=== Building {branch} ===", flush=True)
             if subprocess.run(["git", "-C", str(root), "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"]).returncode:
                 message = f"{branch}: local branch does not exist"
                 failures.append(message)
@@ -525,49 +858,68 @@ def build_matrix(args, matrix, output_directory):
                 if args.profiles_only:
                     failures.append(f"{branch}: no matching artifact exists for commit {branch_commit}")
                     continue
-            worktree = worktree_root / safe
-            try:
-                if worktree.exists():
-                    remove_worktree(root, worktree, worktree_root)
-                run(["git", "-C", root, "-c", "core.longpaths=true", "worktree", "add", "--detach", worktree, branch])
-                source_version = property_value(worktree / "gradle.properties", "minecraft_version")
-                if source_version != entry["expected"]:
-                    fail(f"Branch {branch} targets Minecraft {source_version}, expected {entry['expected']}. Complete the port before distributing this build.")
-                source_manifest = json.loads((worktree / "src/main/resources/fabric.mod.json").read_text(encoding="utf-8"))
-                if source_manifest.get("id") != "voxy":
-                    fail(f"Branch {branch} contains mod id '{source_manifest.get('id')}', not 'voxy'. Complete the Voxy port before distributing this build.")
-                build_version = entry.get("build_version", source_version)
-                required_java = entry.get("java") or target_java_version(worktree / "build.gradle", branch)
-                if required_java not in java_homes:
-                    java_homes[required_java] = get_java_home(required_java, getattr(args, f"java{required_java}_home", None), toolchains)
-                java_home = java_homes[required_java]
-                environment = dict(os.environ)
-                environment.update({"JAVA_HOME": str(java_home), "PATH": str(java_home / "bin") + os.pathsep + environment.get("PATH", "")})
-                print(f"Using JDK {required_java} from {java_home}")
-                gradle = worktree / ("gradlew.bat" if os.name == "nt" else "gradlew")
-                if os.name != "nt":
-                    gradle.chmod(gradle.stat().st_mode | 0o111)
-                arguments = [gradle, "--no-daemon"] + ([f"-Pminecraft_version={build_version}"] if "build_version" in entry else [])
-                if entry["tasks"]:
-                    print(f"Preparing generated include JARs for {branch}...")
-                    run(arguments + entry["tasks"], cwd=worktree, env=environment)
-                    run(arguments + ["build"], cwd=worktree, env=environment)
-                else:
-                    run(arguments + ["clean", "build"], cwd=worktree, env=environment)
-                jar = built_jar(worktree)
-                if jar_mod_id(jar) != "voxy":
-                    fail(f"Built artifact '{jar.name}' contains mod id '{jar_mod_id(jar)}', not 'voxy'.")
-                commit = output(["git", "-C", worktree, "rev-parse", "--short=8", "HEAD"])
-                artifact = output_directory / f"voxy-compat-{safe}-mc{build_version}-{commit}.jar"
-                shutil.copy2(jar, artifact)
-                artifacts[key] = artifact
-            except Exception as error:
-                failures.append(f"{branch}: {error}")
-                if not args.continue_on_build_failure:
-                    raise
-            finally:
-                if worktree.exists() and not args.keep_worktrees:
-                    remove_worktree(root, worktree, worktree_root)
+            builds.append((entry, key, safe))
+
+        concurrent_builds = min(args.build_workers, len(builds))
+        if concurrent_builds:
+            gradle_workers = args.gradle_workers or max(1, (os.cpu_count() or 1) // concurrent_builds)
+            print(f"\n=== Building {len(builds)} configuration(s) with up to {concurrent_builds} concurrent build(s); "
+                  f"up to {gradle_workers} Gradle worker(s) per build ===", flush=True)
+
+            processes = []
+            for entry, key, safe in builds:
+                result_path = output_directory / "build-logs" / f"result-{safe}-{uuid.uuid4().hex}.json"
+                payload = {
+                    "entry": entry,
+                    "key": key,
+                    "safe": safe,
+                    "root": str(root),
+                    "output_directory": str(output_directory),
+                    "worktree_root": str(worktree_root),
+                    "toolchains": str(toolchains),
+                    "allow_build_downloads": args.allow_build_downloads,
+                    "continue_on_build_failure": args.continue_on_build_failure,
+                    "keep_worktrees": args.keep_worktrees,
+                    "java17_home": getattr(args, "java17_home", None),
+                    "java21_home": getattr(args, "java21_home", None),
+                    "java25_home": getattr(args, "java25_home", None),
+                    "gradle_workers": gradle_workers,
+                    "result_path": str(result_path),
+                }
+                processes.append((key, result_path, launch_single_build_in_terminal(payload, cwd=str(root))))
+
+            while processes:
+                remaining = []
+                for key, result_path, process in processes:
+                    code = process.poll()
+                    if code is None:
+                        remaining.append((key, result_path, process))
+                        continue
+                    if result_path.exists():
+                        result = json.loads(result_path.read_text(encoding="utf-8"))
+                        artifact = result.get("artifact")
+                        if artifact:
+                            artifacts[key] = Path(artifact)
+                        error = result.get("error")
+                        if error:
+                            failures.append(error)
+                            if not args.continue_on_build_failure:
+                                for _, _, live in remaining:
+                                    if live.poll() is None:
+                                        live.terminate()
+                                fail(error)
+                    elif code != 0:
+                        failures.append(f"{key}: terminal build exited with code {code}.")
+                        if not args.continue_on_build_failure:
+                            for _, _, live in remaining:
+                                if live.poll() is None:
+                                    live.terminate()
+                            fail(failures[-1])
+                processes = remaining
+                if processes:
+                    time.sleep(0.5)
+            if failures and not args.continue_on_build_failure:
+                fail(failures[0])
     finally:
         if not args.keep_worktrees:
             subprocess.run(["git", "-C", str(root), "worktree", "prune"])
@@ -614,7 +966,9 @@ def save_profiles(args, matrix, artifacts, version_ids, updater, failures):
         fail(f"Minecraft Launcher profile file was not found: {profiles_path}")
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     shutil.copy2(profiles_path, profiles_path.with_name(profiles_path.name + f".{timestamp}.bak"))
-    launcher = json.loads(profiles_path.read_text(encoding="utf-8"))
+    launcher = read_json_file(profiles_path, {})
+    if not isinstance(launcher, dict):
+        launcher = {}
     profiles = launcher.setdefault("profiles", {})
     for entry in matrix:
         key = entry.get("key", entry["branch"])
@@ -638,46 +992,99 @@ def save_profiles(args, matrix, artifacts, version_ids, updater, failures):
                     updater.sync_shaders(version, game)
                 except Exception as error:
                     failures.append(f"Shader packs for Minecraft {version}: {error}")
-            profiles[f"voxy-test-{safe}"] = {"created": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"), "gameDir": str(game), "icon": "Grass", "lastVersionId": version_ids[version], "name": f"Voxy Test {version}", "type": "custom"}
+            profile = profiles.setdefault(f"voxy-test-{safe}", {})
+            profile.setdefault("created", datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"))
+            profile.setdefault("icon", "Grass")
+            profile.setdefault("name", f"Voxy Test {version}")
+            profile.update({"gameDir": str(game), "lastVersionId": version_ids[version], "type": "custom"})
     temporary = profiles_path.with_name(profiles_path.name + ".codex-new")
-    temporary.write_text(json.dumps(launcher, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    json.loads(temporary.read_text(encoding="utf-8"))
+    write_json_file(temporary, launcher)
+    read_json_file(temporary)
     temporary.replace(profiles_path)
+
+
+def install_compiled_artifacts(args, matrix, artifacts, failures):
+    """Install each successfully built Voxy JAR into its test profile."""
+    installed = []
+    for entry in matrix:
+        artifact = artifacts.get(entry.get("key", entry["branch"]))
+        if artifact is None:
+            continue
+        for version in entry["versions"]:
+            mods = profile_game_directory(args.profiles_directory, version) / "mods"
+            try:
+                mods.mkdir(parents=True, exist_ok=True)
+                for existing in mods.glob("*.jar"):
+                    if jar_mod_id(existing) == "voxy":
+                        existing.unlink()
+                destination = mods / artifact.name
+                shutil.copy2(artifact, destination)
+                installed.append(destination)
+            except Exception as error:
+                failures.append(f"Install Voxy for Minecraft {version}: {error}")
+    for destination in installed:
+        print(f"Installed Voxy: {destination}")
+
+
+def load_profile_script():
+    script_path = Path(__file__).resolve().with_name("CreateUpdateProfiles.py")
+    spec = importlib.util.spec_from_file_location("voxy_create_update_profiles", script_path)
+    if spec is None or spec.loader is None:
+        fail(f"Could not load profile script from {script_path}.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_dependencies_script():
+    script_path = Path(__file__).resolve().with_name("UpdateProfileDependencies.py")
+    spec = importlib.util.spec_from_file_location("voxy_update_profile_dependencies", script_path)
+    if spec is None or spec.loader is None:
+        fail(f"Could not load dependency update script from {script_path}.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_jdks_script():
+    script_path = Path(__file__).resolve().with_name("InstallJdkVersions.py")
+    spec = importlib.util.spec_from_file_location("voxy_install_jdk_versions", script_path)
+    if spec is None or spec.loader is None:
+        fail(f"Could not load JDK install script from {script_path}.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def main():
     args = parse_args()
+    action = select_action(args)
     if args.profiles_only and args.skip_profile_creation:
         fail("--profiles-only and --skip-profile-creation cannot be used together.")
-    matrix = select_matrix(args)
+    matrix = [] if action == "jdks" else select_matrix(args)
     args.repository_root = args.repository_root.expanduser().resolve()
     args.minecraft_directory = args.minecraft_directory.expanduser().resolve()
     args.profiles_directory = args.profiles_directory.expanduser().resolve()
-    if not (args.repository_root / ".git").exists():
+    if action == "compile" and not (args.repository_root / ".git").exists():
         fail(f"Repository root is not a Git working tree: {args.repository_root}")
     output_directory = (args.output_directory or args.repository_root / "compatibility-builds").expanduser().resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
     updater = RuntimeUpdater(output_directory)
     failures = []
-    if not args.skip_runtime_mods:
-        updater.update_selected(matrix, args.profiles_directory)
-        failures.extend(updater.failures)
-    artifacts, build_failures = build_matrix(args, matrix, output_directory)
-    failures.extend(build_failures)
-    if not args.skip_profile_creation:
-        installer = output_directory / f"fabric-installer-{args.fabric_installer_version}.jar"
-        if not args.skip_fabric_install:
-            download(f"https://maven.fabricmc.net/net/fabricmc/fabric-installer/{args.fabric_installer_version}/{installer.name}", installer)
-        version_ids = {}
-        for version in sorted(unique_versions(matrix), key=version_tuple):
-            loader = fabric_loader_version(version)
-            version_ids[version] = f"fabric-loader-{loader}-{version}" if args.skip_fabric_install else install_fabric(args.minecraft_directory, version, loader, installer)
-        save_profiles(args, matrix, artifacts, version_ids, updater, failures)
-    print(f"\nArtifacts: {output_directory}")
-    print(f"Test profiles: {args.profiles_directory}")
-    print(f"Update log: {updater.log_path}")
+    if action == "jdks":
+        load_jdks_script().run_jdks(args, failures)
+    elif action == "dependencies":
+        load_dependencies_script().run_dependencies(args, matrix, output_directory, updater, failures)
+    elif action in ("compile", "compile-online"):
+        if action == "compile-online":
+            args.allow_build_downloads = True
+        artifacts, build_failures = build_matrix(args, matrix, output_directory)
+        failures.extend(build_failures)
+        install_compiled_artifacts(args, matrix, artifacts, failures)
+    elif action == "profiles":
+        load_profile_script().run_profiles(args, matrix, output_directory, updater, failures)
     if failures:
-        print("Incomplete branches/builds:\n - " + "\n - ".join(failures), file=sys.stderr)
+        print("Incomplete operations:\n - " + "\n - ".join(failures), file=sys.stderr)
         return 1
     return 0
 

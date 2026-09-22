@@ -863,7 +863,10 @@ def build_matrix(args, matrix, output_directory):
         fail("--build-workers must be at least 1.")
     if args.gradle_workers is not None and args.gradle_workers < 1:
         fail("--gradle-workers must be at least 1.")
-    detach_builds = sys.platform == "darwin"
+    # On macOS, launch_single_build_in_terminal keeps its osascript process
+    # alive until the Terminal worker writes its result.  Keep polling those
+    # processes so their artifacts are installed into the test profiles below.
+    detach_builds = False
     artifacts, failures = {}, []
     try:
         builds = []
@@ -916,11 +919,6 @@ def build_matrix(args, matrix, output_directory):
                     "result_path": str(result_path),
                 }
                 processes.append((key, result_path, launch_single_build_in_terminal(payload, cwd=str(root))))
-
-            if detach_builds:
-                print("\n=== Compatibility builds launched in Terminal.app; returning control to the main terminal. ===", flush=True)
-                print("Build results will be written to:", output_directory, flush=True)
-                return artifacts, failures
 
             while processes:
                 remaining = []

@@ -10,6 +10,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -794,6 +795,16 @@ def build_single_build_worker(payload):
     finally:
         if worktree.exists() and not args.keep_worktrees:
             remove_worktree(root, worktree, worktree_root)
+        if sys.platform == "darwin" and not args.keep_worktrees:
+            # The macOS coordinator returns before all workers finish, so no
+            # coordinator-side finally block can remove the now-empty root.
+            # Multiple workers may reach this point together; a failed rmdir
+            # simply means another worker still owns a worktree (or cleaned
+            # the root first).
+            try:
+                worktree_root.rmdir()
+            except OSError:
+                pass
 
 
 def launch_single_build_in_terminal(payload, cwd=None):
@@ -820,6 +831,23 @@ result_path.write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
         kwargs["close_fds"] = False
+    elif sys.platform == "darwin":
+        # start_new_session only detaches a process on macOS; it does not ask
+        # Terminal.app to create a visible window.  Let Terminal.app launch
+        # the worker and keep this osascript process alive until the worker has
+        # written its result if the coordinator remains attached, so the
+        # worker can still be monitored without owning the user's shell.
+        terminal_command = shlex.join(command)
+        if cwd is not None:
+            terminal_command = f"cd -- {shlex.quote(str(cwd))} && exec {terminal_command}"
+        result_path = shlex.quote(str(payload["result_path"]))
+        wait_for_result = f"while [ ! -f {result_path} ]; do sleep 1; done"
+        apple_script = (
+            f"tell application \"Terminal\" to do script {json.dumps(terminal_command)}\n"
+            f"do shell script {json.dumps(wait_for_result)}"
+        )
+        command = ["/usr/bin/osascript", "-e", apple_script]
+        kwargs["start_new_session"] = True
     else:
         kwargs["start_new_session"] = True
     return subprocess.Popen(command, **kwargs)
@@ -835,6 +863,7 @@ def build_matrix(args, matrix, output_directory):
         fail("--build-workers must be at least 1.")
     if args.gradle_workers is not None and args.gradle_workers < 1:
         fail("--gradle-workers must be at least 1.")
+    detach_builds = sys.platform == "darwin"
     artifacts, failures = {}, []
     try:
         builds = []
@@ -888,6 +917,11 @@ def build_matrix(args, matrix, output_directory):
                 }
                 processes.append((key, result_path, launch_single_build_in_terminal(payload, cwd=str(root))))
 
+            if detach_builds:
+                print("\n=== Compatibility builds launched in Terminal.app; returning control to the main terminal. ===", flush=True)
+                print("Build results will be written to:", output_directory, flush=True)
+                return artifacts, failures
+
             while processes:
                 remaining = []
                 for key, result_path, process in processes:
@@ -921,7 +955,10 @@ def build_matrix(args, matrix, output_directory):
             if failures and not args.continue_on_build_failure:
                 fail(failures[0])
     finally:
-        if not args.keep_worktrees:
+        # Detached macOS workers still need this directory while they create
+        # and remove their worktrees.  Each worker performs its own cleanup;
+        # the coordinator must not prune it as it exits.
+        if not args.keep_worktrees and not detach_builds:
             subprocess.run(["git", "-C", str(root), "worktree", "prune"])
             if worktree_root.exists() and not any(worktree_root.iterdir()):
                 worktree_root.rmdir()

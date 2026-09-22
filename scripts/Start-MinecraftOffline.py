@@ -23,6 +23,8 @@ from typing import Any, Iterable
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 REPOSITORY_ROOT = SCRIPT_DIRECTORY.parent
 MOJANG_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
+PLATFORM_MAP = {"win32": "windows", "darwin": "macosx", "linux": "linux"}
+CURRENT_OS = PLATFORM_MAP.get(sys.platform, "linux")
 
 
 def default_minecraft_directory() -> Path:
@@ -30,6 +32,8 @@ def default_minecraft_directory() -> Path:
         appdata = os.environ.get("APPDATA")
         if appdata:
             return Path(appdata) / ".minecraft"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "minecraft"
     return Path.home() / ".minecraft"
 
 
@@ -49,7 +53,7 @@ def allowed_by_rules(rules: Iterable[Any]) -> bool:
         matches = True
         operating_system = rule.get("os")
         if isinstance(operating_system, dict):
-            if operating_system.get("name") and operating_system["name"] != ("windows" if os.name == "nt" else os.name):
+            if operating_system.get("name") and operating_system["name"] != CURRENT_OS:
                 matches = False
             if matches and operating_system.get("arch"):
                 architecture = "amd64" if sys.maxsize > 2**32 else "x86"
@@ -152,8 +156,13 @@ class OfflineLauncher:
 
     def java_executable(self, major: int, component: str | None) -> Path:
         candidates: list[Path] = []
-        if component and os.name == "nt":
-            candidates.append(self.minecraft_directory / "runtime" / component / "windows-x64" / component / "bin" / "java.exe")
+        if component:
+            if os.name == "nt":
+                candidates.append(self.minecraft_directory / "runtime" / component / "windows-x64" / component / "bin" / "java.exe")
+            elif sys.platform == "darwin":
+                candidates.append(self.minecraft_directory / "runtime" / component / "macosx" / component / "bin" / "java")
+            else:
+                candidates.append(self.minecraft_directory / "runtime" / component / "linux-x86_64" / component / "bin" / "java")
         toolchains = REPOSITORY_ROOT / "compatibility-builds" / ".toolchains"
         if toolchains.is_dir():
             candidates.extend(path for path in toolchains.rglob("java.exe" if os.name == "nt" else "java") if f"jdk-{major}" in str(path))
@@ -173,6 +182,29 @@ class OfflineLauncher:
             if match and int(match.group(1)) == major:
                 return candidate
         raise RuntimeError(f"Java {major} was not found. Run the compatibility build once so its toolchain is installed.")
+
+    @staticmethod
+    def apple_script_string(value: str) -> str:
+        """Return a value safely quoted as an AppleScript string literal."""
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+
+    def launch_in_macos_terminal(self, command: list[str], game_directory: Path, log_file: Path) -> None:
+        shell_command = (
+            f"cd -- {shlex.quote(str(game_directory))} && "
+            f"{shlex.join(command)} 2>&1 | tee {shlex.quote(str(log_file))}; "
+            "printf '\\nMinecraft has exited. Press any key to close this window...'; "
+            "read -k 1 -s"
+        )
+        apple_script = (
+            "tell application \"Terminal\" to activate\n"
+            f"tell application \"Terminal\" to do script {self.apple_script_string(shell_command)}"
+        )
+        try:
+            subprocess.run(["osascript", "-e", apple_script], check=True)
+        except OSError as error:
+            raise RuntimeError(f"Could not open macOS Terminal: {error}") from error
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError(f"Could not open macOS Terminal (osascript exited with code {error.returncode}).") from error
 
     def start_profile(self, profile_id: str, profile: dict[str, Any]) -> None:
         # A malformed historical profile may contain installer output before the ID.
@@ -236,8 +268,9 @@ class OfflineLauncher:
                 self.download(f"{base_url}/{relative.as_posix()}", path)
                 class_path.append(str(path))
             natives = library.get("natives", {})
-            if isinstance(natives, dict) and "windows" in natives and isinstance(downloads, dict):
-                classifier_name = str(natives["windows"]).replace("${arch}", "64")
+            if isinstance(natives, dict) and CURRENT_OS in natives and isinstance(downloads, dict):
+                architecture = "64" if sys.maxsize > 2**32 else "32"
+                classifier_name = str(natives[CURRENT_OS]).replace("${arch}", architecture)
                 classifier = downloads.get("classifiers", {}).get(classifier_name)
                 if classifier:
                     path = self.minecraft_directory / "libraries" / Path(str(classifier["path"]))
@@ -291,6 +324,9 @@ class OfflineLauncher:
             print(f"Dry run: command resolved ({len(command) - 1} arguments).")
             return
         launch_log_base = game_directory / ".voxy-launch"
+        if sys.platform == "darwin":
+            self.launch_in_macos_terminal(command, game_directory, launch_log_base.with_suffix(".log"))
+            return
         with (launch_log_base.with_suffix(".out.log")).open("w", encoding="utf-8") as stdout, (launch_log_base.with_suffix(".err.log")).open("w", encoding="utf-8") as stderr:
             process = subprocess.Popen(command, cwd=game_directory, stdout=stdout, stderr=stderr)
             if self.args.wait:
@@ -323,15 +359,41 @@ def select_profiles(profiles: dict[str, Any]) -> list[str]:
         return [available[int(index) - 1] for index in choice.split(",") if index.strip().isdigit() and 1 <= int(index) <= len(available)]
     try:
         import msvcrt
+
         def read_key() -> str:
             key = msvcrt.getwch()
             if key in ("\x00", "\xe0"):
                 return {"H": "up", "P": "down"}.get(msvcrt.getwch(), "")
             return {" ": "space", "\r": "enter", "a": "all", "A": "all", "q": "quit", "Q": "quit"}.get(key, "")
     except ImportError:
+
+        import termios
+        import tty
+
         def read_key() -> str:
-            key = input("Use number, A, or Q: ").strip().lower()
-            return "all" if key == "a" else "quit" if key == "q" else "enter"
+            file_descriptor = sys.stdin.fileno()
+            previous_settings = termios.tcgetattr(file_descriptor)
+            try:
+                tty.setcbreak(file_descriptor)
+                key = sys.stdin.read(1)
+                if key == "\x1b":
+                    sequence = sys.stdin.read(2)
+                    return {"[A": "up", "[B": "down"}.get(sequence, "")
+                if key == " ":
+                    return "space"
+                if key in ("\r", "\n"):
+                    return "enter"
+                if key in ("a", "A"):
+                    return "all"
+                if key in ("q", "Q"):
+                    return "quit"
+                if key.isdigit():
+                    index = int(key) - 1
+                    if 0 <= index < len(available):
+                        selected.symmetric_difference_update({index})
+                return ""
+            finally:
+                termios.tcsetattr(file_descriptor, termios.TCSADRAIN, previous_settings)
     while True:
         os.system("cls" if os.name == "nt" else "clear")
         print("Available Minecraft profiles")

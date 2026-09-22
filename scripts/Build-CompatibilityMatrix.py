@@ -1104,6 +1104,10 @@ def main():
         fail(f"Repository root is not a Git working tree: {args.repository_root}")
     output_directory = (args.output_directory or args.repository_root / "compatibility-builds").expanduser().resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
+    # InstallJdkVersions accepts the same option, but its reusable entry point
+    # expects the resolved destination to have been assigned by its own main().
+    # Keep that contract when invoking it from this orchestrator.
+    args.output_directory = output_directory
     updater = RuntimeUpdater(output_directory)
     failures = []
     if action == "jdks":

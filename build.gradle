@@ -112,9 +112,13 @@ if (compatibilitySource != null) {
                     if (!contents.contains('public int serviceThreads')) {
                         additions.add('    public int serviceThreads = Math.max(Runtime.getRuntime().availableProcessors() / 2, 1);')
                     }
-                    if (!contents.contains('public int renderDistance') &&
-                            !contents.contains('public int sectionRenderDistance') &&
-                            !contents.contains('public float sectionRenderDistance')) {
+                    def hasDistanceField = contents.readLines().any { line ->
+                        def declaration = line.trim()
+                        declaration.startsWith('public int renderDistance') ||
+                                declaration.startsWith('public int sectionRenderDistance') ||
+                                declaration.startsWith('public float sectionRenderDistance')
+                    }
+                    if (!hasDistanceField) {
                         additions.add('    public int sectionRenderDistance = 16;')
                     }
                     if (!contents.contains('public boolean dontUseSodiumBuilderThreads')) {
@@ -472,7 +476,7 @@ if (compatibilitySource != null) {
                 delete new File(compatibilitySources, 'me/cortex/voxy/client/config/VoxyConfigScreenFactory.java')
                 delete new File(compatibilitySources, 'me/cortex/voxy/client/config/screens')
             }
-            if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.7', '1.21.8', '1.21.9', '1.21.10']) {
+            if (project.minecraft_version in ['1.21.5', '1.21.6', '1.21.7', '1.21.8', '1.21.9', '1.21.10']) {
                 copy {
                     from 'src/compatibility/java/me/cortex/voxy/client/config/LegacySodiumConfigMenu.java'
                     from 'src/compatibility/java/me/cortex/voxy/client/config/LegacyVoxySupport.java'

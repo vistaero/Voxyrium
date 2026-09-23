@@ -9,6 +9,23 @@ import sys
 from pathlib import Path
 
 
+def load_dependency_overrides(path):
+    overrides = {}
+    if not path.exists():
+        return overrides
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = [field.strip() for field in line.split("|")]
+        if len(fields) != 3 or not all(fields):
+            raise ValueError(f"Invalid dependency override at {path}:{line_number}; expected 'Minecraft | dependency | version'.")
+        minecraft_version, dependency, version = fields
+        constraint = version if version.startswith("=") else f"={version}"
+        overrides.setdefault(minecraft_version, {})[dependency] = constraint
+    return overrides
+
+
 def compat_module():
     script_path = Path(__file__).resolve().with_name("Build-CompatibilityMatrix.py")
     spec = importlib.util.spec_from_file_location("voxy_compat_matrix", script_path)
@@ -34,7 +51,12 @@ def parse_args(argv=None):
 
 
 def run_dependencies(args, matrix, output_directory, updater, failures):
-    compat = compat_module()
+    overrides_path = args.repository_root / "dependency-overrides.txt"
+    try:
+        updater.dependency_overrides = load_dependency_overrides(overrides_path)
+    except (OSError, ValueError) as error:
+        failures.append(f"Dependency overrides: {error}")
+        return 1
     updater.update_selected(matrix, args.profiles_directory)
     failures.extend(updater.failures)
     return 0

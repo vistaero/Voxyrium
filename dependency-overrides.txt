@@ -1,0 +1,7 @@
+# Runtime dependency overrides for Voxy compatibility profiles.
+#
+# Format: Minecraft version | dependency id | exact Modrinth version
+# These entries take precedence over Voxy metadata and automatic dependency
+# discovery. Keep this file as the human reference for known-good overrides.
+
+1.21.11 | sodium | mc1.21.11-0.8.12-fabric

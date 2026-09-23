@@ -517,6 +517,7 @@ class RuntimeUpdater:
         log_directory.mkdir(parents=True, exist_ok=True)
         self.log_path = log_directory / f"runtime-update-{datetime.now():%Y%m%d-%H%M%S}.log"
         self.output_directory = output_directory
+        self.dependency_overrides = {}
         self.failures = []
 
     def log(self, message, level="INFO"):
@@ -625,6 +626,9 @@ class RuntimeUpdater:
         # The source snapshot's pair takes precedence over intentionally broad
         # Fabric metadata such as Sodium's 0.6.x/0.8.x compatibility range.
         constraints.update(VOXY_RUNTIME_CONSTRAINTS.get(minecraft_version, {}))
+        # Explicit, reviewed overrides are the final authority for known-good
+        # runtime combinations maintained in dependency-overrides.txt.
+        constraints.update(self.dependency_overrides.get(minecraft_version, {}))
         resolved, entries = {}, []
 
         def install(dependency, item):

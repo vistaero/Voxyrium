@@ -156,8 +156,8 @@ if (compatibilitySource != null) {
                     contents = contents.replace('ShaderParser.parseShader("#import <" + id + ">", ShaderConstants.builder().build())',
                             'ShaderParser.parseShader("#import <" + id + ">", ShaderConstants.builder().build()).src()')
                 }
-                if (project.minecraft_version in ['1.21.6', '1.21.7'] && path.endsWith('/MixinRenderSectionManager.java')) {
-                    // Sodium 0.7 added SortBehavior to RenderSectionManager's constructor.
+                if (project.minecraft_version in ['1.21.6', '1.21.7', '1.21.8', '1.21.9', '1.21.10', '1.21.11'] && path.endsWith('/MixinRenderSectionManager.java')) {
+                    // Sodium 0.7+ added SortBehavior to RenderSectionManager's constructor.
                     contents = contents.replace(
                             'import net.caffeinemc.mods.sodium.client.render.chunk.RenderSectionManager;',
                             'import net.caffeinemc.mods.sodium.client.render.chunk.RenderSectionManager;\n' +
@@ -166,7 +166,7 @@ if (compatibilitySource != null) {
                             'int renderDistance, CommandList commandList, CallbackInfo ci)',
                             'int renderDistance, SortBehavior sortBehavior, CommandList commandList, CallbackInfo ci)')
                     if (!contents.contains('int renderDistance, SortBehavior sortBehavior, CommandList commandList, CallbackInfo ci)')) {
-                        throw new GradleException("Failed to adapt Sodium 0.7 RenderSectionManager constructor for ${project.minecraft_version}")
+                        throw new GradleException("Failed to adapt Sodium 0.7+ RenderSectionManager constructor for ${project.minecraft_version}")
                     }
                 }
                 if (project.minecraft_version == '1.21.7' && path.endsWith('/ShaderLoader.java')) {
@@ -175,6 +175,15 @@ if (compatibilitySource != null) {
                     contents = providers.exec {
                         commandLine 'git', 'show', "upstream/mc_1217:${path}"
                     }.standardOutput.asText.get()
+                }
+                if (project.minecraft_version in ['1.21.6', '1.21.7', '1.21.8', '1.21.9', '1.21.10', '1.21.11'] && path.endsWith('/MixinDefaultChunkRenderer.java')) {
+                    contents = contents.replaceAll('FogParameters [A-Za-z0-9_]+, CallbackInfo ci\\)', 'FogParameters parameters, boolean indexedRenderingEnabled, CallbackInfo ci)')
+                    if (contents.contains('fogParameters')) {
+                        contents = contents.replace('fogParameters', 'parameters')
+                    }
+                    if (!contents.contains('boolean indexedRenderingEnabled')) {
+                        throw new GradleException("Failed to adapt Sodium 0.7+ DefaultChunkRenderer injection for ${project.minecraft_version}")
+                    }
                 }
                 if (project.minecraft_version in ['1.21', '1.21.1']) {
                     // Sodium 0.6+ moved out of the legacy me.jellysquid
@@ -186,8 +195,8 @@ if (compatibilitySource != null) {
                                 'ShaderParser.parseShader("#import <" + id + ">", ShaderConstants.builder().build()).src()')
                     }
                     if (path.endsWith('/MixinDefaultChunkRenderer.java')) {
-                        // Sodium 0.8 added indexedRenderingEnabled to render;
-                        // Sodium 0.6.13 used by Minecraft 1.21 has no such argument.
+                        // Sodium 0.7/0.8 adds indexedRenderingEnabled to render;
+                        // Sodium 0.6.13 used by Minecraft 1.21 still has no such argument.
                         if (project.minecraft_version == '1.21.1') {
                             contents = contents.replace(
                                     'TerrainRenderPass renderPass, CameraTransform camera, CallbackInfo ci)',

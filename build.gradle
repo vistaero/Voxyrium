@@ -146,6 +146,18 @@ if (compatibilitySource != null) {
                                 'TerrainRenderPass renderPass, CameraTransform camera, CallbackInfo ci)',
                                 'TerrainRenderPass renderPass, CameraTransform camera, boolean indexedRenderingEnabled, CallbackInfo ci)')
                     }
+                    if (path.endsWith('/MixinRenderSectionManager.java')) {
+                        // Sodium 0.6+ renamed this field from world to level.
+                        // A @Shadow compiles without validating the target,
+                        // so the historical name otherwise fails at runtime.
+                        contents = contents.replace('@Shadow @Final private ClientWorld world;',
+                                '@Shadow @Final private ClientWorld level;')
+                        contents = contents.replace('(world.worldRenderer)', '(this.level.worldRenderer)')
+                        contents = contents.replace('world.getChunk(x, z)', 'this.level.getChunk(x, z)')
+                        if (contents.contains('private ClientWorld world;')) {
+                            throw new GradleException("Failed to adapt RenderSectionManager field for ${project.minecraft_version}")
+                        }
+                    }
                 }
                 if (project.minecraft_version in ['1.21', '1.21.1'] && path.endsWith('/MixinMinecraftClient.java')) {
                     // RenderDoc is optional; the historical source must not
@@ -161,10 +173,21 @@ if (compatibilitySource != null) {
                     if (path.endsWith('/MixinSodiumOptionsGUI.java')) {
                         contents = contents.replace('        if (VoxyCommon.isAvailable()) {\n            this.pages.add(VoxyConfigScreenPages.voxyOptionPage = VoxyConfigScreenPages.page());\n        }',
                                 '        this.pages.add(VoxyConfigScreenPages.voxyOptionPage = VoxyConfigScreenPages.page());')
+                        contents = contents.replace('        if (VoxyCommon.isAvailable()) {\n            this.pages.add(VoxyConfigPageSodium.voxyOptionPage = VoxyConfigPageSodium.page());\n        }',
+                                '        this.pages.add(VoxyConfigPageSodium.voxyOptionPage = VoxyConfigPageSodium.page());')
+                        if (contents.contains('if (VoxyCommon.isAvailable())')) {
+                            throw new GradleException("Failed to expose the Voxy Sodium page for ${project.minecraft_version}")
+                        }
                     }
-                    if (path.endsWith('/VoxyConfigScreenPages.java')) {
+                    if (path.endsWith('/VoxyConfigScreenPages.java') || path.endsWith('/VoxyConfigPageSodium.java')) {
                         contents = contents.replace('.setControl(TickBoxControl::new)\n                        .setBinding((s, v)->{\n                            s.enableRendering = v;',
-                                '.setControl(TickBoxControl::new)\n                        .setEnabled(() -> VoxyCommon.isAvailable())\n                        .setBinding((s, v)->{\n                            s.enableRendering = v;')
+                                '.setControl(TickBoxControl::new)\n                        .setEnabled(() -> VoxyCommon.isAvailable())\n                        .setBinding((s, v)->{\n                            if (!VoxyCommon.isAvailable()) return;\n                            s.enableRendering = v;')
+                        contents = contents.replace('}, s -> s.enableRendering)\n                        .setImpact(OptionImpact.HIGH)',
+                                '}, s -> VoxyCommon.isAvailable() && s.enableRendering)\n                        .setImpact(OptionImpact.HIGH)')
+                        if (!contents.contains('.setEnabled(() -> VoxyCommon.isAvailable())') ||
+                                !contents.contains('if (!VoxyCommon.isAvailable()) return;')) {
+                            throw new GradleException("Failed to guard the Voxy render option for ${project.minecraft_version}")
+                        }
                     }
                     if (path.endsWith('/ModMenuIntegration.java')) {
                         contents = contents.replace('            if (VoxyCommon.isAvailable()) {\n', '')

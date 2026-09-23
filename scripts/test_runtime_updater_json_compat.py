@@ -18,14 +18,17 @@ class JsonCompatibilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "dependency-overrides.txt"
             path.write_text(
-                "# Minecraft | dependency | version\n"
-                "1.21.11 | sodium | mc1.21.11-0.8.12-fabric\n",
+                "# Minecraft | dependency | release channel | version\n"
+                "1.21.11 | sodium | release | mc1.21.11-0.8.12-fabric\n",
                 encoding="utf-8",
             )
 
             self.assertEqual(
                 UpdateProfileDependencies.load_dependency_overrides(path),
-                {"1.21.11": {"sodium": "=mc1.21.11-0.8.12-fabric"}},
+                (
+                    {"1.21.11": {"sodium": "=mc1.21.11-0.8.12-fabric"}},
+                    {"1.21.11": {"sodium": "release"}},
+                ),
             )
 
     def test_dependency_override_takes_precedence_over_runtime_constraint(self):
@@ -47,6 +50,9 @@ class JsonCompatibilityTests(unittest.TestCase):
             updater.dependency_overrides = {
                 "1.21.11": {"sodium": "=mc1.21.11-0.8.12-fabric"},
             }
+            updater.dependency_override_types = {
+                "1.21.11": {"sodium": "release"},
+            }
             iris = item("YL57xq9U", "iris-test", "iris.jar")
             sodium = item("AANobbMI", "sodium-test", "sodium.jar")
             generic = item("generic", "generic-test", "generic.jar")
@@ -59,6 +65,36 @@ class JsonCompatibilityTests(unittest.TestCase):
 
             constraints = compatible_pair.call_args.args[1]
             self.assertEqual(constraints["sodium"], "=mc1.21.11-0.8.12-fabric")
+
+    def test_modrinth_release_override_rejects_beta_versions(self):
+        def version(version_number, version_type, published):
+            return {
+                "id": version_number,
+                "status": "listed",
+                "version_number": version_number,
+                "version_type": version_type,
+                "date_published": published,
+                "files": [{
+                    "primary": True,
+                    "filename": f"{version_number}.jar",
+                    "url": f"https://example.invalid/{version_number}.jar",
+                    "hashes": {"sha512": "deadbeef"},
+                }],
+                "dependencies": [],
+            }
+
+        versions = [
+            version("mc1.21.11-0.8.13-beta.2-fabric", "beta", "2026-02-02"),
+            version("mc1.21.11-0.8.12-fabric", "release", "2026-01-01"),
+        ]
+        with patch.object(Build_CompatibilityMatrix, "json_url", return_value=versions):
+            candidates = Build_CompatibilityMatrix.modrinth_candidates(
+                "AANobbMI", "1.21.11", version_type="release")
+
+        self.assertEqual(
+            [candidate["version_number"] for candidate in candidates],
+            ["mc1.21.11-0.8.12-fabric"],
+        )
 
     def test_read_json_file_accepts_utf8_bom(self):
         with tempfile.TemporaryDirectory() as temp_dir:

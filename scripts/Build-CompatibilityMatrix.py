@@ -66,7 +66,7 @@ VOXY_RUNTIME_CONSTRAINTS = {
     "1.21.8": {"iris": "=1.9.6+1.21.8-fabric", "sodium": "=mc1.21.8-0.7.3-fabric"},
     "1.21.9": {"iris": "=1.9.7+1.21.10-fabric", "sodium": "=mc1.21.10-0.7.3-fabric"},
     "1.21.10": {"iris": "=1.9.7+1.21.10-fabric", "sodium": "=mc1.21.10-0.7.3-fabric"},
-    "1.21.11": {"iris": "=1.10.7+1.21.11-fabric", "sodium": "=mc1.21.11-0.8.13-beta.2-fabric"},
+    "1.21.11": {"iris": "=1.10.7+1.21.11-fabric", "sodium": "=mc1.21.11-0.8.12-fabric"},
 }
 
 
@@ -477,7 +477,7 @@ def matches_constraint(project_id, version_number, constraint):
     return False
 
 
-def modrinth_candidates(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None):
+def modrinth_candidates(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None, version_type=None):
     headers = {"User-Agent": USER_AGENT}
     if required_id:
         versions = [json_url(f"https://api.modrinth.com/v2/version/{required_id}", headers)]
@@ -487,13 +487,13 @@ def modrinth_candidates(project_id, minecraft_version, loader="fabric", constrai
     else:
         query = urllib.parse.urlencode({"loaders": json.dumps([loader], separators=(",", ":")), "game_versions": json.dumps([minecraft_version], separators=(",", ":")), "include_changelog": "false"})
         versions = json_url(f"https://api.modrinth.com/v2/project/{project_id}/version?{query}", headers)
-    listed = [item for item in versions if item.get("status") == "listed" and item.get("files") and (not required_id or item.get("id") == required_id) and (not number_pattern or re.search(number_pattern, item.get("version_number", ""))) and matches_constraint(project_id, item.get("version_number", ""), constraint)]
+    listed = [item for item in versions if item.get("status") == "listed" and item.get("files") and (not required_id or item.get("id") == required_id) and (not number_pattern or re.search(number_pattern, item.get("version_number", ""))) and (not version_type or item.get("version_type") == version_type) and matches_constraint(project_id, item.get("version_number", ""), constraint)]
     if not listed:
-        fail(f"Modrinth project {project_id} has no listed {loader} version for Minecraft {minecraft_version} matching constraint {constraint!r}.")
-    # Compatibility is the primary criterion. Once a pair is compatible, use
-    # the newest publication regardless of whether it is release, beta, or
-    # alpha. Voxy must follow the newest compatible pair, not prefer an older
-    # stable artifact over a newer compatible prerelease.
+        channel = f" in the {version_type} channel" if version_type else ""
+        fail(f"Modrinth project {project_id} has no listed {loader} version for Minecraft {minecraft_version}{channel} matching constraint {constraint!r}.")
+    # Compatibility is the primary criterion. Unless an override fixes the
+    # release channel, use the newest compatible publication regardless of
+    # whether it is release, beta, or alpha.
     ordered = sorted(listed, key=lambda item: item.get("date_published", ""), reverse=True)
     result = []
     for selected in ordered:
@@ -507,8 +507,8 @@ def modrinth_candidates(project_id, minecraft_version, loader="fabric", constrai
     return result
 
 
-def modrinth_file(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None):
-    return modrinth_candidates(project_id, minecraft_version, loader, constraint, required_id, number_pattern)[0]
+def modrinth_file(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None, version_type=None):
+    return modrinth_candidates(project_id, minecraft_version, loader, constraint, required_id, number_pattern, version_type)[0]
 
 
 class RuntimeUpdater:
@@ -518,6 +518,7 @@ class RuntimeUpdater:
         self.log_path = log_directory / f"runtime-update-{datetime.now():%Y%m%d-%H%M%S}.log"
         self.output_directory = output_directory
         self.dependency_overrides = {}
+        self.dependency_override_types = {}
         self.failures = []
 
     def log(self, message, level="INFO"):
@@ -564,10 +565,12 @@ class RuntimeUpdater:
         iris_id = projects["iris"][1]
         sodium_id = projects["sodium"][1]
         iris_candidates = modrinth_candidates(
-        iris_id, minecraft_version, constraint=constraints["iris"],
+            iris_id, minecraft_version, constraint=constraints["iris"],
+            version_type=self.dependency_override_types.get(minecraft_version, {}).get("iris"),
             number_pattern=None)
         sodium_candidates = modrinth_candidates(
             sodium_id, minecraft_version, constraint=constraints["sodium"],
+            version_type=self.dependency_override_types.get(minecraft_version, {}).get("sodium"),
             number_pattern=artifact_version_pattern(sodium_id, minecraft_version))
 
         sodium_manifests = {}
@@ -645,7 +648,10 @@ class RuntimeUpdater:
             self.log(f"[{minecraft_version}] {name}: {item['version_number']} ({item['file_name']}).")
 
         for dependency in sorted(key for key in constraints if key not in ("sodium", "iris")):
-            item = modrinth_file(projects[dependency][1], minecraft_version, constraint=constraints[dependency])
+            item = modrinth_file(
+                projects[dependency][1], minecraft_version,
+                constraint=constraints[dependency],
+                version_type=self.dependency_override_types.get(minecraft_version, {}).get(dependency))
             install(dependency, item)
 
         iris, sodium = self.compatible_pair(minecraft_version, constraints, projects)

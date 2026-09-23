@@ -32,12 +32,23 @@ public final class ModernSodiumConfigMenu implements ConfigEntryPoint {
     private static void addBoolean(ConfigBuilder builder, OptionGroupBuilder group,
                                    String field, String key) {
         if (find(field) == null) return;
+        boolean renderingToggle = field.equals("enabled");
         group.addOption(builder.createBooleanOption(Identifier.of("voxy", field))
                 .setName(Text.translatable(key))
                 .setTooltip(Text.translatable(key + ".tooltip"))
                 .setImpact(OptionImpact.MEDIUM)
+                .setEnabled(!renderingToggle || LegacyVoxySupport.isRenderingSupported())
+                .setDefaultValue(renderingToggle && !LegacyVoxySupport.isRenderingSupported()
+                        ? false
+                        : getBoolean(field, false))
                 .setStorageHandler(VoxyConfig.CONFIG::save)
-                .setBinding(value -> set(field, value), () -> getBoolean(field, false)));
+                .setBinding(value -> {
+                    if (!renderingToggle || LegacyVoxySupport.isRenderingSupported()) {
+                        set(field, value);
+                    }
+                }, () -> renderingToggle && !LegacyVoxySupport.isRenderingSupported()
+                        ? false
+                        : getBoolean(field, false)));
     }
 
     private static void addInteger(ConfigBuilder builder, OptionGroupBuilder group,
@@ -48,6 +59,7 @@ public final class ModernSodiumConfigMenu implements ConfigEntryPoint {
                 .setTooltip(Text.translatable(key + ".tooltip"))
                 .setImpact(OptionImpact.HIGH)
                 .setRange(min, max, 1)
+                .setDefaultValue(getInt(field, min))
                 .setStorageHandler(VoxyConfig.CONFIG::save)
                 .setBinding(value -> set(field, value), () -> getInt(field, min)));
     }

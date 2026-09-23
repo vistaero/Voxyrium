@@ -113,7 +113,7 @@ if (compatibilitySource != null) {
                                     '        org.lwjgl.opengl.GL45.glGetTextureImage(lmt.getColorAttachment(), 0, org.lwjgl.opengl.GL11.GL_RGBA, org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE, MemoryUtil.memByteBuffer(upload, 256 * 4));')
                     contents = contents.replace('int sample = lmt.getColor(x,y);', 'int sample = MemoryUtil.memGetInt(upload + (((x << 4) | y) * 4));')
                 }
-                if (project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4'] && path.endsWith('/MixinWorldRenderer.java')) {
+                if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4'] && path.endsWith('/MixinWorldRenderer.java')) {
                     contents = contents.replace('import me.cortex.voxy.client.config.VoxyConfig;',
                             'import me.cortex.voxy.client.config.VoxyConfig;\nimport me.cortex.voxy.client.config.LegacyVoxySupport;')
                     contents = contents.replace('if (VoxyConfig.CONFIG.enabled) {',
@@ -153,6 +153,7 @@ if (compatibilitySource != null) {
                     contents = contents.replace('System.load(', '// System.load(')
                 }
                 if (project.minecraft_version in ['1.21.5', '1.21.6', '1.21.7', '1.21.8', '1.21.9', '1.21.10']) {
+                    contents = contents.replace('CpuLayout.CORES.length', 'Runtime.getRuntime().availableProcessors()')
                     if (path.endsWith('/VoxyClient.java')) {
                         contents = contents.replace('            BudgetBufferRenderer.init();',
                                 '            if (systemSupported) {\n                BudgetBufferRenderer.init();\n            }')
@@ -164,6 +165,10 @@ if (compatibilitySource != null) {
                     if (path.endsWith('/VoxyConfigScreenPages.java')) {
                         contents = contents.replace('.setControl(TickBoxControl::new)\n                        .setBinding((s, v)->{\n                            s.enableRendering = v;',
                                 '.setControl(TickBoxControl::new)\n                        .setEnabled(() -> VoxyCommon.isAvailable())\n                        .setBinding((s, v)->{\n                            s.enableRendering = v;')
+                    }
+                    if (path.endsWith('/ModMenuIntegration.java')) {
+                        contents = contents.replace('            if (VoxyCommon.isAvailable()) {\n', '')
+                        contents = contents.replace('            } else {\n                return null;\n            }\n', '')
                     }
                 }
                 output.text = contents

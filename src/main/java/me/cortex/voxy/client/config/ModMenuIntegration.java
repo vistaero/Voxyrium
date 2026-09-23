@@ -12,13 +12,8 @@ public class ModMenuIntegration implements ModMenuApi {
     @Override
     public ConfigScreenFactory<?> getModConfigScreenFactory() {
         return parent -> {
-            if (VoxyCommon.isAvailable()) {
-                var page = (OptionPage) ConfigManager.CONFIG.getModOptions().stream().filter(a->a.configId().equals("voxy")).findFirst().get().pages().get(0);
-                var screen = (VideoSettingsScreen)VideoSettingsScreen.createScreen(parent, page);
-                return screen;
-            } else {
-                return null;
-            }
+            var page = (OptionPage) ConfigManager.CONFIG.getModOptions().stream().filter(a->a.configId().equals("voxy")).findFirst().get().pages().get(0);
+            return VideoSettingsScreen.createScreen(parent, page);
         };
     }
 }

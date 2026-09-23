@@ -173,9 +173,21 @@ if (compatibilitySource != null) {
                                 'ShaderParser.parseShader("#import <" + id + ">", ShaderConstants.builder().build()).src()')
                     }
                     if (path.endsWith('/MixinDefaultChunkRenderer.java')) {
+                        // Sodium 0.8 added indexedRenderingEnabled to render;
+                        // Sodium 0.6.13 used by Minecraft 1.21 has no such argument.
+                        if (project.minecraft_version == '1.21.1') {
+                            contents = contents.replace(
+                                    'TerrainRenderPass renderPass, CameraTransform camera, CallbackInfo ci)',
+                                    'TerrainRenderPass renderPass, CameraTransform camera, boolean indexedRenderingEnabled, CallbackInfo ci)')
+                        }
+                        // The mixin selector uses JVM internal names, so the package
+                        // rewrite above must also update its slash-separated owner.
                         contents = contents.replace(
-                                'TerrainRenderPass renderPass, CameraTransform camera, CallbackInfo ci)',
-                                'TerrainRenderPass renderPass, CameraTransform camera, boolean indexedRenderingEnabled, CallbackInfo ci)')
+                                'Lme/jellysquid/mods/sodium/',
+                                'Lnet/caffeinemc/mods/sodium/')
+                        if (contents.contains('target = "Lme.jellysquid.mods.sodium') || contents.contains('target = "Lme/jellysquid/mods/sodium')) {
+                            throw new GradleException("Failed to adapt DefaultChunkRenderer injection target for ${project.minecraft_version}")
+                        }
                     }
                     if (path.endsWith('/MixinRenderSectionManager.java')) {
                         // Sodium 0.6+ renamed this field from world to level.

@@ -59,6 +59,7 @@ public final class ModernSodiumConfigMenu implements ConfigEntryPoint {
                 .setTooltip(Text.translatable(key + ".tooltip"))
                 .setImpact(OptionImpact.HIGH)
                 .setRange(min, max, 1)
+                .setValueFormatter(value -> Text.literal(Integer.toString(value)))
                 .setDefaultValue(getInt(field, min))
                 .setStorageHandler(VoxyConfig.CONFIG::save)
                 .setBinding(value -> set(field, value), () -> getInt(field, min)));

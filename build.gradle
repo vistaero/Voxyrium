@@ -545,7 +545,7 @@ if (compatibilitySource != null) {
                                 'import me.cortex.voxy.client.core.Capabilities;')
                     }
                     contents = contents.replaceAll(
-                            '(?s)        if \\(mode == Mode\\.AUTO\\) \\{.*?        \\}\n\n        this\\.improved',
+                            '(?s)        if \\(mode == Mode\\.AUTO\\) \\{.*?        \\}\r?\n\r?\n        this\\.improved',
                             '        if (mode == Mode.AUTO) { mode = Mode.BASIC; }\n\n        this.improved')
                     ssao.text = contents
                 }

@@ -443,15 +443,18 @@ tasks.register('makeExcludedRocksDB', Zip) {
     from {->zipTree(files.first())}
     archiveFileName.set(providers.provider{files.first().name})
 
+    def hostOs = System.getProperty('os.name').toLowerCase(Locale.ROOT)
+    def hostArch = System.getProperty('os.arch').toLowerCase(Locale.ROOT)
+    def hostNative = hostOs.contains('mac')
+            ? (hostArch in ['aarch64', 'arm64'] ? 'librocksdbjni-osx-arm64.jnilib' : 'librocksdbjni-osx-x86_64.jnilib')
+            : hostOs.contains('win')
+            ? 'librocksdbjni-win64.dll'
+            : (hostArch in ['aarch64', 'arm64'] ? 'librocksdbjni-linux-aarch64.so' : 'librocksdbjni-linux64.so')
+
     exclude {
-        def file = it.name
-        if (file.endsWith(".jnilib")) {
-            return true
-        }
-        if (!file.endsWith(".so")) {
-            return false
-        }
-        return ["osx", "linux32", "musl", "s390x", "riscv64", "ppc64le", "aarch64"].any(file::contains)
+        def fileName = it.name.tokenize('/').last()
+        def nativeLibrary = fileName.endsWith('.jnilib') || fileName.endsWith('.so') || fileName.endsWith('.dll')
+        return nativeLibrary && fileName != hostNative
     }
 }
 

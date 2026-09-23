@@ -3,6 +3,8 @@ package me.cortex.voxy.client.config;
 import com.google.gson.FieldNamingPolicy;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonParseException;
+import me.cortex.voxy.client.core.NormalRenderPipeline;
 import me.cortex.voxy.client.core.SSAO;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.cpu.CpuLayout;
@@ -31,7 +33,9 @@ public class VoxyConfig {
     public float sectionRenderDistance = 16;
     public int serviceThreads = (int) Math.max(CpuLayout.getCoreCount()/1.5, 1);
     public float subDivisionSize = 64;
+    /** Retained so existing configuration files migrate to fogMode. */
     public boolean useEnvironmentalFog = true;
+    public String fogMode;
     public boolean dontUseSodiumBuilderThreads = false;
     public String ssaoMode;
 
@@ -46,9 +50,27 @@ public class VoxyConfig {
         this.ssaoMode = mode.name().toLowerCase(Locale.ROOT);
     }
 
+    public NormalRenderPipeline.FogMode getFogMode() {
+        if (this.fogMode == null) {
+            return this.useEnvironmentalFog
+                    ? NormalRenderPipeline.FogMode.FOG_AND_FADE
+                    : NormalRenderPipeline.FogMode.FADE;
+        }
+        try {
+            return NormalRenderPipeline.FogMode.valueOf(this.fogMode.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException exception) {
+            return NormalRenderPipeline.FogMode.FOG_AND_FADE;
+        }
+    }
+
+    public void setFogMode(NormalRenderPipeline.FogMode mode) {
+        this.fogMode = mode.name().toLowerCase(Locale.ROOT);
+        this.useEnvironmentalFog = mode.hasFog;
+    }
+
 
     private static VoxyConfig loadOrCreate() {
-        if (VoxyCommon.isAvailable()) {
+        if (canAccessClientConfig()) {
             var path = getConfigPath();
             if (Files.exists(path)) {
                 try (FileReader reader = new FileReader(path.toFile())) {
@@ -60,6 +82,8 @@ public class VoxyConfig {
                         Logger.error("Failed to load voxy config, resetting");
                     }
                 } catch (IOException e) {
+                    Logger.error("Could not load config", e);
+                } catch (JsonParseException e) {
                     Logger.error("Could not parse config", e);
                 }
             }
@@ -76,7 +100,7 @@ public class VoxyConfig {
     }
 
     public void save() {
-        if (!VoxyCommon.isAvailable()) {
+        if (!canAccessClientConfig()) {
             Logger.info("Not saving config since voxy is unavalible");
             return;
         }
@@ -92,6 +116,10 @@ public class VoxyConfig {
         return FabricLoader.getInstance()
                 .getConfigDir()
                 .resolve("voxy-config.json");
+    }
+
+    private static boolean canAccessClientConfig() {
+        return VoxyCommon.IS_IN_MINECRAFT && !VoxyCommon.IS_DEDICATED_SERVER;
     }
 
     public boolean isRenderingEnabled() {

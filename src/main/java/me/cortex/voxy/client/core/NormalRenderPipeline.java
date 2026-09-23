@@ -35,16 +35,34 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
     private GlTexture colourSSAOTex;
     private final GlFramebuffer fbSSAO = new GlFramebuffer();
 
-    private final boolean useEnvFog;
+    private final FogMode fogMode;
     private final FullscreenBlit finalBlit;
 
     private final SSAO ssao;
 
+    public enum FogMode {
+        FOG_AND_FADE(false, true, true),
+        FOG(false, true, false),
+        FADE(true, false, true),
+        OFF(true, false, false);
+
+        public final boolean removesVanillaEnvFog;
+        public final boolean hasFog;
+        public final boolean hasFade;
+
+        FogMode(boolean removesVanillaEnvFog, boolean hasFog, boolean hasFade) {
+            this.removesVanillaEnvFog = removesVanillaEnvFog;
+            this.hasFog = hasFog;
+            this.hasFade = hasFade;
+        }
+    }
+
     protected NormalRenderPipeline(RenderProperties properties, AsyncNodeManager nodeManager, NodeCleaner nodeCleaner, HierarchicalOcclusionTraverser traversal, BooleanSupplier frexSupplier) {
         super(properties, nodeManager, nodeCleaner, traversal, frexSupplier, false);
-        this.useEnvFog = VoxyConfig.CONFIG.useEnvironmentalFog;
+        this.fogMode = VoxyConfig.CONFIG.getFogMode();
         this.finalBlit = new FullscreenBlit(properties, "voxy:post/blit_texture_depth_cutout.frag",
-                a->a.defineIf("USE_ENV_FOG", this.useEnvFog).define("EMIT_COLOUR"));
+                a->a.defineIf("HAS_FOG", this.fogMode.hasFog)
+                        .defineIf("HAS_FADE", this.fogMode.hasFade).define("EMIT_COLOUR"));
 
 
         this.ssao = SSAO.createSSAO(properties, VoxyConfig.CONFIG.getSSAOMode());
@@ -91,7 +109,7 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
 
         boolean fogCoversAllRendering = viewport.fogParameters.environmentalEnd()<Minecraft.getInstance().gameRenderer.getRenderDistance();
 
-        if (this.useEnvFog) {
+        if (this.fogMode.hasFog) {
             float start = viewport.fogParameters.environmentalStart();
             float end = viewport.fogParameters.environmentalEnd();
             if (Math.abs(end-start)>1) {
@@ -105,6 +123,16 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
                 glUniform4f(4, 0, 0, 0, 0);
                 glUniform4f(5, 0, 0, 0, 0);
             }
+        }
+        if (this.fogMode.hasFade) {
+            int mode = 1;
+            float distance = VoxyConfig.CONFIG.sectionRenderDistance * 16 * 32
+                    - (float) Math.sqrt(mode > 1 ? 32 * 32 * 32 : 32 * 32);
+            float vanillaDistance = Minecraft.getInstance().gameRenderer.getRenderDistance();
+            float start = Math.max(vanillaDistance, distance * 0.9f);
+            float end = Math.max(vanillaDistance, distance);
+            float scale = 1.0f / (end - start);
+            glUniform4f(6, mode, -start * scale, scale, 0);
         }
 
         glBindTextureUnit(3, this.colourSSAOTex.id);

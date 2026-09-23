@@ -31,7 +31,7 @@ public class MixinFogRenderer {
         if (!VoxyConfig.CONFIG.useRenderFog) {
         }*/
         boolean fogIsDamnClose = data.environmentalEnd<10;
-        if (!VoxyConfig.CONFIG.useEnvironmentalFog && !fogIsDamnClose) {
+        if (VoxyConfig.CONFIG.getFogMode().removesVanillaEnvFog && !fogIsDamnClose) {
             data.environmentalStart = 99999999;
             data.environmentalEnd = 99999999;
         }

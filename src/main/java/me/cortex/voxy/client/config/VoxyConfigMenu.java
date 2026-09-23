@@ -3,6 +3,7 @@ package me.cortex.voxy.client.config;
 import me.cortex.voxy.client.ClientSessionEvents;
 import me.cortex.voxy.client.config.SodiumConfigBuilder.*;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
+import me.cortex.voxy.client.core.NormalRenderPipeline;
 import me.cortex.voxy.client.core.SSAO;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.util.cpu.CpuLayout;
@@ -17,9 +18,20 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 
+import java.util.Locale;
+
 public class VoxyConfigMenu implements ConfigEntryPoint {
     @Override
-    public void registerConfigLate(ConfigBuilder B) {
+    public void registerConfigEarly(ConfigBuilder builder) {
+        registerConfig(builder);
+    }
+
+    @Override
+    public void registerConfigLate(ConfigBuilder builder) {
+        registerConfig(builder);
+    }
+
+    private static void registerConfig(ConfigBuilder B) {
         var CFG = VoxyConfig.CONFIG;
 
         var cc = B.registerModOptions("voxy", "Voxy", VoxyCommon.MOD_VERSION)
@@ -122,15 +134,20 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
                                         }, "voxy:rendering", RENDER_RELOAD)
                                         .setImpact(OptionImpact.MEDIUM)
                         ), new Group(
-                                new BoolOption(
+                                new EnumOption<>(
                                         "voxy:eviromental_fog",
+                                        NormalRenderPipeline.FogMode.class,
                                         Component.translatable("voxy.config.general.environmental_fog"),
-                                        ()->CFG.useEnvironmentalFog, v->CFG.useEnvironmentalFog=v)
+                                        CFG::getFogMode, CFG::setFogMode)
+                                        .setNameProvider(value -> Component.translatable(
+                                                "voxy.config.general.environmental_fog." + value.name().toLowerCase(Locale.ROOT)))
                                         .setPostChangeFlags(RENDER_RELOAD),
                                 new EnumOption<>("voxy:ssao_mode",
                                         SSAO.SSAOMode.class,
                                         Component.translatable("voxy.config.general.ssao_mode"),
                                         ()->CFG.getSSAOMode(), v->CFG.setSSAOMode(v))
+                                        .setNameProvider(value -> Component.translatable(
+                                                "voxy.config.general.ssao_mode." + value.name().toLowerCase(Locale.ROOT)))
                                         .setImpact(OptionImpact.MEDIUM)//TODO make it on igpus this is high
                                         .setPostChangeFlags(RENDER_RELOAD)
                         ).setEnablerInherit(s->!IrisUtil.irisShadersEnabledInConfig(), ConfigState.UPDATE_ON_REBUILD)

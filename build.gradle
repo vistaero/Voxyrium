@@ -103,6 +103,33 @@ if (compatibilitySource != null) {
                 def contents = providers.exec {
                     commandLine 'git', 'show', "${compatibilitySource.ref}:${path}"
                 }.standardOutput.asText.get()
+                if (path.endsWith('/VoxyConfig.java')) {
+                    def marker = 'public boolean enabled = true;'
+                    def additions = []
+                    if (!contents.contains('public boolean enableRendering')) {
+                        additions.add('    public boolean enableRendering = true;')
+                    }
+                    if (!contents.contains('public int serviceThreads')) {
+                        additions.add('    public int serviceThreads = Math.max(Runtime.getRuntime().availableProcessors() / 2, 1);')
+                    }
+                    if (!contents.contains('public int renderDistance') &&
+                            !contents.contains('public int sectionRenderDistance') &&
+                            !contents.contains('public float sectionRenderDistance')) {
+                        additions.add('    public int sectionRenderDistance = 16;')
+                    }
+                    if (!contents.contains('public boolean dontUseSodiumBuilderThreads')) {
+                        additions.add('    public boolean dontUseSodiumBuilderThreads = false;')
+                    }
+                    if (!contents.contains('public String fogMode')) {
+                        additions.add('    public String fogMode = "fog_and_fade";')
+                    }
+                    if (!contents.contains('public String ssaoMode')) {
+                        additions.add('    public String ssaoMode = "auto";')
+                    }
+                    if (!additions.isEmpty()) {
+                        contents = contents.replace(marker, marker + '\n' + additions.join('\n'))
+                    }
+                }
                 if (path.endsWith('/ModelStore.java')) {
                     contents = contents.replaceAll('(?s)int mipLvl = \\(\\(TextureAtlas\\).*?\\.mipLevel;', 'int mipLvl = Integer.numberOfTrailingZeros(ModelFactory.MODEL_TEXTURE_SIZE);')
                 }
@@ -117,9 +144,9 @@ if (compatibilitySource != null) {
                     contents = contents.replace('import me.cortex.voxy.client.config.VoxyConfig;',
                             'import me.cortex.voxy.client.config.VoxyConfig;\nimport me.cortex.voxy.client.config.LegacyVoxySupport;')
                     contents = contents.replace('if (VoxyConfig.CONFIG.enabled) {',
-                            'if (VoxyConfig.CONFIG.enabled && LegacyVoxySupport.isRenderingSupported()) {')
+                            'if (VoxyConfig.CONFIG.enabled && VoxyConfig.CONFIG.enableRendering && LegacyVoxySupport.isRenderingSupported()) {')
                     contents = contents.replace('if (this.world != null && VoxyConfig.CONFIG.enabled) {',
-                            'if (this.world != null && VoxyConfig.CONFIG.enabled && LegacyVoxySupport.isRenderingSupported()) {')
+                            'if (this.world != null && VoxyConfig.CONFIG.enabled && VoxyConfig.CONFIG.enableRendering && LegacyVoxySupport.isRenderingSupported()) {')
                 }
                 if (project.minecraft_version == '1.21.6' && path.endsWith('/ShaderLoader.java')) {
                     contents = contents.replace('ShaderParser.parseShader("#import <" + id + ">", ShaderConstants.builder().build())',
@@ -171,10 +198,14 @@ if (compatibilitySource != null) {
                                 '            if (systemSupported) {\n                BudgetBufferRenderer.init();\n            }')
                     }
                     if (path.endsWith('/MixinSodiumOptionsGUI.java')) {
+                        contents = contents.replace('import me.cortex.voxy.client.config.VoxyConfigScreenPages;',
+                                'import me.cortex.voxy.client.config.LegacySodiumConfigMenu;')
+                        contents = contents.replace('import me.cortex.voxy.client.config.VoxyConfigPageSodium;',
+                                'import me.cortex.voxy.client.config.LegacySodiumConfigMenu;')
                         contents = contents.replace('        if (VoxyCommon.isAvailable()) {\n            this.pages.add(VoxyConfigScreenPages.voxyOptionPage = VoxyConfigScreenPages.page());\n        }',
-                                '        this.pages.add(VoxyConfigScreenPages.voxyOptionPage = VoxyConfigScreenPages.page());')
+                                '        this.pages.add(LegacySodiumConfigMenu.createPage());')
                         contents = contents.replace('        if (VoxyCommon.isAvailable()) {\n            this.pages.add(VoxyConfigPageSodium.voxyOptionPage = VoxyConfigPageSodium.page());\n        }',
-                                '        this.pages.add(VoxyConfigPageSodium.voxyOptionPage = VoxyConfigPageSodium.page());')
+                                '        this.pages.add(LegacySodiumConfigMenu.createPage());')
                         if (contents.contains('if (VoxyCommon.isAvailable())')) {
                             throw new GradleException("Failed to expose the Voxy Sodium page for ${project.minecraft_version}")
                         }
@@ -192,7 +223,148 @@ if (compatibilitySource != null) {
                     if (path.endsWith('/ModMenuIntegration.java')) {
                         contents = contents.replace('            if (VoxyCommon.isAvailable()) {\n', '')
                         contents = contents.replace('            } else {\n                return null;\n            }\n', '')
+                        contents = contents.replace('VoxyConfigScreenPages.voxyOptionPage',
+                                'LegacySodiumConfigMenu.getPage()')
+                        contents = contents.replace('VoxyConfigPageSodium.voxyOptionPage',
+                                'LegacySodiumConfigMenu.getPage()')
                     }
+                }
+                if (project.minecraft_version in ['1.21.7', '1.21.8', '1.21.9', '1.21.10'] &&
+                        path.endsWith('/NormalRenderPipeline.java')) {
+                    contents = contents.replace(
+                            '    private final boolean useEnvFog;\n    private final FullscreenBlit finalBlit;\n\n    private final Shader ssaoCompute = Shader.make()\n            .add(ShaderType.COMPUTE, "voxy:post/ssao.comp")\n            .compile();',
+                            '    private final FogMode fogMode;\n    private final FullscreenBlit finalBlit;\n    private final LegacySSAO ssao;\n    private int sourceFramebuffer;\n\n' +
+                            '    public enum FogMode {\n' +
+                            '        FOG_AND_FADE(true, true), FOG(true, false), FADE(false, true), OFF(false, false);\n' +
+                            '        final boolean hasFog;\n' +
+                            '        final boolean hasFade;\n' +
+                            '        FogMode(boolean hasFog, boolean hasFade) { this.hasFog = hasFog; this.hasFade = hasFade; }\n' +
+                            '    }\n\n' +
+                            '    private static FogMode configuredFogMode() {\n' +
+                            '        try { return FogMode.valueOf(VoxyConfig.CONFIG.fogMode.toUpperCase(java.util.Locale.ROOT)); }\n' +
+                            '        catch (Exception ignored) { return FogMode.FOG_AND_FADE; }\n' +
+                            '    }')
+                    contents = contents.replace(
+                            '        this.useEnvFog = VoxyConfig.CONFIG.useEnvironmentalFog;\n        this.finalBlit = new FullscreenBlit("voxy:post/blit_texture_depth_cutout.frag",\n                a->a.defineIf("USE_ENV_FOG", this.useEnvFog).define("EMIT_COLOUR"));',
+                            '        this.fogMode = configuredFogMode();\n' +
+                            '        this.finalBlit = new FullscreenBlit("voxy:post/blit_texture_depth_cutout.frag",\n' +
+                            '                a->a.defineIf("HAS_FOG", this.fogMode.hasFog)\n' +
+                            '                        .defineIf("HAS_FADE", this.fogMode.hasFade).define("EMIT_COLOUR"));\n' +
+                            '        this.ssao = new LegacySSAO(VoxyConfig.CONFIG.ssaoMode);')
+                    contents = contents.replace(
+                            '        this.initDepthStencil(sourceFB,',
+                            '        this.sourceFramebuffer = sourceFB;\n\n        this.initDepthStencil(sourceFB,')
+                    contents = contents.replaceAll(
+                            '(?s)        this\\.ssaoCompute\\.bind\\(\\);.*?        glBindFramebuffer\\(GL_FRAMEBUFFER, this\\.fbSSAO\\.id\\);',
+                            '        this.ssao.compute(viewport, this.colourSSAOTex, this.colourTex, this.fb.getDepthTex(), this.sourceFramebuffer);\n' +
+                            '        glBindFramebuffer(GL_FRAMEBUFFER, this.fbSSAO.id);')
+                    contents = contents.replace('if (this.useEnvFog) {', 'if (this.fogMode.hasFog) {')
+                    contents = contents.replace(
+                            '        glBindTextureUnit(3, this.colourSSAOTex.id);',
+                            '        if (this.fogMode.hasFade) {\n' +
+                            '            float distance = VoxyConfig.CONFIG.sectionRenderDistance * 16 * 32\n' +
+                            '                    - (float) Math.sqrt(32 * 32);\n' +
+                            '            float vanillaDistance = ' +
+                            (project.minecraft_version in ['1.21.9', '1.21.10']
+                                    ? 'Minecraft.getInstance().gameRenderer.getRenderDistance();\n'
+                                    : 'MinecraftClient.getInstance().gameRenderer.getViewDistanceBlocks();\n') +
+                            '            float start = Math.max(vanillaDistance, distance * 0.9f);\n' +
+                            '            float end = Math.max(vanillaDistance, distance);\n' +
+                            '            float scale = 1.0f / Math.max(end - start, 1.0f);\n' +
+                            '            glUniform4f(6, 1, -start * scale, scale, 0);\n' +
+                            '        }\n\n' +
+                            '        glBindTextureUnit(3, this.colourSSAOTex.id);')
+                    contents = contents.replace('        this.ssaoCompute.free();', '        this.ssao.free();')
+                    if (contents.contains('ssaoCompute') || contents.contains('useEnvFog')) {
+                        throw new GradleException("Failed to backport fog/SSAO modes for ${project.minecraft_version}")
+                    }
+                }
+                if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6'] &&
+                        path.endsWith('/PostProcessing.java')) {
+                    contents = contents.replace(
+                            'import me.cortex.voxy.client.core.gl.GlFramebuffer;',
+                            'import me.cortex.voxy.client.core.LegacySSAO;\n' +
+                            'import me.cortex.voxy.client.core.gl.GlFramebuffer;')
+                    contents = contents.replace(
+                            'import me.cortex.voxy.client.core.rendering.util.GlStateCapture;',
+                            'import me.cortex.voxy.client.core.rendering.Viewport;\n' +
+                            'import me.cortex.voxy.client.core.rendering.util.GlStateCapture;')
+                    contents = contents.replace(
+                            'import net.minecraft.client.util.math.MatrixStack;',
+                            'import net.minecraft.client.MinecraftClient;\nimport net.minecraft.client.util.math.MatrixStack;')
+                    contents = contents.replace(
+                            '    private boolean didSSAO;',
+                            '    private boolean didSSAO;\n    private int sourceFramebuffer;')
+                    contents = contents.replace(
+                            '    private final Shader ssaoComp = Shader.make()\n            .add(ShaderType.COMPUTE, "voxy:post/ssao.comp")\n            .compile();',
+                            '    private final LegacySSAO ssao = new LegacySSAO(VoxyConfig.CONFIG.ssaoMode);')
+                    contents = contents.replace(
+                            'import me.cortex.voxy.client.core.LegacySSAO;',
+                            'import me.cortex.voxy.client.config.VoxyConfig;\nimport me.cortex.voxy.client.core.LegacySSAO;')
+                    contents = contents.replace('        this.ssaoComp.free();', '        this.ssao.free();')
+                    contents = contents.replace(
+                            '        this.didSSAO = false;',
+                            '        this.didSSAO = false;\n        this.sourceFramebuffer = sourceFB;')
+                    contents = contents.replaceAll(
+                            '(?s)    public void computeSSAO\\(Matrix4f mvp\\) \\{.*?        glBindFramebuffer\\(GL_FRAMEBUFFER, this\\.framebufferSSAO\\.id\\);\\n    \\}',
+                            '    public void computeSSAO(Viewport<?> viewport) {\n' +
+                            '        this.didSSAO = true;\n' +
+                            '        this.ssao.compute(viewport, this.colourSSAO, this.colour, this.depthStencil, this.sourceFramebuffer);\n' +
+                            '        glBindFramebuffer(GL_FRAMEBUFFER, this.framebufferSSAO.id);\n' +
+                            '    }')
+                    def voxyDistance = project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3']
+                            ? 'VoxyConfig.CONFIG.renderDistance * 16.0f'
+                            : 'VoxyConfig.CONFIG.sectionRenderDistance * 32.0f * 16.0f'
+                    contents = contents.replace(
+                            '        glUniformMatrix4fv(3, false, data);//tooProjection',
+                            '        glUniformMatrix4fv(3, false, data);//tooProjection\n\n' +
+                            '        String fogMode = VoxyConfig.CONFIG.fogMode == null ? "fog_and_fade" : VoxyConfig.CONFIG.fogMode;\n' +
+                            '        boolean hasFog = fogMode.equalsIgnoreCase("fog_and_fade") || fogMode.equalsIgnoreCase("fog");\n' +
+                            '        boolean hasFade = fogMode.equalsIgnoreCase("fog_and_fade") || fogMode.equalsIgnoreCase("fade");\n' +
+                            '        float vanillaDistance = MinecraftClient.getInstance().options.getViewDistance().getValue() * 16.0f;\n' +
+                            '        if (hasFog) {\n' +
+                            '            float fogStart = vanillaDistance * 0.75f;\n' +
+                            '            float fogScale = 1.0f / Math.max(vanillaDistance - fogStart, 1.0f);\n' +
+                            '            float[] clearColour = new float[4];\n' +
+                            '            glGetFloatv(GL_COLOR_CLEAR_VALUE, clearColour);\n' +
+                            '            org.lwjgl.opengl.GL20.glUniform4f(4, fogScale, -fogStart * fogScale, 1.0f, 0.0f);\n' +
+                            '            org.lwjgl.opengl.GL20.glUniform4f(5, clearColour[0], clearColour[1], clearColour[2], 1.0f);\n' +
+                            '        } else {\n' +
+                            '            org.lwjgl.opengl.GL20.glUniform4f(5, 0.0f, 0.0f, 0.0f, 0.0f);\n' +
+                            '        }\n' +
+                            '        if (hasFade) {\n' +
+                            '            float fadeEnd = ' + voxyDistance + ';\n' +
+                            '            float fadeStart = Math.max(vanillaDistance, fadeEnd * 0.9f);\n' +
+                            '            float fadeScale = 1.0f / Math.max(fadeEnd - fadeStart, 1.0f);\n' +
+                            '            org.lwjgl.opengl.GL20.glUniform4f(6, 1.0f, -fadeStart * fadeScale, fadeScale, 0.0f);\n' +
+                            '        } else {\n' +
+                            '            org.lwjgl.opengl.GL20.glUniform4f(6, 0.0f, 0.0f, 0.0f, 0.0f);\n' +
+                            '        }')
+                    contents = contents.replaceAll(
+                            '(?s)    public void computeSSAO\\(Matrix4f projection, MatrixStack stack\\) \\{.*?        glBindFramebuffer\\(GL_FRAMEBUFFER, this\\.framebufferSSAO\\.id\\);\\n    \\}',
+                            '    public void computeSSAO(Viewport<?> viewport) {\n' +
+                            '        this.didSSAO = true;\n' +
+                            '        this.ssao.compute(viewport, this.colourSSAO, this.colour, this.depthStencil, this.sourceFramebuffer);\n' +
+                            '        glBindFramebuffer(GL_FRAMEBUFFER, this.framebufferSSAO.id);\n' +
+                            '    }')
+                    if (contents.contains('ssaoComp') || contents.contains('public void computeSSAO(Matrix4f')) {
+                        throw new GradleException("Failed to backport SSAO modes for ${project.minecraft_version}")
+                    }
+                }
+                if (project.minecraft_version in ['1.21.5', '1.21.6'] && path.endsWith('/VoxyRenderSystem.java')) {
+                    contents = contents.replace('this.postProcessing.computeSSAO(viewport.MVP);',
+                            'this.postProcessing.computeSSAO(viewport);')
+                }
+                if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4'] &&
+                        path.endsWith('/VoxelCore.java')) {
+                    contents = contents.replace('this.postProcessing.computeSSAO(projection, matrices);',
+                            'this.postProcessing.computeSSAO(viewport);')
+                }
+                if (project.minecraft_version in ['1.21', '1.21.1'] && path.endsWith('/Viewport.java')) {
+                    contents = contents.replace('    int width;', '    public int width;')
+                            .replace('    int height;', '    public int height;')
+                            .replace('    Matrix4f projection;', '    public Matrix4f projection;')
+                            .replace('    Matrix4f modelView;', '    public Matrix4f modelView;')
                 }
                 output.text = contents
             }
@@ -207,6 +379,9 @@ if (compatibilitySource != null) {
                 def contents = providers.exec {
                     commandLine 'git', 'show', "${compatibilitySource.ref}:src/main/resources/${name}"
                 }.standardOutput.asText.get()
+                if (name == 'assets/voxy/lang/en_us.json') {
+                    contents = file('src/main/resources/assets/voxy/lang/en_us.json').text
+                }
                 if (compatibilitySource != null && name == 'fabric.mod.json') {
                     contents = contents.replaceFirst('"minecraft": "[^"]+"', '"minecraft": "' + project.minecraft_version + '"')
                     if (compatibilitySource?.legacy || compatibilitySource?.historical) {
@@ -217,6 +392,10 @@ if (compatibilitySource != null) {
                 }
                 if (project.minecraft_version in ['1.21', '1.21.1'] && name == 'voxy.mixins.json') {
                     contents = contents.replace('    "nvidium.MixinRenderPipeline",\n', '')
+                    if (project.minecraft_version == '1.21') {
+                        contents = contents.replace('    "sodium.MixinRenderSectionManager",',
+                                '    "sodium.MixinRenderSectionManager",\n    "sodium.MixinSodiumOptionsGUI",')
+                    }
                 }
                 if (name == 'client.voxy.mixins.json' && compatibilitySource?.legacy && project.minecraft_version != '1.21.1' ||
                         name == 'client.voxy.mixins.json' && compatibilitySource?.historical in ['1213', '1214']) {
@@ -240,7 +419,47 @@ if (compatibilitySource != null) {
                                 '    ]')
                     }
                 }
+                if (name.startsWith('assets/voxy/lang/') && name.endsWith('.json')) {
+                    contents = contents.replaceAll('("voxy\\.config\\.title"\\s*:\\s*")[^"]*(")', '\$1Voxy\$2')
+                }
+                if (project.minecraft_version in ['1.21.7', '1.21.8', '1.21.9', '1.21.10'] &&
+                        name == 'assets/voxy/shaders/post/blit_texture_depth_cutout.frag') {
+                    contents = contents.replace('USE_ENV_FOG', 'HAS_FOG')
+                    contents = contents.replace(
+                            '#endif\n#endif\n\nout vec4 colour;',
+                            '#endif\n#ifdef HAS_FADE\nlayout(location = 6) uniform vec4 fadeParams;\n#endif\n#endif\n\nout vec4 colour;')
+                    contents = contents.replace(
+                            '#endif\n\nout vec4 colour;',
+                            '#endif\n#ifdef HAS_FADE\nlayout(location = 6) uniform vec4 fadeParams;\n#endif\n\nout vec4 colour;')
+                    contents = contents.replace(
+                            '    #endif\n    #else\n    colour = vec4(0);',
+                            '    #endif\n' +
+                            '    #ifdef HAS_FADE\n' +
+                            '    if (fadeParams.x > 0) {\n' +
+                            '        float len = fadeParams.x > 1.5 ? length(point.xyz) : length(point.xz);\n' +
+                            '        colour.a *= 1 - clamp(fma(len, fadeParams.z, fadeParams.y), 0, 1);\n' +
+                            '    }\n' +
+                            '    #endif\n' +
+                            '    #else\n    colour = vec4(0);')
+                    contents = contents.replace(
+                            '    #endif\n\n    depth = projDepth(point);',
+                            '    #endif\n' +
+                            '    #ifdef HAS_FADE\n' +
+                            '    if (fadeParams.x > 0) {\n' +
+                            '        float len = fadeParams.x > 1.5 ? length(point.xyz) : length(point.xz);\n' +
+                            '        colour.a *= 1 - clamp(fma(len, fadeParams.z, fadeParams.y), 0, 1);\n' +
+                            '    }\n' +
+                            '    #endif\n\n' +
+                            '    depth = projDepth(point);')
+                    if (!contents.contains('HAS_FADE') || contents.contains('USE_ENV_FOG')) {
+                        throw new GradleException("Failed to backport fog/fade shader for ${project.minecraft_version}")
+                    }
+                }
                 output.text = contents
+            }
+            copy {
+                from 'src/main/resources/assets/voxy/lang/es_es.json'
+                into new File(compatibilityResources, 'assets/voxy/lang')
             }
             if (compatibilitySource?.legacy || compatibilitySource?.historical in ['1213', '1214']) {
                 def compatibilityExtras = file(project.minecraft_version == '1.21.1'
@@ -248,9 +467,64 @@ if (compatibilitySource != null) {
                 copy {
                     from compatibilityExtras
                     into compatibilitySources
+                    exclude 'me/cortex/voxy/client/core/LegacySSAO.java'
                 }
                 delete new File(compatibilitySources, 'me/cortex/voxy/client/config/VoxyConfigScreenFactory.java')
                 delete new File(compatibilitySources, 'me/cortex/voxy/client/config/screens')
+            }
+            if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.7', '1.21.8', '1.21.9', '1.21.10']) {
+                copy {
+                    from 'src/compatibility/java/me/cortex/voxy/client/config/LegacySodiumConfigMenu.java'
+                    from 'src/compatibility/java/me/cortex/voxy/client/config/LegacyVoxySupport.java'
+                    into new File(compatibilitySources, 'me/cortex/voxy/client/config')
+                }
+                if (project.minecraft_version in ['1.21.9', '1.21.10']) {
+                    def menu = new File(compatibilitySources,
+                            'me/cortex/voxy/client/config/LegacySodiumConfigMenu.java')
+                    def contents = menu.text
+                            .replace('import net.minecraft.text.Text;', 'import net.minecraft.network.chat.Component;')
+                            .replace('Text.translatable', 'Component.translatable')
+                            .replace('Text[]', 'Component[]')
+                            .replace('new Text[', 'new Component[')
+                    menu.text = contents
+                }
+            }
+            if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.7', '1.21.8', '1.21.9', '1.21.10']) {
+                copy {
+                    from 'src/compatibility/java/me/cortex/voxy/client/core/LegacySSAO.java'
+                    into new File(compatibilitySources, 'me/cortex/voxy/client/core')
+                }
+                if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.7']) {
+                    def ssao = new File(compatibilitySources, 'me/cortex/voxy/client/core/LegacySSAO.java')
+                    ssao.text = ssao.text.replace('viewport.vanillaProjection', 'viewport.projection')
+                            .replace('viewport.MVP', 'new Matrix4f(viewport.projection).mul(viewport.modelView)')
+                }
+                if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4']) {
+                    def ssao = new File(compatibilitySources, 'me/cortex/voxy/client/core/LegacySSAO.java')
+                    def contents = ssao.text
+                    if (project.minecraft_version != '1.21.4') {
+                        contents = contents.replace('import me.cortex.voxy.client.core.gl.Capabilities;',
+                                'import me.cortex.voxy.client.core.Capabilities;')
+                    }
+                    contents = contents.replaceAll(
+                            '(?s)        if \\(mode == Mode\\.AUTO\\) \\{.*?        \\}\n\n        this\\.improved',
+                            '        if (mode == Mode.AUTO) { mode = Mode.BASIC; }\n\n        this.improved')
+                    ssao.text = contents
+                }
+                copy {
+                    from 'src/main/resources/assets/voxy/shaders/post/ssao.comp'
+                    into new File(compatibilityResources, 'assets/voxy/shaders/post')
+                }
+                copy {
+                    from 'src/main/resources/assets/voxy/shaders/util/depthutils.glsl'
+                    into new File(compatibilityResources, 'assets/voxy/shaders/util')
+                }
+            }
+            if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6']) {
+                copy {
+                    from 'src/compatibility/resources/legacy-post'
+                    into compatibilityResources
+                }
             }
         }
     }

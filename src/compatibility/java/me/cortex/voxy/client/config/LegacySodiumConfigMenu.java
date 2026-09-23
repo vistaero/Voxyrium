@@ -47,11 +47,19 @@ public final class LegacySodiumConfigMenu {
     }
 
     private static OptionImpl<VoxyConfig, Boolean> booleanOption(String key, String field) {
+        boolean renderingToggle = field.equals("enabled");
         return OptionImpl.createBuilder(boolean.class, STORAGE)
                 .setName(Text.translatable(key))
                 .setTooltip(Text.translatable(key + ".tooltip"))
                 .setControl(TickBoxControl::new)
-                .setBinding((config, value) -> set(config, field, value), config -> get(config, field, false))
+                .setEnabled(() -> !renderingToggle || LegacyVoxySupport.isRenderingSupported())
+                .setBinding((config, value) -> {
+                    if (!renderingToggle || LegacyVoxySupport.isRenderingSupported()) {
+                        set(config, field, value);
+                    }
+                }, config -> renderingToggle && !LegacyVoxySupport.isRenderingSupported()
+                        ? false
+                        : get(config, field, false))
                 .setImpact(OptionImpact.MEDIUM)
                 .build();
     }

@@ -113,6 +113,14 @@ if (compatibilitySource != null) {
                                     '        org.lwjgl.opengl.GL45.glGetTextureImage(lmt.getColorAttachment(), 0, org.lwjgl.opengl.GL11.GL_RGBA, org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE, MemoryUtil.memByteBuffer(upload, 256 * 4));')
                     contents = contents.replace('int sample = lmt.getColor(x,y);', 'int sample = MemoryUtil.memGetInt(upload + (((x << 4) | y) * 4));')
                 }
+                if (project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4'] && path.endsWith('/MixinWorldRenderer.java')) {
+                    contents = contents.replace('import me.cortex.voxy.client.config.VoxyConfig;',
+                            'import me.cortex.voxy.client.config.VoxyConfig;\nimport me.cortex.voxy.client.config.LegacyVoxySupport;')
+                    contents = contents.replace('if (VoxyConfig.CONFIG.enabled) {',
+                            'if (VoxyConfig.CONFIG.enabled && LegacyVoxySupport.isRenderingSupported()) {')
+                    contents = contents.replace('if (this.world != null && VoxyConfig.CONFIG.enabled) {',
+                            'if (this.world != null && VoxyConfig.CONFIG.enabled && LegacyVoxySupport.isRenderingSupported()) {')
+                }
                 if (project.minecraft_version == '1.21.6' && path.endsWith('/ShaderLoader.java')) {
                     contents = contents.replace('ShaderParser.parseShader("#import <" + id + ">", ShaderConstants.builder().build())',
                             'ShaderParser.parseShader("#import <" + id + ">", ShaderConstants.builder().build()).src()')

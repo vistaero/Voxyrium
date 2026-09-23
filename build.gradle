@@ -156,6 +156,19 @@ if (compatibilitySource != null) {
                     contents = contents.replace('ShaderParser.parseShader("#import <" + id + ">", ShaderConstants.builder().build())',
                             'ShaderParser.parseShader("#import <" + id + ">", ShaderConstants.builder().build()).src()')
                 }
+                if (project.minecraft_version in ['1.21.6', '1.21.7'] && path.endsWith('/MixinRenderSectionManager.java')) {
+                    // Sodium 0.7 added SortBehavior to RenderSectionManager's constructor.
+                    contents = contents.replace(
+                            'import net.caffeinemc.mods.sodium.client.render.chunk.RenderSectionManager;',
+                            'import net.caffeinemc.mods.sodium.client.render.chunk.RenderSectionManager;\n' +
+                                    'import net.caffeinemc.mods.sodium.client.render.chunk.translucent_sorting.SortBehavior;')
+                    contents = contents.replace(
+                            'int renderDistance, CommandList commandList, CallbackInfo ci)',
+                            'int renderDistance, SortBehavior sortBehavior, CommandList commandList, CallbackInfo ci)')
+                    if (!contents.contains('int renderDistance, SortBehavior sortBehavior, CommandList commandList, CallbackInfo ci)')) {
+                        throw new GradleException("Failed to adapt Sodium 0.7 RenderSectionManager constructor for ${project.minecraft_version}")
+                    }
+                }
                 if (project.minecraft_version == '1.21.7' && path.endsWith('/ShaderLoader.java')) {
                     // Sodium 0.7 returns ParsedShader; reuse its compatible
                     // loader bridge while keeping the 1.21.7 source snapshot.

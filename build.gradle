@@ -392,6 +392,18 @@ if (compatibilitySource != null) {
                             '        } else {\n' +
                             '            org.lwjgl.opengl.GL20.glUniform4f(6, 0.0f, 0.0f, 0.0f, 0.0f);\n' +
                             '        }')
+                    contents = contents.replace(
+                            '        glActiveTexture(GL_TEXTURE1);\n' +
+                            '        GL11C.glBindTexture(GL_TEXTURE_2D, this.depthStencil.id);\n' +
+                            '        glTexParameteri (GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT);\n' +
+                            '        glActiveTexture(GL_TEXTURE0);\n' +
+                            '        glBindTexture(GL_TEXTURE_2D, this.didSSAO?this.colourSSAO.id:this.colour.id);',
+                            '        // blit_texture_depth_cutout.frag declares depth at binding 0 and colour at binding 3.\n' +
+                            '        glActiveTexture(GL_TEXTURE0);\n' +
+                            '        GL11C.glBindTexture(GL_TEXTURE_2D, this.depthStencil.id);\n' +
+                            '        glTexParameteri (GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT);\n' +
+                            '        glActiveTexture(GL_TEXTURE3);\n' +
+                            '        glBindTexture(GL_TEXTURE_2D, this.didSSAO?this.colourSSAO.id:this.colour.id);')
                     contents = contents.replaceAll(
                             '(?s)    public void computeSSAO\\(Matrix4f projection, MatrixStack stack\\) \\{.*?        glBindFramebuffer\\(GL_FRAMEBUFFER, this\\.framebufferSSAO\\.id\\);\\n    \\}',
                             '    public void computeSSAO(Viewport<?> viewport) {\n' +

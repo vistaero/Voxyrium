@@ -433,6 +433,19 @@ if (compatibilitySource != null) {
                     contents = contents.replaceAll(/float endDistance = [^;]+;/, 'float endDistance = end;')
                     contents = contents.replace('Math.abs(start)*invEndFogDelta', '-start*invEndFogDelta')
                 }
+                if (project.minecraft_version == '1.21.6' && path.endsWith('/BudgetBufferRenderer.java')) {
+                    contents = contents.replace('    private static final GlBuffer indexBuffer;\n    static {',
+                            '    private static final GlBuffer indexBuffer;\n    private static final int indexType;\n    static {')
+                    contents = contents.replace(
+                            '        if (i.getIndexType() != VertexFormat.IndexType.SHORT) {\n            throw new IllegalStateException();\n        }\n        indexBuffer = new GlBuffer(3*2*2*4096);\n        glCopyNamedBufferSubData(id, indexBuffer.id, 0, 0, 3*2*2*4096);',
+                            '        boolean shortIndices = i.getIndexType() == VertexFormat.IndexType.SHORT;\n' +
+                            '        indexType = shortIndices ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;\n' +
+                            '        long indexBytes = 4096L * 3L * 2L * (shortIndices ? 2L : 4L);\n' +
+                            '        indexBuffer = new GlBuffer(indexBytes);\n' +
+                            '        glCopyNamedBufferSubData(id, indexBuffer.id, 0, 0, indexBytes);')
+                    contents = contents.replace('glDrawElements(GL_TRIANGLES, quadCount * 2 * 3, GL_UNSIGNED_SHORT, 0);',
+                            'glDrawElements(GL_TRIANGLES, quadCount * 2 * 3, indexType, 0);')
+                }
                 if (path.endsWith('/MixinFogRenderer.java')) {
                     contents = contents.replace('if (!VoxyConfig.CONFIG.useEnvironmentalFog)', 'if (true)')
                     contents = contents.replace('if (!VoxyConfig.CONFIG.useEnvironmentalFog && !fogIsDamnClose)', 'if (!fogIsDamnClose)')

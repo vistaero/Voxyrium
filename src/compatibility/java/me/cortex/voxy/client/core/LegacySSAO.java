@@ -96,6 +96,9 @@ public final class LegacySSAO {
             glBindSampler(3, this.depthSampler);
         }
         glDispatchCompute((viewport.width + 7) / 8, (viewport.height + 7) / 8, 1);
+        // Image writes feed both texture sampling and framebuffer blending in the next pass.
+        org.lwjgl.opengl.GL42C.glMemoryBarrier(org.lwjgl.opengl.GL42C.GL_TEXTURE_FETCH_BARRIER_BIT
+                | org.lwjgl.opengl.GL42C.GL_FRAMEBUFFER_BARRIER_BIT);
         for (int unit = 1; unit <= 3; unit++) {
             glBindTextureUnit(unit, 0);
             glBindSampler(unit, 0);

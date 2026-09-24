@@ -88,6 +88,7 @@ if (compatibilitySource != null) {
         outputs.dir(compatibilityResources)
         inputs.dir(file('src/compatibility/java'))
         inputs.dir(file('src/compatibility/java-modern'))
+        inputs.file(file('build.gradle'))
         doLast {
             def destination = compatibilitySources
             delete destination
@@ -103,7 +104,19 @@ if (compatibilitySource != null) {
                 def contents = providers.exec {
                     commandLine 'git', 'show', "${compatibilitySource.ref}:${path}"
                 }.standardOutput.asText.get()
+                if (project.minecraft_version == '1.21.7' && path.endsWith('/PostProcessing.java')) {
+                    // Keep the Java side paired with the shared legacy fog/SSAO shaders.
+                    contents = providers.exec {
+                        commandLine 'git', 'show', "388764e9:${path}"
+                    }.standardOutput.asText.get()
+                }
                 if (path.endsWith('/VoxyConfig.java')) {
+                    contents = contents.replace('public String defaultSaveConfig;',
+                            'public String defaultSaveConfig = ContextSelectionSystem.DEFAULT_STORAGE_CONFIG;')
+                    contents = contents.replace('var cfg = GSON.fromJson(reader, VoxyConfig.class);',
+                            'var cfg = GSON.fromJson(reader, VoxyConfig.class);\n                if (cfg == null) cfg = new VoxyConfig();')
+                    contents = contents.replace('if (cfg.defaultSaveConfig == null)',
+                            'if (cfg.defaultSaveConfig == null || cfg.defaultSaveConfig.isBlank() || cfg.defaultSaveConfig.trim().equals("null"))')
                     def marker = 'public boolean enabled = true;'
                     def additions = []
                     if (!contents.contains('public boolean enableRendering')) {
@@ -152,10 +165,6 @@ if (compatibilitySource != null) {
                     contents = contents.replace('if (this.world != null && VoxyConfig.CONFIG.enabled) {',
                             'if (this.world != null && VoxyConfig.CONFIG.enabled && VoxyConfig.CONFIG.enableRendering && LegacyVoxySupport.isRenderingSupported()) {')
                 }
-                if (project.minecraft_version == '1.21.6' && path.endsWith('/ShaderLoader.java')) {
-                    contents = contents.replace('ShaderParser.parseShader("#import <" + id + ">", ShaderConstants.builder().build())',
-                            'ShaderParser.parseShader("#import <" + id + ">", ShaderConstants.builder().build()).src()')
-                }
                 if (project.minecraft_version in ['1.21.6', '1.21.7', '1.21.8', '1.21.9', '1.21.10', '1.21.11'] && path.endsWith('/MixinRenderSectionManager.java')) {
                     // Sodium 0.7+ added SortBehavior to RenderSectionManager's constructor.
                     contents = contents.replace(
@@ -169,9 +178,9 @@ if (compatibilitySource != null) {
                         throw new GradleException("Failed to adapt Sodium 0.7+ RenderSectionManager constructor for ${project.minecraft_version}")
                     }
                 }
-                if (project.minecraft_version == '1.21.7' && path.endsWith('/ShaderLoader.java')) {
+                if (project.minecraft_version in ['1.21.1', '1.21.6', '1.21.7'] && path.endsWith('/ShaderLoader.java')) {
                     // Sodium 0.7 returns ParsedShader; reuse its compatible
-                    // loader bridge while keeping the 1.21.7 source snapshot.
+                    // loader bridge, including a leading GLSL version directive.
                     contents = providers.exec {
                         commandLine 'git', 'show', "upstream/mc_1217:${path}"
                     }.standardOutput.asText.get()
@@ -317,7 +326,7 @@ if (compatibilitySource != null) {
                         throw new GradleException("Failed to backport fog/SSAO modes for ${project.minecraft_version}")
                     }
                 }
-                if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6'] &&
+                if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.7'] &&
                         path.endsWith('/PostProcessing.java')) {
                     contents = contents.replace(
                             'import me.cortex.voxy.client.core.gl.GlFramebuffer;',
@@ -340,6 +349,10 @@ if (compatibilitySource != null) {
                             'import me.cortex.voxy.client.core.LegacySSAO;',
                             'import me.cortex.voxy.client.config.VoxyConfig;\nimport me.cortex.voxy.client.core.LegacySSAO;')
                     contents = contents.replace('        this.ssaoComp.free();', '        this.ssao.free();')
+                    contents = contents.replace('        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);',
+                            '        glDepthMask(true);\n        glColorMask(true, true, true, true);\n        glStencilMask(0xFF);\n' +
+                            '        org.lwjgl.opengl.GL30C.glClearBufferfv(GL_COLOR, 0, new float[]{0, 0, 0, 0});\n' +
+                            '        org.lwjgl.opengl.GL30C.glClearBufferfi(GL_DEPTH_STENCIL, 0, 1.0f, 0);')
                     contents = contents.replace(
                             '        this.didSSAO = false;',
                             '        this.didSSAO = false;\n        this.sourceFramebuffer = sourceFB;')
@@ -361,8 +374,9 @@ if (compatibilitySource != null) {
                             '        boolean hasFade = fogMode.equalsIgnoreCase("fog_and_fade") || fogMode.equalsIgnoreCase("fade");\n' +
                             '        float vanillaDistance = MinecraftClient.getInstance().options.getViewDistance().getValue() * 16.0f;\n' +
                             '        if (hasFog) {\n' +
-                            '            float fogStart = vanillaDistance * 0.75f;\n' +
-                            '            float fogScale = 1.0f / Math.max(vanillaDistance - fogStart, 1.0f);\n' +
+                            '            float fogEnd = Math.max(vanillaDistance + 1.0f, ' + voxyDistance + ');\n' +
+                            '            float fogStart = Math.max(vanillaDistance, fogEnd * 0.75f);\n' +
+                            '            float fogScale = 1.0f / Math.max(fogEnd - fogStart, 1.0f);\n' +
                             '            float[] clearColour = new float[4];\n' +
                             '            glGetFloatv(GL_COLOR_CLEAR_VALUE, clearColour);\n' +
                             '            org.lwjgl.opengl.GL20.glUniform4f(4, fogScale, -fogStart * fogScale, 1.0f, 0.0f);\n' +
@@ -389,9 +403,11 @@ if (compatibilitySource != null) {
                         throw new GradleException("Failed to backport SSAO modes for ${project.minecraft_version}")
                     }
                 }
-                if (project.minecraft_version in ['1.21.5', '1.21.6'] && path.endsWith('/VoxyRenderSystem.java')) {
+                if (project.minecraft_version in ['1.21.5', '1.21.6', '1.21.7'] && path.endsWith('/VoxyRenderSystem.java')) {
                     contents = contents.replace('this.postProcessing.computeSSAO(viewport.MVP);',
                             'this.postProcessing.computeSSAO(viewport);')
+                    contents = contents.replace('this.postProcessing.renderPost(viewport, matrices.projection(), boundFB);',
+                            'this.postProcessing.renderPost(projection, matrices.projection(), boundFB);')
                 }
                 if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4'] &&
                         path.endsWith('/VoxelCore.java')) {
@@ -403,6 +419,50 @@ if (compatibilitySource != null) {
                             .replace('    int height;', '    public int height;')
                             .replace('    Matrix4f projection;', '    public Matrix4f projection;')
                             .replace('    Matrix4f modelView;', '    public Matrix4f modelView;')
+                }
+                if (path.endsWith('/RenderService.java')) {
+                    contents = contents.replace('(1L<<32)-1024',
+                            '(Math.min((1L<<32)-1024, org.lwjgl.opengl.GL32C.glGetInteger64(org.lwjgl.opengl.GL43C.GL_MAX_SHADER_STORAGE_BLOCK_SIZE)) & ~1023L)')
+                }
+                if (path.endsWith('/NormalRenderPipeline.java')) {
+                    // Fog must span Voxy's distance, independently of Sodium's fog snapshot.
+                    contents = contents.replace('float start = viewport.fogParameters.environmentalStart();',
+                            'float start = VoxyConfig.CONFIG.sectionRenderDistance * 512.0f * 0.75f;')
+                    contents = contents.replace('float end = viewport.fogParameters.environmentalEnd();',
+                            'float end = Math.max(start + 1.0f, VoxyConfig.CONFIG.sectionRenderDistance * 512.0f);')
+                    contents = contents.replaceAll(/float endDistance = [^;]+;/, 'float endDistance = end;')
+                    contents = contents.replace('Math.abs(start)*invEndFogDelta', '-start*invEndFogDelta')
+                }
+                if (path.endsWith('/MixinFogRenderer.java')) {
+                    contents = contents.replace('if (!VoxyConfig.CONFIG.useEnvironmentalFog)', 'if (true)')
+                    contents = contents.replace('if (!VoxyConfig.CONFIG.useEnvironmentalFog && !fogIsDamnClose)', 'if (!fogIsDamnClose)')
+                }
+                if (path.endsWith('/MixinRenderSectionManager.java')) {
+                    contents = contents.replace('boolean wasBuilt = instance.isBuilt();', 'boolean wasBuilt = instance.getFlags() != 0;')
+                    contents = contents.replace('wasBuilt == instance.isBuilt()', 'wasBuilt == (instance.getFlags() != 0)')
+                }
+                if (path.endsWith('/ChunkBoundRenderer.java')) {
+                    contents = contents.replace('this.frameBuffer.bind(GL_DEPTH_ATTACHMENT, this.depthBuffer).verify();',
+                            'this.frameBuffer.bind(GL_DEPTH_ATTACHMENT, this.depthBuffer).verify();\n            glClearNamedFramebufferfv(this.frameBuffer.id, GL_DEPTH, 0, new float[]{0});')
+                    contents = contents.replace('public void reset() {\n        this.chunk2idx.clear();',
+                            'public void reset() {\n        this.addQueue.clear();\n        this.remQueue.clear();\n        glClearNamedFramebufferfv(this.frameBuffer.id, GL_DEPTH, 0, new float[]{0});\n        this.chunk2idx.clear();')
+                    if (!contents.contains('private final GlFramebuffer frameBuffer')) {
+                        contents = contents.replace('        glClearNamedFramebufferfv(this.frameBuffer.id, GL_DEPTH, 0, new float[]{0});\n', '')
+                        contents = contents.replace('        if (this.chunk2idx.isEmpty() && this.addQueue.isEmpty()) return;',
+                                '        viewport.depthBoundingBuffer.clear(0);\n        if (this.chunk2idx.isEmpty() && this.addQueue.isEmpty()) return;')
+                    }
+                }
+                if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.7']) {
+                    if (path.endsWith('/Viewport.java')) {
+                        contents = contents.replace('    public Matrix4f projection;',
+                                '    public Matrix4f projection;\n    public Matrix4f vanillaProjection = new Matrix4f();')
+                    }
+                    if (path.endsWith('/VoxelCore.java') || path.endsWith('/VoxyRenderSystem.java')) {
+                        def vanillaProjection = path.endsWith('/VoxelCore.java')
+                                ? 'RenderSystem.getProjectionMatrix()' : 'matrices.projection()'
+                        contents = contents.replace('        viewport\n',
+                                '        viewport.vanillaProjection.set(' + vanillaProjection + ');\n        viewport\n')
+                    }
                 }
                 output.text = contents
             }
@@ -463,12 +523,15 @@ if (compatibilitySource != null) {
                 if (project.minecraft_version in ['1.21.7', '1.21.8', '1.21.9', '1.21.10'] &&
                         name == 'assets/voxy/shaders/post/blit_texture_depth_cutout.frag') {
                     contents = contents.replace('USE_ENV_FOG', 'HAS_FOG')
-                    contents = contents.replace(
-                            '#endif\n#endif\n\nout vec4 colour;',
-                            '#endif\n#ifdef HAS_FADE\nlayout(location = 6) uniform vec4 fadeParams;\n#endif\n#endif\n\nout vec4 colour;')
-                    contents = contents.replace(
-                            '#endif\n\nout vec4 colour;',
-                            '#endif\n#ifdef HAS_FADE\nlayout(location = 6) uniform vec4 fadeParams;\n#endif\n\nout vec4 colour;')
+                    if (contents.contains('#endif\n#endif\n\nout vec4 colour;')) {
+                        contents = contents.replace(
+                                '#endif\n#endif\n\nout vec4 colour;',
+                                '#endif\n#ifdef HAS_FADE\nlayout(location = 6) uniform vec4 fadeParams;\n#endif\n#endif\n\nout vec4 colour;')
+                    } else {
+                        contents = contents.replace(
+                                '#endif\n\nout vec4 colour;',
+                                '#endif\n#ifdef HAS_FADE\nlayout(location = 6) uniform vec4 fadeParams;\n#endif\n\nout vec4 colour;')
+                    }
                     contents = contents.replace(
                             '    #endif\n    #else\n    colour = vec4(0);',
                             '    #endif\n' +
@@ -492,6 +555,11 @@ if (compatibilitySource != null) {
                     if (!contents.contains('HAS_FADE') || contents.contains('USE_ENV_FOG')) {
                         throw new GradleException("Failed to backport fog/fade shader for ${project.minecraft_version}")
                     }
+                }
+                if (name.startsWith('assets/voxy/shaders/')) {
+                    // Unsized storage arrays use the declarator, never token-paste brackets.
+                    contents = contents.replace('type##[] name;', 'type name[];')
+                    contents = contents.replaceAll(/\b(\w+)\[\]\s+(\w+)\s*;/, '$1 $2[];')
                 }
                 output.text = contents
             }
@@ -534,8 +602,7 @@ if (compatibilitySource != null) {
                 }
                 if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.7']) {
                     def ssao = new File(compatibilitySources, 'me/cortex/voxy/client/core/LegacySSAO.java')
-                    ssao.text = ssao.text.replace('viewport.vanillaProjection', 'viewport.projection')
-                            .replace('viewport.MVP', 'new Matrix4f(viewport.projection).mul(viewport.modelView)')
+                    ssao.text = ssao.text.replace('viewport.MVP', 'new Matrix4f(viewport.projection).mul(viewport.modelView)')
                 }
                 if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4']) {
                     def ssao = new File(compatibilitySources, 'me/cortex/voxy/client/core/LegacySSAO.java')
@@ -558,7 +625,7 @@ if (compatibilitySource != null) {
                     into new File(compatibilityResources, 'assets/voxy/shaders/util')
                 }
             }
-            if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6']) {
+            if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.7']) {
                 copy {
                     from 'src/compatibility/resources/legacy-post'
                     into compatibilityResources
@@ -802,7 +869,9 @@ tasks.register('makeExcludedRocksDB', Zip) {
     exclude {
         def fileName = it.name.tokenize('/').last()
         def nativeLibrary = fileName.endsWith('.jnilib') || fileName.endsWith('.so') || fileName.endsWith('.dll')
-        return nativeLibrary && fileName != hostNative
+        // Keep both desktop platforms even when packaging on Windows.
+        def desktopNatives = ['librocksdbjni-win64.dll', 'librocksdbjni-osx-arm64.jnilib', 'librocksdbjni-osx-x86_64.jnilib']
+        return nativeLibrary && fileName != hostNative && !(fileName in desktopNatives)
     }
 }
 
@@ -851,6 +920,10 @@ dependencies {
     include(runtimeOnly "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-windows")
     include(runtimeOnly "org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-linux")
     include(runtimeOnly "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-linux")
+    for (classifier in ['natives-macos', 'natives-macos-arm64']) {
+        include(runtimeOnly "org.lwjgl:lwjgl-lmdb:$lwjglVersion:$classifier")
+        include(runtimeOnly "org.lwjgl:lwjgl-zstd:$lwjglVersion:$classifier")
+    }
     if (INCLUDE_OTHER_ARCHS) {
         runtimeOnly "org.lwjgl:lwjgl:$lwjglVersion:natives-linux-arm64"
         include(runtimeOnly "org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-linux-arm64")

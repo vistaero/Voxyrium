@@ -186,6 +186,12 @@ if (compatibilitySource != null) {
         try {
         var model =''')
                     replaceBakery('        int oldFB = GlStateManager.getBoundFramebuffer();\n', '')
+                    // BufferRenderer caches the last Minecraft VertexBuffer, whereas
+                    // Voxy and Sodium bind VAOs directly. In Sodium 0.6.0-beta.3
+                    // and 0.6.8 this can skip the VAO bind for a subsequent
+                    // glDrawElements, leaving no valid element buffer on AMD.
+                    replaceBakery('''            BufferRenderer.draw(bb.end());''', '''            BufferRenderer.resetCurrentVertexBuffer();
+            BufferRenderer.draw(bb.end());''')
                     replaceBakery('        renderLayer.endDrawing();\n        glDisable(GL_STENCIL_TEST);', '''        // startDrawing() was never called: endDrawing() resets Minecraft's
         // shared render state instead of closing a bakery-specific layer.
         glDisable(GL_STENCIL_TEST);''')
@@ -209,6 +215,7 @@ if (compatibilitySource != null) {
             glStencilOp(oldStencilFail, oldStencilDepthFail, oldStencilDepthPass);
             glUseProgram(oldProgram);
             glBindVertexArray(oldVAO);
+            BufferRenderer.resetCurrentVertexBuffer();
             this.glState.restore();
         }
     }''')

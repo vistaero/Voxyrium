@@ -221,11 +221,28 @@ if (compatibilitySource != null) {
     }''')
                 }
                 if (project.minecraft_version in ['1.21.2', '1.21.3'] && path.endsWith('/LightMapHelper.java')) {
+                    // The 1.21.2/1.21.3 historical snapshot reads the lightmap
+                    // through a stale CPU image. Cortex fixed the dark-terrain
+                    // regression by sampling Minecraft's live GPU lightmap.
+                    contents = providers.exec {
+                        commandLine 'git', 'show', "5979b178:src/main/java/me/cortex/voxy/client/core/rendering/LightMapHelper.java"
+                    }.standardOutput.asText.get()
+                }
+                if (project.minecraft_version in ['1.21.2', '1.21.3'] && path.endsWith('/MDICSectionRenderer.java')) {
+                    contents = providers.exec {
+                        commandLine 'git', 'show', "5979b178:src/main/java/me/cortex/voxy/client/core/rendering/section/MDICSectionRenderer.java"
+                    }.standardOutput.asText.get()
+                }
+                if (project.minecraft_version in ['1.21.2', '1.21.3'] && path.endsWith('/MixinRenderSectionManager.java')) {
+                    // Chunk-cache indices wrap as the camera moves. Verify the
+                    // requested coordinates before ingesting a chunk during
+                    // Sodium's removal callback (the 1.20.6 death-move fix).
                     contents = contents.replace(
-                            'var lmt = MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().texture.getImage();',
-                            'var lmt = MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().lightmapFramebuffer;\n' +
-                                    '        org.lwjgl.opengl.GL45.glGetTextureImage(lmt.getColorAttachment(), 0, org.lwjgl.opengl.GL11.GL_RGBA, org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE, MemoryUtil.memByteBuffer(upload, 256 * 4));')
-                    contents = contents.replace('int sample = lmt.getColor(x,y);', 'int sample = MemoryUtil.memGetInt(upload + (((x << 4) | y) * 4));')
+                            'core.enqueueIngest(this.level.getChunk(x, z));',
+                            'var chunk = this.level.getChunk(x, z);\n' +
+                                    '            if (chunk != null && chunk.getPos().x == x && chunk.getPos().z == z) {\n' +
+                                    '                core.enqueueIngest(chunk);\n' +
+                                    '            }')
                 }
                 if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4'] && path.endsWith('/MixinWorldRenderer.java')) {
                     contents = contents.replace('import me.cortex.voxy.client.config.VoxyConfig;',
@@ -450,7 +467,7 @@ if (compatibilitySource != null) {
                             '        float vanillaDistance = MinecraftClient.getInstance().options.getViewDistance().getValue() * 16.0f;\n' +
                             '        if (hasFog) {\n' +
                             '            float fogEnd = Math.max(vanillaDistance + 1.0f, ' + voxyDistance + ');\n' +
-                            '            float fogStart = Math.max(vanillaDistance, fogEnd * 0.75f);\n' +
+                            '            float fogStart = vanillaDistance;\n' +
                             '            float fogScale = 1.0f / Math.max(fogEnd - fogStart, 1.0f);\n' +
                             '            float[] clearColour = new float[4];\n' +
                             '            glGetFloatv(GL_COLOR_CLEAR_VALUE, clearColour);\n' +
@@ -580,6 +597,15 @@ if (compatibilitySource != null) {
                 def contents = providers.exec {
                     commandLine 'git', 'show', "${compatibilitySource.ref}:src/main/resources/${name}"
                 }.standardOutput.asText.get()
+                if (project.minecraft_version in ['1.21.2', '1.21.3'] && name in [
+                        'assets/voxy/shaders/lod/gl46/bindings.glsl',
+                        'assets/voxy/shaders/lod/gl46/quads2.vert']) {
+                    // Match the live lightmap texture binding in the renderer
+                    // and shader, as in Cortex's upstream lighting fix.
+                    contents = providers.exec {
+                        commandLine 'git', 'show', "5979b178:src/main/resources/${name}"
+                    }.standardOutput.asText.get()
+                }
                 if (name == 'assets/voxy/lang/en_us.json') {
                     contents = file('src/main/resources/assets/voxy/lang/en_us.json').text
                 }

@@ -409,6 +409,11 @@ if (compatibilitySource != null) {
                     contents = contents.replace(
                             'import net.minecraft.client.util.math.MatrixStack;',
                             'import net.minecraft.client.MinecraftClient;\nimport net.minecraft.client.util.math.MatrixStack;')
+                    if (project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4', '1.21.5']) {
+                        contents = contents.replace(
+                                'import net.minecraft.client.MinecraftClient;',
+                                'import net.minecraft.client.MinecraftClient;\nimport net.minecraft.client.render.BackgroundRenderer;')
+                    }
                     contents = contents.replace(
                             '    private boolean didSSAO;',
                             '    private boolean didSSAO;\n    private int sourceFramebuffer;')
@@ -462,6 +467,21 @@ if (compatibilitySource != null) {
                             '        } else {\n' +
                             '            org.lwjgl.opengl.GL20.glUniform4f(6, 0.0f, 0.0f, 0.0f, 0.0f);\n' +
                             '        }')
+                    if (project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4', '1.21.5']) {
+                        def fogTickDeltaMethod = project.minecraft_version == '1.21.5'
+                                ? 'getTickProgress' : 'getTickDelta'
+                        contents = contents.replace(
+                                '            glGetFloatv(GL_COLOR_CLEAR_VALUE, clearColour);',
+                                '            MinecraftClient client = MinecraftClient.getInstance();\n' +
+                                '            float tickDelta = client.getRenderTickCounter().' + fogTickDeltaMethod + '(true);\n' +
+                                '            var vanillaFogColour = BackgroundRenderer.getFogColor(\n' +
+                                '                    client.gameRenderer.getCamera(), tickDelta, client.world,\n' +
+                                '                    client.options.getViewDistance().getValue(),\n' +
+                                '                    client.gameRenderer.getSkyDarkness(tickDelta));\n' +
+                                '            clearColour[0] = vanillaFogColour.x();\n' +
+                                '            clearColour[1] = vanillaFogColour.y();\n' +
+                                '            clearColour[2] = vanillaFogColour.z();')
+                    }
                     contents = contents.replaceAll(
                             '(?s)    public void computeSSAO\\(Matrix4f projection, MatrixStack stack\\) \\{.*?        glBindFramebuffer\\(GL_FRAMEBUFFER, this\\.framebufferSSAO\\.id\\);\\n    \\}',
                             '    public void computeSSAO(Viewport<?> viewport) {\n' +

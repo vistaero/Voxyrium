@@ -150,6 +150,69 @@ if (compatibilitySource != null) {
                 if (path.endsWith('/ModelStore.java')) {
                     contents = contents.replaceAll('(?s)int mipLvl = \\(\\(TextureAtlas\\).*?\\.mipLevel;', 'int mipLvl = Integer.numberOfTrailingZeros(ModelFactory.MODEL_TEXTURE_SIZE);')
                 }
+                if (project.minecraft_version in ['1.21.2', '1.21.3'] && path.endsWith('/ModelTextureBakery.java')) {
+                    // The historical bakery runs while chunks are being loaded. Its custom
+                    // translucent blend factors must not leak into Minecraft's next frame/GUI.
+                    def replaceBakery = { before, after ->
+                        if (!contents.contains(before)) {
+                            throw new GradleException("Failed to adapt model bakery for ${project.minecraft_version}: ${before}")
+                        }
+                        contents = contents.replace(before, after)
+                    }
+                    replaceBakery('        this.glState.capture();\n        var model =', '''        this.glState.capture();
+        int oldDrawFB = glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING);
+        int oldReadFB = glGetInteger(GL_READ_FRAMEBUFFER_BINDING);
+        int oldProgram = glGetInteger(GL_CURRENT_PROGRAM);
+        int oldVAO = glGetInteger(GL_VERTEX_ARRAY_BINDING);
+        int[] oldViewport = new int[4];
+        glGetIntegerv(GL_VIEWPORT, oldViewport);
+        float[] oldClearColor = new float[4];
+        glGetFloatv(GL_COLOR_CLEAR_VALUE, oldClearColor);
+        double oldClearDepth = glGetDouble(GL_DEPTH_CLEAR_VALUE);
+        double[] oldDepthRange = new double[2];
+        glGetDoublev(GL_DEPTH_RANGE, oldDepthRange);
+        boolean oldDepthMask = glGetBoolean(GL_DEPTH_WRITEMASK);
+        int oldBlendSrcRGB = glGetInteger(GL_BLEND_SRC_RGB);
+        int oldBlendDstRGB = glGetInteger(GL_BLEND_DST_RGB);
+        int oldBlendSrcAlpha = glGetInteger(GL_BLEND_SRC_ALPHA);
+        int oldBlendDstAlpha = glGetInteger(GL_BLEND_DST_ALPHA);
+        int oldStencilMask = glGetInteger(GL_STENCIL_WRITEMASK);
+        int oldStencilFunc = glGetInteger(GL_STENCIL_FUNC);
+        int oldStencilRef = glGetInteger(GL_STENCIL_REF);
+        int oldStencilValueMask = glGetInteger(GL_STENCIL_VALUE_MASK);
+        int oldStencilFail = glGetInteger(GL_STENCIL_FAIL);
+        int oldStencilDepthFail = glGetInteger(GL_STENCIL_PASS_DEPTH_FAIL);
+        int oldStencilDepthPass = glGetInteger(GL_STENCIL_PASS_DEPTH_PASS);
+        try {
+        var model =''')
+                    replaceBakery('        int oldFB = GlStateManager.getBoundFramebuffer();\n', '')
+                    replaceBakery('        renderLayer.endDrawing();\n        glDisable(GL_STENCIL_TEST);', '''        // startDrawing() was never called: endDrawing() resets Minecraft's
+        // shared render state instead of closing a bakery-specific layer.
+        glDisable(GL_STENCIL_TEST);''')
+                    replaceBakery('''        glBindFramebuffer(GL_FRAMEBUFFER, oldFB);
+        GL11C.glViewport(GlStateManager.Viewport.getX(), GlStateManager.Viewport.getY(), GlStateManager.Viewport.getWidth(), GlStateManager.Viewport.getHeight());
+
+        //TODO: FIXME: fully revert the state of opengl
+
+        this.glState.restore();
+    }''', '''        } finally {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, oldDrawFB);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, oldReadFB);
+            GL11C.glViewport(oldViewport[0], oldViewport[1], oldViewport[2], oldViewport[3]);
+            glClearColor(oldClearColor[0], oldClearColor[1], oldClearColor[2], oldClearColor[3]);
+            glClearDepth(oldClearDepth);
+            glDepthRange(oldDepthRange[0], oldDepthRange[1]);
+            glDepthMask(oldDepthMask);
+            glBlendFuncSeparate(oldBlendSrcRGB, oldBlendDstRGB, oldBlendSrcAlpha, oldBlendDstAlpha);
+            glStencilMask(oldStencilMask);
+            glStencilFunc(oldStencilFunc, oldStencilRef, oldStencilValueMask);
+            glStencilOp(oldStencilFail, oldStencilDepthFail, oldStencilDepthPass);
+            glUseProgram(oldProgram);
+            glBindVertexArray(oldVAO);
+            this.glState.restore();
+        }
+    }''')
+                }
                 if (project.minecraft_version in ['1.21.2', '1.21.3'] && path.endsWith('/LightMapHelper.java')) {
                     contents = contents.replace(
                             'var lmt = MinecraftClient.getInstance().gameRenderer.getLightmapTextureManager().texture.getImage();',

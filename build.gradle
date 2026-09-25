@@ -150,6 +150,32 @@ if (compatibilitySource != null) {
                 if (path.endsWith('/ModelStore.java')) {
                     contents = contents.replaceAll('(?s)int mipLvl = \\(\\(TextureAtlas\\).*?\\.mipLevel;', 'int mipLvl = Integer.numberOfTrailingZeros(ModelFactory.MODEL_TEXTURE_SIZE);')
                 }
+                if (project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4'] && path.endsWith('/ModelTextureBakery.java')) {
+                    // Upstream 2d95cdf fixes fluids overwriting their baked
+                    // colour parameter, which made water black or invisible.
+                    def builderLine = '        var bb = new BufferBuilder(this.allocator, VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_TEXTURE_COLOR);'
+                    if (!contents.contains(builderLine) || !contents.contains('import net.minecraft.util.math.BlockPos;')) {
+                        throw new GradleException("Failed to adapt fluid colour baking for ${project.minecraft_version}")
+                    }
+                    contents = contents.replace('import net.minecraft.util.math.BlockPos;',
+                            'import net.minecraft.util.math.BlockPos;\nimport net.minecraft.util.math.ColorHelper;')
+                    contents = contents.replace(builderLine, '''        var bb = new BufferBuilder(this.allocator, VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_TEXTURE_COLOR) {
+            @Override
+            public void vertex(float x, float y, float z, int color, float u, float v, int overlay, int light, float normalX, float normalY, float normalZ) {
+                super.vertex(x, y, z, ColorHelper.getArgb(0, 0, 1), u, v, overlay, light, normalX, normalY, normalZ);
+            }
+
+            @Override
+            public VertexConsumer color(int argb) {
+                return super.color(ColorHelper.getArgb(0, 0, 1));
+            }
+
+            @Override
+            public VertexConsumer color(int red, int green, int blue, int alpha) {
+                return super.color(0, 0, 1, 255);
+            }
+        };''')
+                }
                 if (project.minecraft_version in ['1.21.2', '1.21.3'] && path.endsWith('/ModelTextureBakery.java')) {
                     // The historical bakery runs while chunks are being loaded. Its custom
                     // translucent blend factors must not leak into Minecraft's next frame/GUI.

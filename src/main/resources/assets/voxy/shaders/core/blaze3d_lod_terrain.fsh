@@ -19,12 +19,11 @@ layout(std140) uniform Fog {
 uniform sampler2D Sampler0;
 
 in vec2 texCoord0;
-in vec4 tintColor;
-in vec4 vertexLighting;
+flat in vec4 tintColor;
+flat in vec4 vertexLighting;
 flat in int modelId;
 flat in int quadFlags;
 in float sphericalDistance;
-in float cylindricalDistance;
 
 out vec4 fragColor;
 
@@ -48,10 +47,14 @@ void main() {
     vec2 atlasUv = modelBase + faceBase + repeatedUv * atlasScale;
     vec4 color = textureGrad(Sampler0, atlasUv,
             dFdx(texCoord0 * atlasScale), dFdy(texCoord0 * atlasScale));
-    float mipZeroAlpha = textureLod(Sampler0, atlasUv, 0.0).a;
-
     bool translucent = ((quadFlags >> 14) & 1) != 0;
     bool useCutout = ((quadFlags >> 13) & 1) != 0;
+    int tintState = (quadFlags >> 11) & 3;
+    // Full opaque faces need only the filtered sample. Cutout/fluid/tint classification
+    // shares one mip-zero fetch instead of fetching it again for tint detection.
+    vec4 mipZero = vec4(1.0);
+    if (translucent || useCutout || tintState == 1) mipZero = textureLod(Sampler0, atlasUv, 0.0);
+    float mipZeroAlpha = mipZero.a;
     if ((translucent && mipZeroAlpha == 0.0) || (!translucent && useCutout && mipZeroAlpha <= 0.1)) {
         discard;
     }
@@ -59,11 +62,9 @@ void main() {
         color.a = 1.0;
     }
 
-    int tintState = (quadFlags >> 11) & 3;
     bool applyTint = tintState == 2;
     if (tintState == 1) {
-        vec4 tintTest = textureLod(Sampler0, atlasUv, 0.0);
-        applyTint = abs(tintTest.r - tintTest.g) < 0.02 && abs(tintTest.g - tintTest.b) < 0.02;
+        applyTint = abs(mipZero.r - mipZero.g) < 0.02 && abs(mipZero.g - mipZero.b) < 0.02;
     }
     if (applyTint) {
         color *= tintColor;

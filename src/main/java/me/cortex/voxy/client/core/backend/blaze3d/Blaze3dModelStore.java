@@ -25,9 +25,11 @@ import java.util.concurrent.atomic.AtomicLongArray;
 /**
  * CPU mirror of Cortex's model store plus a Blaze3D-owned copy of its baked model atlas.
  * RenderDataFactory still owns model selection and quad generation; this class only makes its
- * already-computed model metadata and texture tiles available to the Blaze3D expansion step.
+ * already-computed model metadata and texture tiles available to the Blaze3D quad packer.
  */
 final class Blaze3dModelStore implements IModelStore {
+    private static final int TEXTURE_UPLOADS_PER_FRAME = 64;
+    private static final long TEXTURE_UPLOAD_BUDGET_NANOS = 2_000_000L;
     private static final int MODEL_CAPACITY = 1 << 16;
     private static final int MODEL_INTS = IModelStore.MODEL_SIZE / Integer.BYTES;
     private static final int COLOUR_CAPACITY = 1 << 16;
@@ -60,7 +62,7 @@ final class Blaze3dModelStore implements IModelStore {
     }
 
     @Override
-    public void stageModelData(int modelId, MemoryBuffer model, int biomeUploadIndex,
+    public synchronized void stageModelData(int modelId, MemoryBuffer model, int biomeUploadIndex,
                                @Nullable MemoryBuffer biomeUpload, MemoryBuffer texture) {
         if (this.freed) {
             return;
@@ -72,13 +74,21 @@ final class Blaze3dModelStore implements IModelStore {
         }
         this.colourIndices.set(modelId, this.modelData[modelId * MODEL_INTS + 7]);
 
-        byte[] textureBytes = new byte[(int) texture.size];
-        texture.asByteBuffer().duplicate().get(textureBytes);
-        long textureVersion = this.stagedTextureVersion.incrementAndGet();
-        this.pendingTextures.add(new TextureUpload(modelId, textureVersion, textureBytes));
-        this.modelTextureVersions.set(modelId, textureVersion);
-        // Atomic publication gives mesh workers an acquire edge for modelData and colourData.
-        this.readyModels.set(modelId, 1);
+        // Copy once into upload-ready native storage on the bakery worker. The queue owns
+        // it until upload/shutdown; no heap byte[] or render-thread allocation/copy is needed.
+        ByteBuffer textureBytes = MemoryUtil.memAlloc((int) texture.size);
+        boolean published = false;
+        try {
+            textureBytes.put(texture.asByteBuffer().duplicate()).flip();
+            long textureVersion = this.stagedTextureVersion.incrementAndGet();
+            this.pendingTextures.add(new TextureUpload(modelId, textureVersion, textureBytes));
+            published = true;
+            this.modelTextureVersions.set(modelId, textureVersion);
+            // Atomic publication gives mesh workers an acquire edge for modelData and colourData.
+            this.readyModels.set(modelId, 1);
+        } finally {
+            if (!published) MemoryUtil.memFree(textureBytes);
+        }
     }
 
     @Override
@@ -133,10 +143,13 @@ final class Blaze3dModelStore implements IModelStore {
     void uploadPendingTextures(CommandEncoder encoder) {
         RenderSystem.assertOnRenderThread();
         TextureUpload upload;
-        while ((upload = this.pendingTextures.poll()) != null) {
-            ByteBuffer data = MemoryUtil.memAlloc(upload.data().length);
+        long started = System.nanoTime();
+        int uploaded = 0;
+        while (uploaded < TEXTURE_UPLOADS_PER_FRAME
+                && (uploaded == 0 || System.nanoTime() - started < TEXTURE_UPLOAD_BUDGET_NANOS)
+                && (upload = this.pendingTextures.poll()) != null) {
+            ByteBuffer data = upload.data();
             try {
-                data.put(upload.data()).flip();
                 int x = (upload.modelId() & 0xFF) * ModelFactory.MODEL_TEXTURE_SIZE * 3;
                 int y = ((upload.modelId() >> 8) & 0xFF) * ModelFactory.MODEL_TEXTURE_SIZE * 2;
                 int offset = 0;
@@ -151,6 +164,7 @@ final class Blaze3dModelStore implements IModelStore {
                     offset += bytes;
                 }
                 this.uploadedTextureVersion = upload.version();
+                uploaded++;
             } finally {
                 MemoryUtil.memFree(data);
             }
@@ -212,14 +226,15 @@ final class Blaze3dModelStore implements IModelStore {
     }
 
     @Override
-    public void free() {
+    public synchronized void free() {
         RenderSystem.assertOnRenderThread();
         this.freed = true;
-        this.pendingTextures.clear();
+        TextureUpload upload;
+        while ((upload = this.pendingTextures.poll()) != null) MemoryUtil.memFree(upload.data());
         this.atlasView.close();
         this.atlas.close();
     }
 
-    private record TextureUpload(int modelId, long version, byte[] data) {
+    private record TextureUpload(int modelId, long version, ByteBuffer data) {
     }
 }

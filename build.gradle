@@ -473,8 +473,31 @@ tasks.register('verifyBlaze3dBackendIsolation') {
     }
 }
 
+// These policies deliberately compile and run without Minecraft or native GPU libraries.
+sourceSets {
+    blaze3dStreamingTest {
+        java {
+            srcDirs = ['src/main/java', 'src/streamingTest/java']
+            include '**/Blaze3dLodStreaming.java', '**/Blaze3dLodStreamingTest.java',
+                    '**/Blaze3dQuadEncoder.java', '**/Blaze3dQuadEncoderTest.java'
+        }
+    }
+}
+
+tasks.register('verifyBlaze3dLodStreaming', JavaExec) {
+    group = 'verification'
+    description = 'Checks Blaze3D streaming budgets and coverage transitions without a GPU.'
+    dependsOn tasks.named('blaze3dStreamingTestClasses')
+    classpath = sourceSets.blaze3dStreamingTest.output
+    mainClass = 'me.cortex.voxy.client.core.backend.blaze3d.Blaze3dLodStreamingTest'
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(targetJavaVersion)
+    }
+}
+
 tasks.named('check') {
     dependsOn tasks.named('verifyBlaze3dBackendIsolation')
+    dependsOn tasks.named('verifyBlaze3dLodStreaming')
 }
 
 jmh {

@@ -285,6 +285,18 @@ if (compatibilitySource != null) {
                             .replace('processJob(RenderDataFactory4 factory)', 'processJob(RenderDataFactory factory)')
                             .replace('}, factory::free);', '}, () -> {});')
                 }
+                if (project.minecraft_version == '1.21.3' && path.endsWith('/hierachical2/HierarchicalOcclusionTraverser.java')) {
+                    // Cortex 43124725 fixes the screen-space/HiZ test used to
+                    // request finer nodes. Honour this profile's quality setting
+                    // rather than the old hard-coded 100-pixel threshold.
+                    def oldThreshold = 'MemoryUtil.memPutFloat(ptr, 100*100); ptr += 4;'
+                    if (!contents.contains(oldThreshold)) {
+                        throw new GradleException('Failed to adapt 1.21.3 LOD threshold')
+                    }
+                    contents = contents.replace(oldThreshold, '''float targetPixels = Math.max(1, me.cortex.voxy.client.config.VoxyConfig.CONFIG.renderQuality);
+        MemoryUtil.memPutFloat(ptr, targetPixels * targetPixels /
+                (Math.max(1, viewport.width) * (float) Math.max(1, viewport.height))); ptr += 4;''')
+                }
                 if (project.minecraft_version in ['1.21.2', '1.21.3'] && path.endsWith('/MixinRenderSectionManager.java')) {
                     // Chunk-cache indices wrap as the camera moves. Verify the
                     // requested coordinates before ingesting a chunk during
@@ -667,6 +679,14 @@ if (compatibilitySource != null) {
                     // here, not the old packed section position.
                     contents = providers.exec {
                         commandLine 'git', 'show', "7cc92a53:src/main/resources/${name}"
+                    }.standardOutput.asText.get()
+                }
+                if (project.minecraft_version == '1.21.3' &&
+                        name == 'assets/voxy/shaders/lod/hierarchical/screenspace.glsl') {
+                    // Keep the screen-space calculation paired with the
+                    // normalized threshold in the traverser above.
+                    contents = providers.exec {
+                        commandLine 'git', 'show', "43124725:src/main/resources/${name}"
                     }.standardOutput.asText.get()
                 }
                 if (name == 'assets/voxy/lang/en_us.json') {

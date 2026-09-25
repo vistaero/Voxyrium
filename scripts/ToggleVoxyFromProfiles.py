@@ -59,6 +59,32 @@ def toggled_path(path: Path) -> Path:
     return path.with_name(path.name + ".disabled")
 
 
+def global_disabled_state(jars: list[Path]) -> bool:
+    return bool(jars) and all(jar.name.endswith(".jar.disabled") for jar in jars)
+
+
+def target_for_state(path: Path, disabled: bool) -> Path:
+    if disabled:
+        if path.name.endswith(".jar.disabled"):
+            return path
+        return path.with_name(path.name + ".disabled")
+    if path.name.endswith(".jar.disabled"):
+        return path.with_name(path.name.removesuffix(".disabled"))
+    return path
+
+
+def build_toggle_targets(jars: list[Path]) -> list[tuple[Path, Path]]:
+    if not jars:
+        return []
+    desired_disabled = not global_disabled_state(jars)
+    targets = []
+    for jar in jars:
+        target = target_for_state(jar, desired_disabled)
+        if jar != target:
+            targets.append((jar, target))
+    return targets
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -80,27 +106,31 @@ def main() -> int:
     except FileNotFoundError as error:
         parser.error(str(error))
 
-    targets = [(jar, toggled_path(jar)) for jar in jars]
+    if not jars:
+        print(f"No Voxy jars found under {profiles_directory}")
+        return 0
+
+    desired_disabled = not global_disabled_state(jars)
+    action = "disable" if desired_disabled else "enable"
+    summary = f"Global Voxy state: {'disabled' if desired_disabled else 'enabled'} -> {action} all {len(jars)} jar(s)."
+    targets = build_toggle_targets(jars)
     collisions = [target for _, target in targets if target.exists()]
     if collisions:
         for target in collisions:
             print(f"Cannot toggle; target already exists: {target}", file=sys.stderr)
         return 1
 
-    action = "Would toggle" if args.dry_run else "Toggling"
-    if not jars:
-        print(f"No Voxy jars found under {profiles_directory}")
+    if args.dry_run:
+        if not targets:
+            print(f"Global Voxy state already {('disabled' if desired_disabled else 'enabled')}; no changes needed.")
+            return 0
+        print(f"Would {summary}")
         return 0
 
     for jar, target in targets:
-        print(f"{action}: {jar} -> {target}")
+        jar.rename(target)
 
-    if not args.dry_run:
-        for jar, target in targets:
-            jar.rename(target)
-        print(f"Toggled {len(jars)} Voxy jar(s).")
-    else:
-        print(f"Found {len(jars)} Voxy jar(s).")
+    print(f"{summary}")
     return 0
 
 

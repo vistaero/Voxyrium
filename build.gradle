@@ -816,15 +816,10 @@ if (compatibilitySource != null) {
                     contents = contents.replace('me.cortex.voxy.client.config.VoxyConfigScreenFactory',
                             'me.cortex.voxy.client.config.ModMenuIntegration')
                     if (project.minecraft_version == '1.21.1') {
-                        contents = contents.replace('    "modmenu": [\n' +
-                                '      "me.cortex.voxy.client.config.ModMenuIntegration"\n' +
-                                '    ]',
-                                '    "modmenu": [\n' +
-                                '      "me.cortex.voxy.client.config.ModMenuIntegration"\n' +
-                                '    ],\n' +
-                                '    "sodium:config_api_user": [\n' +
-                                '      "me.cortex.voxy.client.config.ModernSodiumConfigMenu"\n' +
-                                '    ]')
+                        def manifest = new groovy.json.JsonSlurper().parseText(contents)
+                        manifest.entrypoints['sodium:config_api_user'] = [
+                                'me.cortex.voxy.client.config.ModernSodiumConfigMenu']
+                        contents = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(manifest))
                     }
                 }
                 if (name.startsWith('assets/voxy/lang/') && name.endsWith('.json')) {

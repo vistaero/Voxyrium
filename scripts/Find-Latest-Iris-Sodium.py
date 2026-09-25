@@ -81,11 +81,22 @@ def main():
     lines = [f"Modrinth Fabric Iris/Sodium pairs, checked {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}",
              "Selection: newest published Iris with the newest compatible Sodium for each exact Minecraft tag.",
              "Metadata and both mod manifests checked; Voxy compilation and in-game compatibility are NOT implied.", ""]
+    pairs = []
     for game_version in VERSIONS:
         iris, sodium = find_pair(matrix, updater, game_version)
         lines.append(f"{game_version} | Iris {iris['version_number']} [{iris['version_id']}] | Sodium {sodium['version_number']} [{sodium['version_id']}]")
-        print(lines[-1], flush=True)
+        pairs.append((game_version, iris["version_number"], sodium["version_number"]))
+
+    headers = ("Minecraft", "Iris", "Sodium")
+    widths = [max(len(value) for value in column) for column in zip(headers, *pairs)]
+    separator = "-+-".join("-" * width for width in widths)
+    print("\nFound compatible Iris/Sodium pairs:")
+    print(" | ".join(f"{header:<{width}}" for header, width in zip(headers, widths)))
+    print(separator)
+    for pair in pairs:
+        print(" | ".join(f"{value:<{width}}" for value, width in zip(pair, widths)), flush=True)
     args.output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\nFound {len(VERSIONS)} compatible pairs.")
     print(f"Saved: {args.output}")
 
 

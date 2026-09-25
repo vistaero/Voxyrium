@@ -233,6 +233,12 @@ if (compatibilitySource != null) {
                         commandLine 'git', 'show', "5979b178:src/main/java/me/cortex/voxy/client/core/rendering/section/MDICSectionRenderer.java"
                     }.standardOutput.asText.get()
                 }
+                if (project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4'] && path.endsWith('/LightMapHelper.java')) {
+                    // Match Cortex's later lighting fix: a sampler left by
+                    // Sodium/Iris can override the lightmap texture parameters.
+                    contents = contents.replace('glBindTextureUnit(lightingIndex,',
+                            'org.lwjgl.opengl.GL33C.glBindSampler(lightingIndex, 0);\n        glBindTextureUnit(lightingIndex,')
+                }
                 if (project.minecraft_version in ['1.21.2', '1.21.3'] && path.endsWith('/MixinRenderSectionManager.java')) {
                     // Chunk-cache indices wrap as the camera moves. Verify the
                     // requested coordinates before ingesting a chunk during
@@ -467,7 +473,7 @@ if (compatibilitySource != null) {
                             '        float vanillaDistance = MinecraftClient.getInstance().options.getViewDistance().getValue() * 16.0f;\n' +
                             '        if (hasFog) {\n' +
                             '            float fogEnd = Math.max(vanillaDistance + 1.0f, ' + voxyDistance + ');\n' +
-                            '            float fogStart = vanillaDistance;\n' +
+                            '            float fogStart = Math.max(vanillaDistance, fogEnd * 0.75f);\n' +
                             '            float fogScale = 1.0f / Math.max(fogEnd - fogStart, 1.0f);\n' +
                             '            float[] clearColour = new float[4];\n' +
                             '            glGetFloatv(GL_COLOR_CLEAR_VALUE, clearColour);\n' +
@@ -605,6 +611,14 @@ if (compatibilitySource != null) {
                     contents = providers.exec {
                         commandLine 'git', 'show', "5979b178:src/main/resources/${name}"
                     }.standardOutput.asText.get()
+                }
+                if (project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4'] &&
+                        name == 'assets/voxy/shaders/lod/gl46/bindings.glsl') {
+                    // Cortex later fixed edge sampling of the 16x16
+                    // lightmap; clamp samples to texel centers.
+                    contents = contents.replace(
+                            'texture(lightSampler, vec2((i2>>4)&0xF, i2&0xF)/16.0f)',
+                            'texture(lightSampler, clamp(vec2((i2>>4)&0xF, i2&0xF)/16.0f, vec2(8.0f/255.0f), vec2(248.0f/255.0f)))')
                 }
                 if (name == 'assets/voxy/lang/en_us.json') {
                     contents = file('src/main/resources/assets/voxy/lang/en_us.json').text

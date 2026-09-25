@@ -151,6 +151,17 @@ if (compatibilitySource != null) {
                 if (path.endsWith('/ModelStore.java')) {
                     contents = contents.replaceAll('(?s)int mipLvl = \\(\\(TextureAtlas\\).*?\\.mipLevel;', 'int mipLvl = Integer.numberOfTrailingZeros(ModelFactory.MODEL_TEXTURE_SIZE);')
                 }
+                if (project.minecraft_version == '1.21.4' && path.endsWith('/NodeManager.java')) {
+                    // The historical snapshot aborts when a child loses its descendants
+                    // while a geometry request is in flight. The current NodeManager
+                    // records this state and continues with the returned geometry.
+                    def zeroChildFailure = 'throw new IllegalStateException("Request result with child existence of 0");'
+                    if (contents.readLines().count { it.contains(zeroChildFailure) } != 2) {
+                        throw new GradleException('Failed to adapt zero-child geometry requests for 1.21.4')
+                    }
+                    contents = contents.replace(zeroChildFailure,
+                            'Logger.warn("Request result with child existence of 0, for child pos " + WorldEngine.pprintPos(childPos));')
+                }
                 if (project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4'] && path.endsWith('/ModelTextureBakery.java')) {
                     // Upstream 2d95cdf fixes fluids overwriting their baked
                     // colour parameter, which made water black or invisible.

@@ -646,9 +646,11 @@ if (compatibilitySource != null) {
                 }
                 if (project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4'] && name in [
                         'assets/voxy/shaders/lod/gl46/bindings.glsl',
-                        'assets/voxy/shaders/lod/gl46/cmdgen.comp']) {
-                    // Use Cortex's binding layout and draw-command generation
-                    // from the first working translucent-rendering implementation.
+                        'assets/voxy/shaders/lod/gl46/cmdgen.comp',
+                        'assets/voxy/shaders/lod/gl46/quads2.vert']) {
+                    // Keep the draw commands and vertex decoder from the same
+                    // Cortex revision: baseInstance is a position-buffer index
+                    // here, not the old packed section position.
                     contents = providers.exec {
                         commandLine 'git', 'show', "7cc92a53:src/main/resources/${name}"
                     }.standardOutput.asText.get()

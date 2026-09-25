@@ -88,6 +88,7 @@ if (compatibilitySource != null) {
         outputs.dir(compatibilityResources)
         inputs.dir(file('src/compatibility/java'))
         inputs.dir(file('src/compatibility/java-modern'))
+        inputs.dir(file('src/compatibility/fog'))
         inputs.file(file('build.gradle'))
         doLast {
             def destination = compatibilitySources
@@ -530,8 +531,8 @@ if (compatibilitySource != null) {
                             '        boolean hasFade = fogMode.equalsIgnoreCase("fog_and_fade") || fogMode.equalsIgnoreCase("fade");\n' +
                             '        float vanillaDistance = MinecraftClient.getInstance().options.getViewDistance().getValue() * 16.0f;\n' +
                             '        if (hasFog) {\n' +
-                            '            float fogEnd = Math.max(vanillaDistance + 1.0f, ' + voxyDistance + ');\n' +
-                            '            float fogStart = Math.max(vanillaDistance, fogEnd * 0.75f);\n' +
+                            '            float fogEnd = Math.max(vanillaDistance + 1.0f, Math.min(' + voxyDistance + ', Math.max(vanillaDistance * 8.0f, vanillaDistance + 512.0f)));\n' +
+                            '            float fogStart = vanillaDistance;\n' +
                             '            float fogScale = 1.0f / Math.max(fogEnd - fogStart, 1.0f);\n' +
                             '            float[] clearColour = new float[4];\n' +
                             '            glGetFloatv(GL_COLOR_CLEAR_VALUE, clearColour);\n' +
@@ -596,13 +597,24 @@ if (compatibilitySource != null) {
                             '(Math.min((1L<<32)-1024, org.lwjgl.opengl.GL32C.glGetInteger64(org.lwjgl.opengl.GL43C.GL_MAX_SHADER_STORAGE_BLOCK_SIZE)) & ~1023L)')
                 }
                 if (path.endsWith('/NormalRenderPipeline.java')) {
-                    // Fog must span Voxy's distance, independently of Sodium's fog snapshot.
-                    contents = contents.replace('float start = viewport.fogParameters.environmentalStart();',
-                            'float start = VoxyConfig.CONFIG.sectionRenderDistance * 512.0f * 0.75f;')
-                    contents = contents.replace('float end = viewport.fogParameters.environmentalEnd();',
-                            'float end = Math.max(start + 1.0f, VoxyConfig.CONFIG.sectionRenderDistance * 512.0f);')
-                    contents = contents.replaceAll(/float endDistance = [^;]+;/, 'float endDistance = end;')
+                    // Retain Cortex's resolved environmental range for the Voxy composite.
                     contents = contents.replace('Math.abs(start)*invEndFogDelta', '-start*invEndFogDelta')
+                    if (project.minecraft_version in ['1.21.8', '1.21.9', '1.21.10']) {
+                        def vanillaDistance = project.minecraft_version == '1.21.8'
+                                ? 'MinecraftClient.getInstance().gameRenderer.getViewDistanceBlocks()'
+                                : 'Minecraft.getInstance().gameRenderer.getRenderDistance()'
+                        def endDeclaration = 'float end = viewport.fogParameters.environmentalEnd();'
+                        if (!contents.contains(endDeclaration)) {
+                            throw new GradleException("Missing environmental fog range for ${project.minecraft_version}")
+                        }
+                        contents = contents.replace(endDeclaration,
+                                endDeclaration + '\n' +
+                                '            if (!Float.isFinite(start) || !Float.isFinite(end) || end <= start + 1.0f || end > 100_000.0f) {\n' +
+                                '                start = ' + vanillaDistance + ';\n' +
+                                '                float voxyDistance = VoxyConfig.CONFIG.sectionRenderDistance * 512.0f;\n' +
+                                '                end = Math.max(start + 1.0f, Math.min(voxyDistance, Math.max(start * 8.0f, start + 512.0f)));\n' +
+                                '            }')
+                    }
                 }
                 if (project.minecraft_version == '1.21.6' && path.endsWith('/BudgetBufferRenderer.java')) {
                     contents = contents.replace('    private static final GlBuffer indexBuffer;\n    static {',
@@ -617,9 +629,14 @@ if (compatibilitySource != null) {
                     contents = contents.replace('glDrawElements(GL_TRIANGLES, quadCount * 2 * 3, GL_UNSIGNED_SHORT, 0);',
                             'glDrawElements(GL_TRIANGLES, quadCount * 2 * 3, indexType, 0);')
                 }
-                if (path.endsWith('/MixinFogRenderer.java')) {
-                    contents = contents.replace('if (!VoxyConfig.CONFIG.useEnvironmentalFog)', 'if (true)')
-                    contents = contents.replace('if (!VoxyConfig.CONFIG.useEnvironmentalFog && !fogIsDamnClose)', 'if (!fogIsDamnClose)')
+                if (project.minecraft_version in ['1.21.9', '1.21.10'] && path.endsWith('/MixinFogRenderer.java')) {
+                    contents = contents.replace('@Mixin(value = FogRenderer.class,remap = true)',
+                            '@Mixin(value = FogRenderer.class, priority = 900, remap = true)')
+                    contents = contents.replace('if (!VoxyConfig.CONFIG.useEnvironmentalFog && !fogIsDamnClose)',
+                            'if (("fade".equalsIgnoreCase(VoxyConfig.CONFIG.fogMode) || "off".equalsIgnoreCase(VoxyConfig.CONFIG.fogMode)) && !fogIsDamnClose)')
+                    if (!contents.contains('priority = 900') || !contents.contains('"fade".equalsIgnoreCase')) {
+                        throw new GradleException("Failed to adapt fog ownership for ${project.minecraft_version}")
+                    }
                 }
                 if (path.endsWith('/MixinRenderSectionManager.java')) {
                     contents = contents.replace('boolean wasBuilt = instance.isBuilt();', 'boolean wasBuilt = instance.getFlags() != 0;')
@@ -649,6 +666,18 @@ if (compatibilitySource != null) {
                     }
                 }
                 output.text = contents
+            }
+            def fogGeneration = project.minecraft_version in ['1.21', '1.21.1'] ? '121' :
+                    project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4', '1.21.5'] ? '1212' :
+                    project.minecraft_version in ['1.21.6', '1.21.7', '1.21.8'] ? '1216' : null
+            if (fogGeneration != null) {
+                copy {
+                    from "src/compatibility/fog/${fogGeneration}/MixinFogRenderer.java"
+                    into new File(compatibilitySources, 'me/cortex/voxy/client/mixin/minecraft')
+                }
+            }
+            if (project.minecraft_version == '1.21.5') {
+                delete new File(compatibilitySources, 'me/cortex/voxy/client/mixin/minecraft/MixinBackgroundRenderer.java')
             }
             def resourceNames = providers.exec {
                 commandLine 'git', 'ls-tree', '-r', '--name-only', compatibilitySource.ref, 'src/main/resources'
@@ -705,6 +734,18 @@ if (compatibilitySource != null) {
                     if (project.minecraft_version == '1.21') {
                         contents = contents.replace('    "sodium.MixinRenderSectionManager",',
                                 '    "sodium.MixinRenderSectionManager",\n    "sodium.MixinSodiumOptionsGUI",')
+                    }
+                }
+                if (name in ['voxy.mixins.json', 'client.voxy.mixins.json'] &&
+                        project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6']) {
+                    if (project.minecraft_version == '1.21.5') {
+                        contents = contents.replace('"minecraft.MixinBackgroundRenderer"', '"minecraft.MixinFogRenderer"')
+                    } else {
+                        contents = contents.replace('"minecraft.MixinWorldRenderer"',
+                                '"minecraft.MixinFogRenderer",\n    "minecraft.MixinWorldRenderer"')
+                    }
+                    if (!contents.contains('"minecraft.MixinFogRenderer"')) {
+                        throw new GradleException("Failed to register fog mixin for ${project.minecraft_version}")
                     }
                 }
                 if (name == 'client.voxy.mixins.json' && compatibilitySource?.legacy && project.minecraft_version != '1.21.1' ||

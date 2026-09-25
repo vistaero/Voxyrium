@@ -259,6 +259,12 @@ if (compatibilitySource != null) {
                         commandLine 'git', 'show', "5979b178:src/main/java/me/cortex/voxy/client/core/rendering/section/MDICSectionRenderer.java"
                     }.standardOutput.asText.get()
                 }
+                if (project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4'] && path.endsWith('/MDICSectionRenderer.java')) {
+                    // These snapshots predate Cortex's basic translucency pass.
+                    contents = providers.exec {
+                        commandLine 'git', 'show', "7cc92a53:src/main/java/me/cortex/voxy/client/core/rendering/section/MDICSectionRenderer.java"
+                    }.standardOutput.asText.get()
+                }
                 if (project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4'] && path.endsWith('/LightMapHelper.java')) {
                     // Match Cortex's later lighting fix: a sampler left by
                     // Sodium/Iris can override the lightmap texture parameters.
@@ -638,13 +644,14 @@ if (compatibilitySource != null) {
                         commandLine 'git', 'show', "5979b178:src/main/resources/${name}"
                     }.standardOutput.asText.get()
                 }
-                if (project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4'] &&
-                        name == 'assets/voxy/shaders/lod/gl46/bindings.glsl') {
-                    // Cortex later fixed edge sampling of the 16x16
-                    // lightmap; clamp samples to texel centers.
-                    contents = contents.replace(
-                            'texture(lightSampler, vec2((i2>>4)&0xF, i2&0xF)/16.0f)',
-                            'texture(lightSampler, clamp(vec2((i2>>4)&0xF, i2&0xF)/16.0f, vec2(8.0f/255.0f), vec2(248.0f/255.0f)))')
+                if (project.minecraft_version in ['1.21.2', '1.21.3', '1.21.4'] && name in [
+                        'assets/voxy/shaders/lod/gl46/bindings.glsl',
+                        'assets/voxy/shaders/lod/gl46/cmdgen.comp']) {
+                    // Use Cortex's binding layout and draw-command generation
+                    // from the first working translucent-rendering implementation.
+                    contents = providers.exec {
+                        commandLine 'git', 'show', "7cc92a53:src/main/resources/${name}"
+                    }.standardOutput.asText.get()
                 }
                 if (name == 'assets/voxy/lang/en_us.json') {
                     contents = file('src/main/resources/assets/voxy/lang/en_us.json').text

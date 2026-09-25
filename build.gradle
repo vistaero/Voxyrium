@@ -722,12 +722,13 @@ if (compatibilitySource != null) {
                     contents = file('src/main/resources/assets/voxy/lang/en_us.json').text
                 }
                 if (compatibilitySource != null && name == 'fabric.mod.json') {
-                    contents = contents.replaceFirst('"minecraft": "[^"]+"', '"minecraft": "' + project.minecraft_version + '"')
-                    if (compatibilitySource?.legacy || compatibilitySource?.historical) {
-                        def sodiumSeries = sodiumVersion.split('-')[1].replaceFirst(/\.[^.]+$/, '.x')
-                        contents = contents.replace('"sodium": "*"', '"sodium": "' + sodiumSeries + '"')
-                        contents = contents.replace('"sodium": ["=${sodium}"]', '"sodium": ["' + sodiumSeries + '"]')
-                    }
+                    // Historical manifests use strings, arrays and version ranges.
+                    // Set both requirements from the selected build target.
+                    def manifest = new groovy.json.JsonSlurper().parseText(contents)
+                    def sodiumSeries = sodiumVersion.split('-')[1].replaceFirst(/\.[^.]+$/, '.x')
+                    manifest.depends['minecraft'] = project.minecraft_version
+                    manifest.depends['sodium'] = sodiumSeries
+                    contents = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(manifest))
                 }
                 if (project.minecraft_version in ['1.21', '1.21.1'] && name == 'voxy.mixins.json') {
                     contents = contents.replace('    "nvidium.MixinRenderPipeline",\n', '')

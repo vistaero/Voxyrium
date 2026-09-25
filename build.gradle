@@ -345,6 +345,14 @@ if (compatibilitySource != null) {
                     if (!contents.contains('boolean indexedRenderingEnabled')) {
                         throw new GradleException("Failed to adapt Sodium 0.7+ DefaultChunkRenderer injection for ${project.minecraft_version}")
                     }
+                    if (project.minecraft_version == '1.21.6') {
+                        def oldCall = 'renderer.renderOpaque(matrices, camera.x, camera.y, camera.z);'
+                        if (!contents.contains(oldCall)) {
+                            throw new GradleException('Failed to pass Sodium fog to Voxy for 1.21.6')
+                        }
+                        contents = contents.replace(oldCall,
+                                'renderer.renderOpaque(matrices, parameters, camera.x, camera.y, camera.z);')
+                    }
                 }
                 if (project.minecraft_version in ['1.21', '1.21.1']) {
                     // Sodium 0.6+ moved out of the legacy me.jellysquid
@@ -564,6 +572,28 @@ if (compatibilitySource != null) {
                                 '            clearColour[1] = vanillaFogColour.y();\n' +
                                 '            clearColour[2] = vanillaFogColour.z();')
                     }
+                    if (project.minecraft_version in ['1.21.6', '1.21.7']) {
+                        contents = contents.replace('import net.minecraft.client.MinecraftClient;',
+                                'import net.caffeinemc.mods.sodium.client.util.FogParameters;\nimport net.minecraft.client.MinecraftClient;')
+                        def oldSignature = 'public void renderPost(Matrix4f fromProjection, Matrix4fc tooProjection, int outputFB)'
+                        if (!contents.contains(oldSignature)) {
+                            throw new GradleException("Failed to pass Sodium fog to post-processing for ${project.minecraft_version}")
+                        }
+                        contents = contents.replace(oldSignature,
+                                'public void renderPost(Matrix4f fromProjection, Matrix4fc tooProjection, int outputFB, FogParameters fogParameters)')
+                        def fogStart = contents.indexOf('        if (hasFog) {\n')
+                        def fadeStart = contents.indexOf('        if (hasFade) {\n', fogStart)
+                        if (fogStart < 0 || fadeStart < 0) {
+                            throw new GradleException("Failed to locate fog uniforms for ${project.minecraft_version}")
+                        }
+                        contents = contents.substring(0, fogStart) +
+                                '        // Match the environmental and render-distance curves used by Sodium.\n' +
+                                '        org.lwjgl.opengl.GL20.glUniform4f(4, fogParameters.environmentalStart(),\n' +
+                                '                fogParameters.environmentalEnd(), fogParameters.renderStart(), fogParameters.renderEnd());\n' +
+                                '        org.lwjgl.opengl.GL20.glUniform4f(5, fogParameters.red(), fogParameters.green(),\n' +
+                                '                fogParameters.blue(), hasFog ? fogParameters.alpha() : 0.0f);\n' +
+                                contents.substring(fadeStart)
+                    }
                     contents = contents.replaceAll(
                             '(?s)    public void computeSSAO\\(Matrix4f projection, MatrixStack stack\\) \\{.*?        glBindFramebuffer\\(GL_FRAMEBUFFER, this\\.framebufferSSAO\\.id\\);\\n    \\}',
                             '    public void computeSSAO(Viewport<?> viewport) {\n' +
@@ -580,6 +610,21 @@ if (compatibilitySource != null) {
                             'this.postProcessing.computeSSAO(viewport);')
                     contents = contents.replace('this.postProcessing.renderPost(viewport, matrices.projection(), boundFB);',
                             'this.postProcessing.renderPost(projection, matrices.projection(), boundFB);')
+                    if (project.minecraft_version in ['1.21.6', '1.21.7']) {
+                        if (project.minecraft_version == '1.21.6') {
+                            contents = contents.replace('import net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices;',
+                                    'import net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices;\n' +
+                                    'import net.caffeinemc.mods.sodium.client.util.FogParameters;')
+                            contents = contents.replace('renderOpaque(ChunkRenderMatrices matrices, double cameraX',
+                                    'renderOpaque(ChunkRenderMatrices matrices, FogParameters fogParameters, double cameraX')
+                        }
+                        def oldCall = 'this.postProcessing.renderPost(projection, matrices.projection(), boundFB);'
+                        if (!contents.contains(oldCall)) {
+                            throw new GradleException("Failed to forward Sodium fog to post-processing for ${project.minecraft_version}")
+                        }
+                        contents = contents.replace(oldCall,
+                                'this.postProcessing.renderPost(projection, matrices.projection(), boundFB, fogParameters);')
+                    }
                 }
                 if (project.minecraft_version in ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4'] &&
                         path.endsWith('/VoxelCore.java')) {
@@ -883,6 +928,12 @@ if (compatibilitySource != null) {
                 copy {
                     from 'src/compatibility/resources/legacy-post'
                     into compatibilityResources
+                }
+            }
+            if (project.minecraft_version in ['1.21.6', '1.21.7']) {
+                copy {
+                    from 'src/compatibility/fog/1216/blit_texture_depth_cutout.frag'
+                    into new File(compatibilityResources, 'assets/voxy/shaders/post')
                 }
             }
         }

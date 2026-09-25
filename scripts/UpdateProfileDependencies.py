@@ -9,6 +9,27 @@ import sys
 from pathlib import Path
 
 
+def load_dependency_overrides(path):
+    overrides = {}
+    version_types = {}
+    if not path.exists():
+        return overrides, version_types
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = [field.strip() for field in line.split("|")]
+        if len(fields) != 4 or not all(fields):
+            raise ValueError(f"Invalid dependency override at {path}:{line_number}; expected 'Minecraft | dependency | release channel | version'.")
+        minecraft_version, dependency, version_type, version = fields
+        if version_type not in ("release", "beta", "alpha"):
+            raise ValueError(f"Invalid release channel at {path}:{line_number}; expected release, beta, or alpha.")
+        constraint = version if version.startswith("=") else f"={version}"
+        overrides.setdefault(minecraft_version, {})[dependency] = constraint
+        version_types.setdefault(minecraft_version, {})[dependency] = version_type
+    return overrides, version_types
+
+
 def compat_module():
     script_path = Path(__file__).resolve().with_name("Build-CompatibilityMatrix.py")
     spec = importlib.util.spec_from_file_location("voxy_compat_matrix", script_path)
@@ -34,7 +55,12 @@ def parse_args(argv=None):
 
 
 def run_dependencies(args, matrix, output_directory, updater, failures):
-    compat = compat_module()
+    overrides_path = args.repository_root / "dependency-overrides.txt"
+    try:
+        updater.dependency_overrides, updater.dependency_override_types = load_dependency_overrides(overrides_path)
+    except (OSError, ValueError) as error:
+        failures.append(f"Dependency overrides: {error}")
+        return 1
     updater.update_selected(matrix, args.profiles_directory)
     failures.extend(updater.failures)
     return 0

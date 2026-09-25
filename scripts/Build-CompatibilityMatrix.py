@@ -10,6 +10,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -56,7 +57,7 @@ MATRIX = [
 VOXY_RUNTIME_CONSTRAINTS = {
     "1.21": {"iris": "=1.8.8+1.21.1-fabric", "sodium": "=mc1.21.1-0.6.13-fabric"},
     "1.21.1": {"iris": "=1.8.14-beta.1+1.21.1-fabric", "sodium": "=mc1.21.1-0.8.13-fabric"},
-    "1.21.2": {"iris": "=1.8.0+1.21.3-fabric", "sodium": "=mc1.21.3-0.6.1-fabric"},
+    "1.21.2": {"iris": "=1.8.0-beta.6+1.21.2-fabric", "sodium": "=mc1.21.2-0.6.0-beta.3-fabric"},
     "1.21.3": {"iris": "=1.8.1+1.21.3-fabric", "sodium": "=mc1.21.3-0.6.8-fabric"},
     "1.21.4": {"iris": "=1.8.8+1.21.4-fabric", "sodium": "=mc1.21.4-0.6.13-fabric"},
     "1.21.5": {"iris": "=1.8.11+1.21.5-fabric", "sodium": "=mc1.21.5-0.6.13-fabric"},
@@ -65,7 +66,7 @@ VOXY_RUNTIME_CONSTRAINTS = {
     "1.21.8": {"iris": "=1.9.6+1.21.8-fabric", "sodium": "=mc1.21.8-0.7.3-fabric"},
     "1.21.9": {"iris": "=1.9.7+1.21.10-fabric", "sodium": "=mc1.21.10-0.7.3-fabric"},
     "1.21.10": {"iris": "=1.9.7+1.21.10-fabric", "sodium": "=mc1.21.10-0.7.3-fabric"},
-    "1.21.11": {"iris": "=1.10.7+1.21.11-fabric", "sodium": "=mc1.21.11-0.8.13-beta.2-fabric"},
+    "1.21.11": {"iris": "=1.10.7+1.21.11-fabric", "sodium": "=mc1.21.11-0.8.12-fabric"},
 }
 
 
@@ -476,7 +477,7 @@ def matches_constraint(project_id, version_number, constraint):
     return False
 
 
-def modrinth_candidates(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None):
+def modrinth_candidates(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None, version_type=None):
     headers = {"User-Agent": USER_AGENT}
     if required_id:
         versions = [json_url(f"https://api.modrinth.com/v2/version/{required_id}", headers)]
@@ -486,13 +487,13 @@ def modrinth_candidates(project_id, minecraft_version, loader="fabric", constrai
     else:
         query = urllib.parse.urlencode({"loaders": json.dumps([loader], separators=(",", ":")), "game_versions": json.dumps([minecraft_version], separators=(",", ":")), "include_changelog": "false"})
         versions = json_url(f"https://api.modrinth.com/v2/project/{project_id}/version?{query}", headers)
-    listed = [item for item in versions if item.get("status") == "listed" and item.get("files") and (not required_id or item.get("id") == required_id) and (not number_pattern or re.search(number_pattern, item.get("version_number", ""))) and matches_constraint(project_id, item.get("version_number", ""), constraint)]
+    listed = [item for item in versions if item.get("status") == "listed" and item.get("files") and (not required_id or item.get("id") == required_id) and (not number_pattern or re.search(number_pattern, item.get("version_number", ""))) and (not version_type or item.get("version_type") == version_type) and matches_constraint(project_id, item.get("version_number", ""), constraint)]
     if not listed:
-        fail(f"Modrinth project {project_id} has no listed {loader} version for Minecraft {minecraft_version} matching constraint {constraint!r}.")
-    # Compatibility is the primary criterion. Once a pair is compatible, use
-    # the newest publication regardless of whether it is release, beta, or
-    # alpha. Voxy must follow the newest compatible pair, not prefer an older
-    # stable artifact over a newer compatible prerelease.
+        channel = f" in the {version_type} channel" if version_type else ""
+        fail(f"Modrinth project {project_id} has no listed {loader} version for Minecraft {minecraft_version}{channel} matching constraint {constraint!r}.")
+    # Compatibility is the primary criterion. Unless an override fixes the
+    # release channel, use the newest compatible publication regardless of
+    # whether it is release, beta, or alpha.
     ordered = sorted(listed, key=lambda item: item.get("date_published", ""), reverse=True)
     result = []
     for selected in ordered:
@@ -506,8 +507,8 @@ def modrinth_candidates(project_id, minecraft_version, loader="fabric", constrai
     return result
 
 
-def modrinth_file(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None):
-    return modrinth_candidates(project_id, minecraft_version, loader, constraint, required_id, number_pattern)[0]
+def modrinth_file(project_id, minecraft_version, loader="fabric", constraint="*", required_id=None, number_pattern=None, version_type=None):
+    return modrinth_candidates(project_id, minecraft_version, loader, constraint, required_id, number_pattern, version_type)[0]
 
 
 class RuntimeUpdater:
@@ -516,6 +517,8 @@ class RuntimeUpdater:
         log_directory.mkdir(parents=True, exist_ok=True)
         self.log_path = log_directory / f"runtime-update-{datetime.now():%Y%m%d-%H%M%S}.log"
         self.output_directory = output_directory
+        self.dependency_overrides = {}
+        self.dependency_override_types = {}
         self.failures = []
 
     def log(self, message, level="INFO"):
@@ -562,10 +565,12 @@ class RuntimeUpdater:
         iris_id = projects["iris"][1]
         sodium_id = projects["sodium"][1]
         iris_candidates = modrinth_candidates(
-        iris_id, minecraft_version, constraint=constraints["iris"],
+            iris_id, minecraft_version, constraint=constraints["iris"],
+            version_type=self.dependency_override_types.get(minecraft_version, {}).get("iris"),
             number_pattern=None)
         sodium_candidates = modrinth_candidates(
             sodium_id, minecraft_version, constraint=constraints["sodium"],
+            version_type=self.dependency_override_types.get(minecraft_version, {}).get("sodium"),
             number_pattern=artifact_version_pattern(sodium_id, minecraft_version))
 
         sodium_manifests = {}
@@ -624,6 +629,9 @@ class RuntimeUpdater:
         # The source snapshot's pair takes precedence over intentionally broad
         # Fabric metadata such as Sodium's 0.6.x/0.8.x compatibility range.
         constraints.update(VOXY_RUNTIME_CONSTRAINTS.get(minecraft_version, {}))
+        # Explicit, reviewed overrides are the final authority for known-good
+        # runtime combinations maintained in dependency-overrides.txt.
+        constraints.update(self.dependency_overrides.get(minecraft_version, {}))
         resolved, entries = {}, []
 
         def install(dependency, item):
@@ -640,7 +648,10 @@ class RuntimeUpdater:
             self.log(f"[{minecraft_version}] {name}: {item['version_number']} ({item['file_name']}).")
 
         for dependency in sorted(key for key in constraints if key not in ("sodium", "iris")):
-            item = modrinth_file(projects[dependency][1], minecraft_version, constraint=constraints[dependency])
+            item = modrinth_file(
+                projects[dependency][1], minecraft_version,
+                constraint=constraints[dependency],
+                version_type=self.dependency_override_types.get(minecraft_version, {}).get(dependency))
             install(dependency, item)
 
         iris, sodium = self.compatible_pair(minecraft_version, constraints, projects)
@@ -794,6 +805,16 @@ def build_single_build_worker(payload):
     finally:
         if worktree.exists() and not args.keep_worktrees:
             remove_worktree(root, worktree, worktree_root)
+        if sys.platform == "darwin" and not args.keep_worktrees:
+            # The macOS coordinator returns before all workers finish, so no
+            # coordinator-side finally block can remove the now-empty root.
+            # Multiple workers may reach this point together; a failed rmdir
+            # simply means another worker still owns a worktree (or cleaned
+            # the root first).
+            try:
+                worktree_root.rmdir()
+            except OSError:
+                pass
 
 
 def launch_single_build_in_terminal(payload, cwd=None):
@@ -820,6 +841,23 @@ result_path.write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
         kwargs["close_fds"] = False
+    elif sys.platform == "darwin":
+        # start_new_session only detaches a process on macOS; it does not ask
+        # Terminal.app to create a visible window.  Let Terminal.app launch
+        # the worker and keep this osascript process alive until the worker has
+        # written its result if the coordinator remains attached, so the
+        # worker can still be monitored without owning the user's shell.
+        terminal_command = shlex.join(command)
+        if cwd is not None:
+            terminal_command = f"cd -- {shlex.quote(str(cwd))} && exec {terminal_command}"
+        result_path = shlex.quote(str(payload["result_path"]))
+        wait_for_result = f"while [ ! -f {result_path} ]; do sleep 1; done"
+        apple_script = (
+            f"tell application \"Terminal\" to do script {json.dumps(terminal_command)}\n"
+            f"do shell script {json.dumps(wait_for_result)}"
+        )
+        command = ["/usr/bin/osascript", "-e", apple_script]
+        kwargs["start_new_session"] = True
     else:
         kwargs["start_new_session"] = True
     return subprocess.Popen(command, **kwargs)
@@ -835,6 +873,10 @@ def build_matrix(args, matrix, output_directory):
         fail("--build-workers must be at least 1.")
     if args.gradle_workers is not None and args.gradle_workers < 1:
         fail("--gradle-workers must be at least 1.")
+    # On macOS, launch_single_build_in_terminal keeps its osascript process
+    # alive until the Terminal worker writes its result.  Keep polling those
+    # processes so their artifacts are installed into the test profiles below.
+    detach_builds = False
     artifacts, failures = {}, []
     try:
         builds = []
@@ -921,7 +963,10 @@ def build_matrix(args, matrix, output_directory):
             if failures and not args.continue_on_build_failure:
                 fail(failures[0])
     finally:
-        if not args.keep_worktrees:
+        # Detached macOS workers still need this directory while they create
+        # and remove their worktrees.  Each worker performs its own cleanup;
+        # the coordinator must not prune it as it exits.
+        if not args.keep_worktrees and not detach_builds:
             subprocess.run(["git", "-C", str(root), "worktree", "prune"])
             if worktree_root.exists() and not any(worktree_root.iterdir()):
                 worktree_root.rmdir()
@@ -1069,6 +1114,10 @@ def main():
         fail(f"Repository root is not a Git working tree: {args.repository_root}")
     output_directory = (args.output_directory or args.repository_root / "compatibility-builds").expanduser().resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
+    # InstallJdkVersions accepts the same option, but its reusable entry point
+    # expects the resolved destination to have been assigned by its own main().
+    # Keep that contract when invoking it from this orchestrator.
+    args.output_directory = output_directory
     updater = RuntimeUpdater(output_directory)
     failures = []
     if action == "jdks":
@@ -1078,9 +1127,14 @@ def main():
     elif action in ("compile", "compile-online"):
         if action == "compile-online":
             args.allow_build_downloads = True
+            load_jdks_script().run_jdks(args, failures)
+            run([sys.executable, str(Path(__file__).resolve().with_name("Find-Latest-Iris-Sodium.py"))],
+                cwd=args.repository_root, live_console=True)
         artifacts, build_failures = build_matrix(args, matrix, output_directory)
         failures.extend(build_failures)
         install_compiled_artifacts(args, matrix, artifacts, failures)
+        if action == "compile-online":
+            load_dependencies_script().run_dependencies(args, matrix, output_directory, updater, failures)
     elif action == "profiles":
         load_profile_script().run_profiles(args, matrix, output_directory, updater, failures)
     if failures:

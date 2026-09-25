@@ -271,6 +271,20 @@ if (compatibilitySource != null) {
                     contents = contents.replace('glBindTextureUnit(lightingIndex,',
                             'org.lwjgl.opengl.GL33C.glBindSampler(lightingIndex, 0);\n        glBindTextureUnit(lightingIndex,')
                 }
+                if (project.minecraft_version == '1.21.4' && path.endsWith('/RenderGenerationService.java')) {
+                    // Cortex's experimental Factory4 only emits faces between
+                    // fully opaque blocks. The complete factory from this same
+                    // revision also meshes cutouts and fluids, and preserves
+                    // their actual light values instead of using 0xFF at edges.
+                    if (!contents.contains('new RenderDataFactory4(') ||
+                            !contents.contains('processJob(RenderDataFactory4 factory)') ||
+                            !contents.contains('}, factory::free);')) {
+                        throw new GradleException('Failed to restore complete 1.21.4 meshing')
+                    }
+                    contents = contents.replace('new RenderDataFactory4(', 'new RenderDataFactory(')
+                            .replace('processJob(RenderDataFactory4 factory)', 'processJob(RenderDataFactory factory)')
+                            .replace('}, factory::free);', '}, () -> {});')
+                }
                 if (project.minecraft_version in ['1.21.2', '1.21.3'] && path.endsWith('/MixinRenderSectionManager.java')) {
                     // Chunk-cache indices wrap as the camera moves. Verify the
                     // requested coordinates before ingesting a chunk during

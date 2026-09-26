@@ -255,17 +255,23 @@ class OfflineLauncher:
             coordinates = str(library.get("name", "")).split(":")
             classifier_name = coordinates[3] if len(coordinates) >= 4 else ""
             is_native_classifier = classifier_name.startswith("natives-")
-            if is_native_classifier and not is_current_native_classifier(classifier_name):
+            # Current version metadata publishes native classifiers as ordinary,
+            # OS-gated artifacts. They must remain on the classpath so LWJGL and
+            # the other libraries can extract them into their configured
+            # per-library directories. Only use the classifier-name fallback
+            # for metadata that does not provide launcher rules.
+            if (
+                is_native_classifier
+                and not library.get("rules")
+                and not is_current_native_classifier(classifier_name)
+            ):
                 continue
             downloads = library.get("downloads", {})
             artifact = downloads.get("artifact") if isinstance(downloads, dict) else None
             if artifact:
                 path = self.minecraft_directory / "libraries" / Path(str(artifact["path"]))
                 self.download(str(artifact["url"]), path)
-                if is_native_classifier:
-                    native_jars.append(path)
-                else:
-                    class_path.append(str(path))
+                class_path.append(str(path))
             elif len(coordinates) == 3:
                 group, name, version = coordinates
                 relative = Path(group.replace(".", "/")) / name / version / f"{name}-{version}.jar"

@@ -1,0 +1,16 @@
+Modrinth Fabric Iris/Sodium pairs, checked 2026-09-26 15:49 UTC
+Selection: newest published Iris with the newest compatible Sodium for each exact Minecraft tag.
+Metadata and both mod manifests checked; Voxy compilation and in-game compatibility are NOT implied.
+
+1.21 | Iris 1.8.8+1.21.1-fabric [zsoi0dso] | Sodium mc1.21.1-0.6.13-fabric [u1OEbNKx]
+1.21.1 | Iris 1.8.14-beta.1+1.21.1-fabric [bAo1Qhte] | Sodium mc1.21.1-0.8.13-fabric [SMxNOGZ6]
+1.21.2 | Iris 1.8.0+1.21.3-fabric [qyGMuaY6] | Sodium mc1.21.3-0.6.1-fabric [gXZfuKxx]
+1.21.3 | Iris 1.8.1+1.21.3-fabric [xQYJAYTI] | Sodium mc1.21.3-0.6.8-fabric [LL4puCl1]
+1.21.4 | Iris 1.8.8+1.21.4-fabric [Ca054sTe] | Sodium mc1.21.4-0.6.13-fabric [c3YkZvne]
+1.21.5 | Iris 1.8.11+1.21.5-fabric [U6evbjd0] | Sodium mc1.21.5-0.6.13-fabric [DA250htH]
+1.21.6 | Iris 1.9.6+1.21.8-fabric [Rhzf61g1] | Sodium mc1.21.8-0.7.3-fabric [7pwil2dy]
+1.21.7 | Iris 1.9.6+1.21.8-fabric [Rhzf61g1] | Sodium mc1.21.8-0.7.3-fabric [7pwil2dy]
+1.21.8 | Iris 1.9.6+1.21.8-fabric [Rhzf61g1] | Sodium mc1.21.8-0.7.3-fabric [7pwil2dy]
+1.21.9 | Iris 1.9.7+1.21.10-fabric [a98UkgML] | Sodium mc1.21.10-0.7.3-fabric [sFfidWgd]
+1.21.10 | Iris 1.9.7+1.21.10-fabric [a98UkgML] | Sodium mc1.21.10-0.7.3-fabric [sFfidWgd]
+1.21.11 | Iris 1.10.7+1.21.11-fabric [fDpuVzVr] | Sodium mc1.21.11-0.8.13-beta.2-fabric [paat5Nz2]

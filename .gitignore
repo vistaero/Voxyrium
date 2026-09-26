@@ -6,3 +6,5 @@
 /out/
 /logs/
 /.codegraph/
+/compatibility-builds
+/scripts/__pycache__

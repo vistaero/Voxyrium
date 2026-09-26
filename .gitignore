@@ -7,3 +7,5 @@
 /logs/
 /compatibility-builds/
 .DS_Store
+/scripts/__pycache__
+/.codegraph

@@ -5,9 +5,9 @@ import me.cortex.voxy.common.Logger;
 import oshi.SystemInfo;
 
 /**
- * Estimates the expanded-memory cost of the Blaze3D renderer. Cortex's native renderer keeps
- * each quad packed into eight bytes; Blaze3D expands it into four 28-byte vertices, so its memory
- * requirements need to follow render distance and screen-space quality instead of a fixed cap.
+ * Estimates the working set and residency budget of the Blaze3D renderer. Each quad uses a
+ * 32-byte instance instead of four 28-byte vertices. Keep the previous residency headroom to
+ * spend the savings on more detail, cached branches and longer render distances.
  */
 public final class Blaze3dMemoryBudget {
     private static final long MIB = 1024L * 1024L;
@@ -62,7 +62,7 @@ public final class Blaze3dMemoryBudget {
             long available = new SystemInfo().getHardware().getMemory().getAvailable();
             Runtime runtime = Runtime.getRuntime();
             long heapGrowth = Math.max(0L, runtime.maxMemory() - runtime.totalMemory());
-            // Expanded meshes use native RAM, outside the JVM heap. Reserve future heap growth
+            // Packed meshes use native RAM, outside the JVM heap. Reserve future heap growth
             // and most remaining memory for the game, meshing workers and other applications.
             limit = clamp(Math.max(0L, available - heapGrowth) / 4L, 0L, 2L * GIB);
         } catch (RuntimeException | LinkageError exception) {
@@ -80,6 +80,7 @@ public final class Blaze3dMemoryBudget {
 
         // Calibrated against a 2,592-block (162 chunk), 64-pixel capture. Distance grows slower
         // than area because progressively farther rings select progressively coarser Cortex LoDs.
+        // Keep this 112-byte-quad baseline for budgets; scale only the working-set estimate below.
         double distanceFactor = Math.pow(renderDistanceChunks / 162.0, 0.80);
         double qualityFactor = Math.pow(64.0 / safeSubdivisionSize, 1.35);
         long steadyGeometryBytes = clamp(Math.round(2.60 * GIB * distanceFactor * qualityFactor),
@@ -90,10 +91,13 @@ public final class Blaze3dMemoryBudget {
         long geometryBudgetBytes = clamp(requestedGeometryBudget, MIN_GEOMETRY_BUDGET, MAX_GEOMETRY_BUDGET);
         long stagingBudgetBytes = clamp(Math.round(steadyGeometryBytes * 0.12),
                 MIN_STAGING_BUDGET, MAX_STAGING_BUDGET);
-        long requiredVramBytes = requestedGeometryBudget + FIXED_VRAM_BYTES;
+        // Scale the estimated working set, not the allocation budget: spare capacity is useful
+        // for warm geometry and transitions. This is an estimate, not measured free VRAM.
+        long compactWorkingSet = Math.round(requestedGeometryBudget * (Blaze3dQuadEncoder.STRIDE / 112.0));
+        long requiredVramBytes = compactWorkingSet + FIXED_VRAM_BYTES;
         long requiredRamBytes = stagingBudgetBytes + FIXED_RAM_BYTES;
         return new Estimate(requiredRamBytes, requiredVramBytes, geometryBudgetBytes, stagingBudgetBytes,
-                requestedGeometryBudget > MAX_GEOMETRY_BUDGET);
+                compactWorkingSet > MAX_GEOMETRY_BUDGET);
     }
 
     public static String formatBytes(long bytes) {

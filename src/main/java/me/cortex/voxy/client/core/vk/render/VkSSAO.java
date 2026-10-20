@@ -152,7 +152,7 @@ public class VkSSAO {
                     .sampler(1, viewport.colour.view, this.colourSampler, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                     .sampler(2, viewport.depthSampleView, this.depthSampler, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             if (this.isBetterSSAO) {
-                b.sampler(3, VkFrameHost.vkView(rt.mcDepth()), this.depthSampler, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                b.sampler(3, VkFrameHost.vkView(rt.mcDepth()), this.depthSampler, VkFrameHost.mcSampledLayout());
             }
             b.ubo(4, this.params).push(cmd);
         }

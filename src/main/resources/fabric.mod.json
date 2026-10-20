@@ -44,7 +44,8 @@
     "sodium": "${allowed_sodium_versions}"
   },
   "breaks": {
-    "voxyworldgenv2": "=2.2.2"
+    "voxyworldgenv2": "=2.2.2",
+    "iris": ">=1.12-"
   },
   "accessWidener": "voxy.accesswidener"
 }

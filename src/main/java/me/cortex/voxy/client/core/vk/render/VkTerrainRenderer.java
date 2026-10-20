@@ -443,7 +443,7 @@ public class VkTerrainRenderer {
                     .ssbo(4, this.modelStore.modelColourBuffer)
                     .ssbo(5, viewport.positionScratchBuffer)
                     .sampler(8, this.modelStore.atlas.view, this.modelStore.atlasSampler, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                    .sampler(9, lightmapView, this.lightmapSampler, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                    .sampler(9, lightmapView, this.lightmapSampler, VkFrameHost.mcSampledLayout())
                     .sampler(10, viewport.depthBoundSampleView, this.depthBoundSampler, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                     .push(cmd);
         }

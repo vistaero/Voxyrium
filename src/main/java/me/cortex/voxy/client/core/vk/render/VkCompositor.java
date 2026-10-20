@@ -177,7 +177,7 @@ public class VkCompositor {
         this.depthSetup.bind(cmd);
         VkCmd.setViewportScissor(cmd, viewport.width, viewport.height);
         try (var b = this.depthSetup.binder()) {
-            b.sampler(0, VkFrameHost.vkView(rt.mcDepth), this.depthSampler, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            b.sampler(0, VkFrameHost.vkView(rt.mcDepth), this.depthSampler, VkFrameHost.mcSampledLayout())
                     .push(cmd);
         }
         try (MemoryStack stack = stackPush()) {
@@ -265,12 +265,12 @@ public class VkCompositor {
         try (MemoryStack stack = stackPush()) {
             var colorAttach = VkRenderingAttachmentInfoKHR.calloc(1, stack).sType$Default()
                     .imageView(VkFrameHost.vkView(rt.mcColour))
-                    .imageLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                    .imageLayout(VkFrameHost.mcLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL))
                     .loadOp(VK_ATTACHMENT_LOAD_OP_LOAD)
                     .storeOp(VK_ATTACHMENT_STORE_OP_STORE);
             var depthAttach = VkRenderingAttachmentInfoKHR.calloc(stack).sType$Default()
                     .imageView(VkFrameHost.vkView(rt.mcDepth))
-                    .imageLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                    .imageLayout(VkFrameHost.mcLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL))
                     .loadOp(VK_ATTACHMENT_LOAD_OP_LOAD)
                     .storeOp(VK_ATTACHMENT_STORE_OP_STORE);
             var info = VkRenderingInfoKHR.calloc(stack).sType$Default()

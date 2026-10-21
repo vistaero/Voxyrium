@@ -229,15 +229,17 @@ public class VoxyRenderSystem {
         }
 
         //cameraY += 100;
-        float farPlaneChunks = 3000;
+        float far = 3000 * 16;
         //dont like this hacky instanceof thing and how this is wired
         //TODO: fixme
         if (this.pipeline instanceof IrisVoxyRenderPipeline ivrp) {
             if (ivrp._getData().useDynamicFarPlane) {
-                farPlaneChunks = (VoxyConfig.CONFIG.sectionRenderDistance * 32 + 2) * ((float) Math.sqrt(3));
+                far  = (VoxyConfig.CONFIG.sectionRenderDistance * 32 + 2) * ((float) Math.sqrt(3)) * 16;
             }
         }
-        var voxyProjection = computeProjectionMat(this.properties, vanillaProjection, farPlaneChunks*16);
+
+        float near = getNearPlane();
+        var voxyProjection = computeProjectionMat(this.properties, vanillaProjection, near, far);
 
         /*
         int[] dims = new int[4];
@@ -261,7 +263,7 @@ public class VoxyRenderSystem {
 
         viewport
                 .setVanillaProjection(vanillaProjection)
-                .setProjection(voxyProjection)
+                .setProjection(voxyProjection, near, far)
                 .setModelView(new Matrix4f(modelView))
                 .setCamera(cameraX, cameraY, cameraZ)
                 .setScreenSize(width, height)
@@ -502,19 +504,23 @@ public class VoxyRenderSystem {
     }*/
 
     public static Matrix4f computeProjectionMat(RenderProperties properties, Matrix4fc base) {
-        return computeProjectionMat(properties, base, 16 * 3000);
+        return computeProjectionMat(properties, base, getNearPlane(), 16 * 3000);
     }
 
-    private static Matrix4f computeProjectionMat(RenderProperties properties, Matrix4fc base, float farPlane) {
+    public static float getNearPlane() {
+        float near = getVanillaRenderDistance() <= 32.0f ? 8f : 16f;
+        return VoxyClient.disableSodiumChunkRender() ? 0.1f : near;
+    }
+
+    private static Matrix4f computeProjectionMat(RenderProperties properties, Matrix4fc base, float nearPlane, float farPlane) {
 
         //this jank is to capture the extra crap they inject like viewbobbing
         var rawMCProj = Minecraft.getInstance().gameRenderer.gameRenderState().levelRenderState.cameraRenderState.projectionMatrix;
         var extraProjection = rawMCProj.invert(new Matrix4f()).mul(base);
 
-        float near = getVanillaRenderDistance()<=32.0f?8f:16f;
-        near = VoxyClient.disableSodiumChunkRender()?0.1f:near;
 
         float far = farPlane;
+        float near = nearPlane;
 
         /* jank way of just modifying the base raw
         if (true) {
@@ -525,7 +531,7 @@ public class VoxyRenderSystem {
 
         //Flip near and far on reverse depth
         if (properties.isReverseZ()) {
-            float tmp = near;
+            float tmp = nearPlane;
             near = far;
             far = tmp;
         }

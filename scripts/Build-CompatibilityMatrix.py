@@ -56,7 +56,7 @@ MATRIX = [
 # the runtime updater silently replace that ABI with a newer release merely
 # because Modrinth marks it as covering a neighbouring Minecraft version.
 VOXY_RUNTIME_CONSTRAINTS = {
-    "26.3": {"iris": "=1.11.7+26.3-fabric", "sodium": "=mc26.3-0.9.2-fabric"},
+    "26.3": {"iris": "=1.11.7+26.3-fabric", "sodium": "=mc26.3-0.9.3-beta.1-fabric"},
     "1.21": {"iris": "=1.8.8+1.21.1-fabric", "sodium": "=mc1.21.1-0.6.13-fabric"},
     "1.21.1": {"iris": "=1.8.14-beta.1+1.21.1-fabric", "sodium": "=mc1.21.1-0.8.13-fabric"},
     "1.21.2": {"iris": "=1.8.0-beta.6+1.21.2-fabric", "sodium": "=mc1.21.2-0.6.0-beta.3-fabric"},

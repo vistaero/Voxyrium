@@ -34,7 +34,13 @@ import net.caffeinemc.mods.sodium.client.util.FogParameters;
 //? if MC_26_3
 import net.minecraft.client.renderer.oit.OitStage;
 //? endif
+//? if MC_26_3
+import org.spongepowered.asm.mixin.Final;
+//? endif
 import org.spongepowered.asm.mixin.Mixin;
+//? if MC_26_3
+import org.spongepowered.asm.mixin.Shadow;
+//? endif
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -42,6 +48,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(value = DefaultChunkRenderer.class, remap = false)
 public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
+
+//? if MC_26_3
+    @Shadow
+    @Final
+    private boolean[] shouldDraw;
+//? endif
 
     public MixinDefaultChunkRenderer(ChunkVertexType vertexType) {
         super(vertexType);
@@ -83,6 +95,16 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
         this.doRender(matrices, renderPass, camera, parameters);
     }
 
+//? if MC_26_3
+    @Inject(method = "prepare", at = @At(value = "TAIL"))
+    private void voxy$forceOpaque(ChunkRenderListIterable renderLists, CameraTransform cameraTransform, boolean indexedRenderingEnabled, CallbackInfo ci) {
+        var renderer = IVoxyRenderSystemHolder.getNullable();
+        if (renderer != null) {
+            this.shouldDraw[DefaultTerrainRenderPasses.getPassIndex(DefaultTerrainRenderPasses.CUTOUT)] = true;
+        }
+    }
+
+//? endif
     @Unique
     private void doRender(ChunkRenderMatrices matrices, TerrainRenderPass renderPass, CameraTransform camera, FogParameters fogParameters) {
         if (renderPass == DefaultTerrainRenderPasses.CUTOUT) {

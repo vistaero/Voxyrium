@@ -67,7 +67,7 @@ public record RenderProperties(boolean isZero2One, boolean isReverseZ, boolean u
 
     private static boolean useReverseZ() {
 //? if MC_26_3
-        return IrisUtil.irisShaderPackEnabled()?false: DepthStencilState.DEFAULT.depthTest().equals(CompareOp.GREATER_THAN_OR_EQUAL);
+        return DepthStencilState.DEFAULT.depthTest().equals(CompareOp.GREATER_THAN_OR_EQUAL);
 //? else
         return IrisUtil.irisShaderPackEnabled()?false:DepthStencilState.DEFAULT.depthTest().equals(CompareOp.GREATER_THAN_OR_EQUAL);
 //? endif

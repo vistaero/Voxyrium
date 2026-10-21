@@ -5,9 +5,9 @@ def targets = [
                  modmenu_version: '20.0.0', lithium_version: 'mc26.2-0.25.1-fabric',
                  iris_version: '1.11.2+26.2-fabric', lwjgl: '3.4.1'],
         '26.3': [loader_version: '0.19.5', fabric_api_version: '0.160.5+26.3',
-                 sodium_version_modrinth: 'mc26.3-0.9.2-fabric', sodium_extra_allows: '',
-                 modmenu_version: '21.0.0-beta.1', lithium_version: 'mc26.3-0.26.1-fabric',
-                 'compileOnly.iris_version': '1.11.7+26.3-fabric', lwjgl: '3.4.3']
+                 sodium_version_modrinth: 'mc26.3-0.9.3-beta.1-fabric', sodium_extra_allows: '0.9.2',
+                 modmenu_version: '21.0.0-beta.1', lithium_version: 'mc26.3-0.26.2-fabric',
+                 'runtime.iris_version': '1.11.7+26.3-fabric', lwjgl: '3.4.3']
 ]
 def minecraftTarget = project.minecraft_version.toString()
 def selected = targets[minecraftTarget]

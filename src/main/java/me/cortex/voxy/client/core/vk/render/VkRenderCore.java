@@ -171,7 +171,7 @@ public class VkRenderCore {
                     crs.fogData.environmentalStart, crs.fogData.environmentalEnd,
                     crs.fogData.renderDistanceStart, crs.fogData.renderDistanceEnd);
             viewport.setVanillaProjection(matrices.projection())
-                    .setProjection(voxyProjection)
+                    .setProjection(voxyProjection, VoxyRenderSystem.getNearPlane(), 16 * 3000)
                     .setModelView(matrices.modelView())//setModelView copies into the viewport's own matrix
                     .setCamera(camX, camY, camZ)
                     .setScreenSize(target.width, target.height)

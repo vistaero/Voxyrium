@@ -2,10 +2,22 @@ package me.cortex.voxy.client.iris;
 
 import com.google.gson.*;
 import com.google.gson.annotations.JsonAdapter;
+//? if MC_26_3
+import io.github.douira.glsl_transformer.ast.transform.ASTParser;
+//? endif
+//? if MC_26_3
+import io.github.douira.glsl_transformer.ast.transform.SingleASTTransformer;
+//? endif
 import it.unimi.dsi.fastutil.ints.Int2ObjectLinkedOpenHashMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectLinkedOpenHashMap;
+//? if MC_26_3
+import net.irisshaders.iris.pipeline.transform.PatchShaderType;
+//? endif
+//? if MC_26_3
+import net.irisshaders.iris.pipeline.transform.transformer.DepthTransformer;
+//? endif
 import me.cortex.voxy.common.Logger;
 import net.irisshaders.iris.shaderpack.ShaderPack;
 import net.irisshaders.iris.shaderpack.include.AbsolutePackPath;
@@ -397,6 +409,35 @@ public class IrisShaderPatch {
             Logger.error("Shader has voxy patch data, but patch version is incorrect. expected " + VERSION + " got "+patchData.version);
             throw new IllegalStateException("Shader version mismatch expected " + VERSION + " got "+patchData.version);
         }
+
+
+//? if MC_26_3
+        //TODO:FIXME, wrap in a conditional config attribute/flag to disable it
+        if (true) {
+            if (patchData.opaquePatchData != null) {
+                patchData.opaquePatchData = stupidEvilHackFixForRevZThatReallyShouldntExistOrBeDoneEverNeedsFixing(patchData.opaquePatchData);
+            }
+            if (patchData.translucentPatchData != null) {
+                patchData.translucentPatchData = stupidEvilHackFixForRevZThatReallyShouldntExistOrBeDoneEverNeedsFixing(patchData.translucentPatchData);
+            }
+        }
+
+//? endif
         return new IrisShaderPatch(patchData, ipack);
     }
+
+
+//? if MC_26_3
+    private static String stupidEvilHackFixForRevZThatReallyShouldntExistOrBeDoneEverNeedsFixing(String scr) {
+        if (scr == null) return null;
+        var parser = new ASTParser();
+        var transform = new SingleASTTransformer<>((translationUnit, root)->{
+            // Transform depth writes on their right-hand side, keeping gl_FragDepth assignable.
+            DepthTransformer.transform(parser, translationUnit, root, PatchShaderType.FRAGMENT, false, false);
+        });
+        return transform.transform(scr);
+
+    }
+
+//? endif
 }

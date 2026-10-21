@@ -8,6 +8,6 @@
 #endif
 out vec2 UV;
 void main() {
-    gl_Position = vec4(vec2(VERT_ID&1, (VERT_ID>>1)&1) * 2 - 1, FAR, 1);
+    gl_Position = vec4(vec2(VERT_ID&1, (VERT_ID>>1)&1) * 2 - 1, NDC_FAR, 1);
     UV = gl_Position.xy*0.5+0.5;
 }

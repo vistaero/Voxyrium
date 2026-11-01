@@ -13,6 +13,9 @@ import org.lwjgl.vulkan.VkSubmitInfo;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
 
 import static me.cortex.voxy.client.core.vk.VkUtil.check;
 import static org.lwjgl.system.MemoryStack.stackPush;
@@ -54,6 +57,9 @@ public final class VkFrameCtx {
     private final ArrayList<Long> eventPool = new ArrayList<>();
     private final ArrayList<PendingDestroy> pendingDestroys = new ArrayList<>();
     private final ArrayList<FrameRetireListener> retireListeners = new ArrayList<>();
+    //Keep allocations reachable until explicit teardown, including buffers in a
+    //subsystem whose constructor failed before it could return to its owner.
+    private final Set<VkBuffer> liveBuffers = Collections.newSetFromMap(new IdentityHashMap<>());
 
     private record InFlightFrame(long frameIdx, long event) {}
     private record PendingDestroy(long frameIdx, long buffer, long image, long imageView, long memory) {}
@@ -65,6 +71,9 @@ public final class VkFrameCtx {
     public VulkanContext vk() {
         return this.ctx;
     }
+
+    void registerBuffer(VkBuffer buffer) { this.liveBuffers.add(buffer); }
+    void unregisterBuffer(VkBuffer buffer) { this.liveBuffers.remove(buffer); }
 
     public void addRetireListener(FrameRetireListener listener) {
         this.retireListeners.add(listener);
@@ -253,10 +262,17 @@ public final class VkFrameCtx {
 
     public void free() {
         this.waitIdleRetireAll();
+        if (!this.liveBuffers.isEmpty()) {
+            Logger.warn("Releasing " + this.liveBuffers.size() + " remaining VK buffers at context teardown");
+            for (var buffer : new ArrayList<>(this.liveBuffers)) buffer.free();
+            //The device is already idle; these current-frame destroys are safe.
+            this.runRetirement();
+        }
         for (long event : this.eventPool) {
             vkDestroyEvent(this.ctx.device, event, null);
         }
         this.eventPool.clear();
+        this.retireListeners.clear();
         if (!this.pendingDestroys.isEmpty()) {
             Logger.warn("VkFrameCtx freed with " + this.pendingDestroys.size() + " pending destroys remaining");
         }

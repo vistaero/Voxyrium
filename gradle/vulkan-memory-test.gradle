@@ -1,0 +1,25 @@
+// Compile the production allocation paths against a deterministic Vulkan driver.
+// Doubles belong only to this source set and never enter the distributable JAR.
+sourceSets {
+    vulkanMemoryTest {
+        java.srcDirs = ['src/vulkanMemoryTest/java']
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+    }
+}
+dependencies {
+    def os = System.getProperty('os.name').toLowerCase(java.util.Locale.ROOT)
+    def arm = System.getProperty('os.arch').contains('aarch64')
+    def natives = os.contains('win') ? 'natives-windows' : os.contains('mac') ? (arm ? 'natives-macos-arm64' : 'natives-macos') : (arm ? 'natives-linux-arm64' : 'natives-linux')
+    vulkanMemoryTestRuntimeOnly "org.lwjgl:lwjgl:${project.ext.lwjglVersion}:${natives}"
+}
+tasks.register('verifyVulkanMemory', JavaExec) {
+    group = 'verification'
+    description = 'Injects Vulkan allocation failures into production buffer/geometry constructors and checks resource balance.'
+    dependsOn tasks.named('vulkanMemoryTestClasses')
+    classpath = sourceSets.vulkanMemoryTest.runtimeClasspath
+    mainClass = 'me.cortex.voxy.client.core.vk.VulkanMemoryTest'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+}
+tasks.named('check') { dependsOn tasks.named('verifyVulkanMemory') }

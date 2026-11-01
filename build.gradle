@@ -506,6 +506,8 @@ sourceSets {
 
 configureMinecraftPipelineTests()
 
+apply from: 'gradle/vulkan-memory-test.gradle'
+
 tasks.register('verifyBlaze3dLodStreaming', JavaExec) {
     group = 'verification'
     description = 'Checks Blaze3D streaming budgets and coverage transitions without a GPU.'

@@ -30,6 +30,8 @@ import net.minecraft.client.Minecraft;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.ArrayDeque;
+import java.util.Deque;
 
 //The pure-Vulkan render core: constructed instead of the GL pipeline when MC
 // itself runs on Vulkan. Owns every GPU-facing subsystem (streams, geometry,
@@ -66,16 +68,24 @@ public class VkRenderCore {
     public VkRenderCore(WorldEngine world, ServiceManager sm) {
         world.acquireRef();
         Logger.info("Creating Voxy pure-Vulkan render core");
+        Deque<Runnable> cpuRollback = new ArrayDeque<>();
+        Deque<Runnable> gpuRollback = new ArrayDeque<>();
+        VkFrameCtx initializationContext = null;
+        boolean callbacksInstalled = false;
         try {
             this.worldIn = world;
             var host = MinecraftVkHost.get();
             if (host == null) throw new IllegalStateException("No Minecraft Vulkan host adapter registered");
             var vctx = VulkanBackend.context();//adopts MC's device
             this.frameCtx = new VkFrameCtx(vctx);
+            initializationContext = this.frameCtx;
+            gpuRollback.addFirst(this.frameCtx::free);
 
             //Install the VK streams BEFORE any shared class touches the singletons
             this.uploadStream = new VkUploadStream(this.frameCtx, 1 << 26);//64 mb, same as GL
+            gpuRollback.addFirst(this.uploadStream::free);
             this.downloadStream = new VkDownloadStream(this.frameCtx, 1 << 25);//32 mb, same as GL
+            gpuRollback.addFirst(this.downloadStream::free);
             AbstractUploadStream.setInstance(this.uploadStream);
             AbstractDownloadStream.setInstance(this.downloadStream);
 
@@ -87,27 +97,47 @@ public class VkRenderCore {
                     new VkAtlasTextureReader(this.frameCtx));
 
             this.modelStore = new VkModelStore(this.frameCtx, this.uploadStream);
+            Runnable releaseModelStore = this.modelStore::free;
+            gpuRollback.addFirst(releaseModelStore);
             this.modelService = new ModelBakerySubsystem(world.getMapper(), this.modelStore);
+            //Ownership transfers to the bakery after its constructor succeeds.
+            gpuRollback.remove(releaseModelStore);
+            gpuRollback.addFirst(this.modelService::shutdown);
             this.renderGen = new RenderGenerationService(world, this.modelService, sm, false);
+            cpuRollback.addFirst(this.renderGen::shutdown);
 
             this.geometryData = new VkSectionGeometryData(this.frameCtx, 1 << 20, geometryCapacity());
+            gpuRollback.addFirst(this.geometryData::free);
+            var nodeGpuOps = new VkNodeGpuOps(this.frameCtx, this.uploadStream);
+            Runnable releaseNodeOps = nodeGpuOps::free;
+            gpuRollback.addFirst(releaseNodeOps);
             this.nodeManager = new AsyncNodeManager(1 << 21, this.geometryData, this.renderGen,
-                    new VkNodeGpuOps(this.frameCtx, this.uploadStream));
+                    nodeGpuOps);
+            gpuRollback.remove(releaseNodeOps);
+            cpuRollback.addFirst(this.nodeManager::stop);
             this.nodeCleaner = new VkNodeCleaner(this.frameCtx, this.uploadStream, this.downloadStream, this.nodeManager);
+            gpuRollback.addFirst(this.nodeCleaner::free);
             this.traversal = new VkTraversal(this.frameCtx, this.uploadStream, this.downloadStream,
                     this.properties, this.nodeManager, this.nodeCleaner, this.renderGen);
+            gpuRollback.addFirst(this.traversal::free);
             this.terrainRenderer = new VkTerrainRenderer(this.frameCtx, this.uploadStream, this.downloadStream,
                     this.properties, this.geometryData, this.modelStore);
+            gpuRollback.addFirst(this.terrainRenderer::free);
             this.compositor = new VkCompositor(this.frameCtx, this.uploadStream, this.properties,
                     VoxyConfig.CONFIG.getFogMode().hasFog);
+            gpuRollback.addFirst(this.compositor::free);
             this.ssao = new VkSSAO(this.frameCtx, this.uploadStream, this.properties, VoxyConfig.CONFIG.getSSAOMode());
+            gpuRollback.addFirst(this.ssao::free);
             //Depth-bound culling: Sodium's visibility mixins feed the store; the bound
             // renderer rasters visible-chunk AABBs into the depth-bound image so the
             // terrain shaders can discard LOD fragments vanilla terrain will cover.
             this.visibleSectionStream = new StreamedBoundStore(
                     size -> new VkBuffer(this.frameCtx, size));
+            gpuRollback.addFirst(this.visibleSectionStream::free);
             this.boundRenderer = new VkBoundRenderer(this.frameCtx, this.uploadStream, this.properties);
+            gpuRollback.addFirst(this.boundRenderer::free);
 
+            callbacksInstalled = true;
             world.setDirtyCallback(this.nodeManager::worldEvent);
             Arrays.stream(world.getMapper().getBiomeEntries()).forEach(this.modelService::addBiome);
             world.getMapper().setBiomeCallback(this.modelService::addBiome);
@@ -115,6 +145,7 @@ public class VkRenderCore {
 
             this.viewportSelector = new ViewportSelector<>(() ->
                     new VkViewport(this.frameCtx, this.properties, this.geometryData.getMaxSectionCount()));
+            gpuRollback.addFirst(this.viewportSelector::free);
 
             int minSec = Minecraft.getInstance().level.getMinSectionY() >> 5;
             int maxSec = (Minecraft.getInstance().level.getMaxSectionY() - 1) >> 5;
@@ -124,9 +155,32 @@ public class VkRenderCore {
 
             this.frameCtx.flushImmediate();
             Logger.info("Voxy pure-Vulkan render core created with " + this.geometryData.getMaxCapacity() + " geometry capacity");
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | Error e) {
+            if (callbacksInstalled) {
+                world.setDirtyCallback(null);
+                world.getMapper().setBiomeCallback(null);
+                world.getMapper().setStateCallback(null);
+            }
+            //Some stop methods also free GPU objects. Complete initialization
+            //commands first, then stop producers before destroying consumers.
+            if (initializationContext != null) {
+                try { initializationContext.waitIdleRetireAll(); }
+                catch (RuntimeException | Error cleanupFailure) { e.addSuppressed(cleanupFailure); }
+            }
+            rollback(cpuRollback, e);
+            rollback(gpuRollback, e);
+            AbstractUploadStream.clearInstance();
+            AbstractDownloadStream.clearInstance();
+            IAtlasTextureReader.clearInstance();
             world.releaseRef();
             throw e;
+        }
+    }
+
+    private static void rollback(Deque<Runnable> actions, Throwable failure) {
+        while (!actions.isEmpty()) {
+            try { actions.removeFirst().run(); }
+            catch (RuntimeException | Error cleanupFailure) { failure.addSuppressed(cleanupFailure); }
         }
     }
 

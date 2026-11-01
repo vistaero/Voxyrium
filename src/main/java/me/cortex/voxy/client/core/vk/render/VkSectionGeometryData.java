@@ -21,21 +21,27 @@ public class VkSectionGeometryData implements IBasicGeometryData {
         this.sectionMetadataBuffer = new VkBuffer(ctx, (long) maxSectionCount * SECTION_METADATA_SIZE);
         VkBuffer buffer = null;
         long capacity = geometryCapacity;
-        while (buffer == null) {
-            try {
-                Logger.info("Allocating " + (capacity / (1024 * 1024)) + "MB VK geometry buffer");
-                buffer = new VkBuffer(ctx, capacity);
-            } catch (RuntimeException e) {
-                if (capacity <= (256L << 20)) throw e;
-                capacity /= 2;
-                Logger.warn("VK geometry allocation failed, retrying with " + (capacity / (1024 * 1024)) + "MB");
+        try {
+            while (buffer == null) {
+                try {
+                    Logger.info("Allocating " + (capacity / (1024 * 1024)) + "MB VK geometry buffer");
+                    buffer = new VkBuffer(ctx, capacity);
+                } catch (RuntimeException e) {
+                    if (capacity <= (256L << 20)) throw e;
+                    capacity /= 2;
+                    Logger.warn("VK geometry allocation failed, retrying with " + (capacity / (1024 * 1024)) + "MB");
+                }
             }
+            this.geometryBuffer = buffer;
+            //Match the GL path's zeroed geometry buffer
+            this.geometryBuffer.zero();
+            this.sectionMetadataBuffer.zero();
+            ctx.flushImmediate();
+        } catch (RuntimeException | Error failure) {
+            if (buffer != null) buffer.free();
+            this.sectionMetadataBuffer.free();
+            throw failure;
         }
-        this.geometryBuffer = buffer;
-        //Match the GL path's zeroed geometry buffer
-        this.geometryBuffer.zero();
-        this.sectionMetadataBuffer.zero();
-        ctx.flushImmediate();
     }
 
     @Override

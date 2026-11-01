@@ -1,0 +1,37 @@
+// Runs actual production barrier code; accessors and driver submission are
+// intercepted in memory by the test, never in packaged classes.
+sourceSets {
+    vulkanImageTest {
+        java.srcDirs = ['src/vulkanImageTest/java']
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+    }
+}
+dependencies {
+    vulkanImageTestImplementation 'org.ow2.asm:asm-tree:9.9'
+    def os = System.getProperty('os.name').toLowerCase(java.util.Locale.ROOT)
+    def arm = System.getProperty('os.arch') in ['aarch64', 'arm64']
+    def natives = os.contains('win') ? 'natives-windows' : os.contains('mac') ? (arm ? 'natives-macos-arm64' : 'natives-macos') : (arm ? 'natives-linux-arm64' : 'natives-linux')
+    vulkanImageTestRuntimeOnly "org.lwjgl:lwjgl:${project.ext.lwjglVersion}:${natives}"
+    vulkanImageTestRuntimeOnly "org.lwjgl:lwjgl-shaderc:${project.ext.lwjglVersion}:${natives}"
+}
+['verifyVulkanImageBarriers': false, 'verifyVulkanImageGpu': true].each { taskName, gpu ->
+    tasks.register(taskName, JavaExec) {
+        group = 'verification'
+        description = gpu ? 'Checks production transitions on real Vulkan images with validation enabled.' : 'Checks production image barrier masks, layouts and shader-stage coverage.'
+        dependsOn tasks.named('vulkanImageTestClasses')
+        classpath = sourceSets.vulkanImageTest.runtimeClasspath
+        mainClass = 'me.cortex.voxy.client.core.vk.VulkanImageTest'
+        jvmArgs '--enable-native-access=ALL-UNNAMED'
+        systemProperty 'voxy.vk.mcImagesGeneral', project.findProperty('mcImagesGeneral') ?: 'false'
+        // The harness uses LWJGL's system allocator, without Minecraft's jemalloc natives.
+        systemProperty 'org.lwjgl.system.allocator', 'system'
+        systemProperty 'voxy.test.forceFragmentStage', project.findProperty('forceFragmentStage') ?: 'false'
+        environment 'VK_VALIDATION_VALIDATE_SYNC', '1'
+        environment 'VK_VALIDATION_SYNCVAL_SHADER_ACCESSES_HEURISTIC', '1'
+        if (gpu) args '--gpu'
+        javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+    }
+}
+// Native tests need the SDK/driver and stay opt-in; contracts run on every build.
+tasks.named('check') { dependsOn tasks.named('verifyVulkanImageBarriers') }

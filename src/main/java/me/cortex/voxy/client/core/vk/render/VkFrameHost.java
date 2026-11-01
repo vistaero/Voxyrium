@@ -40,26 +40,32 @@ public final class VkFrameHost {
 
     //Layout-transition one of MC's own images (colour/depth attachment) with
     // scoped stage/access masks matching the actual producer/consumer.
-    // Depth-stencil images transition both aspects together (DEPTH|STENCIL)
-    // since Voxy never enables separateDepthStencilLayouts.
+    // Combined depth-stencil images transition both aspects together since
+    // Voxy never enables separateDepthStencilLayouts. Depth-only images must
+    // not include a stencil aspect.
     public static void transitionMcImage(VkCommandBuffer cmd, GpuTextureView view,
                                           boolean depth, int oldLayout, int newLayout) {
+        transitionMcImage(cmd, view, depth, oldLayout, newLayout, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    }
+
+    public static void transitionMcImage(VkCommandBuffer cmd, GpuTextureView view,
+                                          boolean depth, int oldLayout, int newLayout, int sampledStage) {
         try (MemoryStack stack = stackPush()) {
             long image = ((VulkanGpuTexture) view.texture()).vkImage();
             //MC's depth attachment is written by the late fragment tests; MC's
-            // colour by the fragment shader. Voxy reads both from the fragment
-            // shader (sampler). Reverse transitions are FRAGMENT_SHADER read ->
-            // late-fragment-tests write.
+            // colour by colour-attachment output. The compositor samples from
+            // a fragment shader; SSAO samples from compute. Scope both the
+            // forward and reverse dependency to the actual sampling stage.
             int srcStage, srcAccess, dstStage, dstAccess;
             boolean toSampled = newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             if (depth) {
                 if (toSampled) {
                     srcStage = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
                     srcAccess = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                    dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+                    dstStage = sampledStage;
                     dstAccess = VK_ACCESS_SHADER_READ_BIT;
                 } else {
-                    srcStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+                    srcStage = sampledStage;
                     srcAccess = VK_ACCESS_SHADER_READ_BIT;
                     dstStage = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
                     dstAccess = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -68,17 +74,21 @@ public final class VkFrameHost {
                 if (toSampled) {
                     srcStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
                     srcAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-                    dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+                    dstStage = sampledStage;
                     dstAccess = VK_ACCESS_SHADER_READ_BIT;
                 } else {
-                    srcStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+                    srcStage = sampledStage;
                     srcAccess = VK_ACCESS_SHADER_READ_BIT;
                     dstStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
                     dstAccess = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
                 }
             }
-            //Depth-stencil: transition both aspects together.
-            int aspectMask = depth ? (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT) : VK_IMAGE_ASPECT_COLOR_BIT;
+            int format = depth ? vkFormat(view) : VK_FORMAT_UNDEFINED;
+            boolean stencil = format == VK_FORMAT_D16_UNORM_S8_UINT
+                    || format == VK_FORMAT_D24_UNORM_S8_UINT
+                    || format == VK_FORMAT_D32_SFLOAT_S8_UINT;
+            int aspectMask = !depth ? VK_IMAGE_ASPECT_COLOR_BIT
+                    : VK_IMAGE_ASPECT_DEPTH_BIT | (stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0);
             var imb = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
                     .srcAccessMask(srcAccess).dstAccessMask(dstAccess)
                     .oldLayout(oldLayout).newLayout(newLayout)

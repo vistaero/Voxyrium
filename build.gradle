@@ -507,6 +507,7 @@ sourceSets {
 configureMinecraftPipelineTests()
 
 apply from: 'gradle/vulkan-memory-test.gradle'
+apply from: 'gradle/vulkan-image-test.gradle'
 
 tasks.register('verifyBlaze3dLodStreaming', JavaExec) {
     group = 'verification'

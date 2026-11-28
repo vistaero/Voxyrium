@@ -115,9 +115,9 @@ vec4 computeColour(vec2 texturePos, vec4 colour) {
 
     uint tintingFunction = tintingState();
     bool doTint = tintingFunction==2;//Always tint if function == 2
-    if (tintingFunction == 1) {//partial tint
+    if (tintingFunction == 1) {//partial tint: per-texel mask baked into alpha (255 = from a tinted quad, 254 = not)
         vec4 tintTest = textureLod(blockModelAtlas, texturePos, 0);
-        if (abs(tintTest.r-tintTest.g) < 0.02f && abs(tintTest.g-tintTest.b) < 0.02f) {
+        if (tintTest.a > (254.5/255.0)) {
             doTint = true;
         }
     }
@@ -221,9 +221,9 @@ void main() {
     BlockModel model = modelData[modelId];
     uint tintingFunction = tintingState();
     bool doTint = tintingFunction==2;//Always tint if function == 2
-    if (tintingFunction==1) {//Partial tint
+    if (tintingFunction==1) {//Partial tint: per-texel mask baked into alpha (255 = from a tinted quad, 254 = not)
         vec4 tintTest = texture(blockModelAtlas, texPos, -2);
-        if (abs(tintTest.r-tintTest.g) < 0.02f && abs(tintTest.g-tintTest.b) < 0.02f) {
+        if (tintTest.a > (254.5/255.0)) {
             doTint = true;
         }
     }

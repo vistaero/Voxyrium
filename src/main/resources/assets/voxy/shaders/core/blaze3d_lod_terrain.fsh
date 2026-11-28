@@ -103,7 +103,7 @@ void main() {
 
     bool applyTint = tintState == 2;
     if (tintState == 1) {
-        applyTint = abs(mipZero.r - mipZero.g) < 0.02 && abs(mipZero.g - mipZero.b) < 0.02;
+        applyTint = mipZero.a > (254.5 / 255.0);//per-texel tint mask baked into alpha (MipGen.putTextures)
     }
     if (applyTint) {
         color *= tintColor;

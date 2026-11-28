@@ -87,7 +87,15 @@ public class MipGen {
             int y = (i&1)*MODEL_TEXTURE_SIZE;
             int j = 0;
             boolean anyTransparent = false;
+            final int[] depthBits = textures[i].depth();
             for (int t : textures[i].colour()) {
+                //Per-texel tint mask for partially tinted faces (grass sides with an overlay): an opaque texel that
+                // did NOT come from a tinted quad gets alpha 254 instead of 255 (depth bit 7 = written by a tinted
+                // quad, see TextureUtils.computeFaceTint). The terrain shader tints where alpha rounds to 255,
+                // replacing the old "is the texel grey" guess, which failed for non-grey overlays.
+                if ((t>>>24) == 0xFF && (depthBits[j] & (1<<7)) == 0) {
+                    t = (t & 0x00FFFFFF) | 0xFE000000;
+                }
                 int o = ((y+(j>>LAYERS))*LENGTH_B + ((j&(MODEL_TEXTURE_SIZE-1))+x))*4; j++;//LAYERS here is just cause faster
                 //t = ((t&0xFF000000)==0)?0x00_FF_00_FF:t;//great for testing
                 MemoryUtil.memPutInt(addr+o, t);
